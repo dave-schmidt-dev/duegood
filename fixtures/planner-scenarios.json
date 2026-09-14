@@ -1,0 +1,176 @@
+{
+  "synthetic": true,
+  "format": "duegood-normalized-planning-examples-v1",
+  "warning": "Invented application-model examples. Not raw Canvas API payloads and not real student data.",
+  "institution": {
+    "id": "demo-campus",
+    "canvasOrigin": "https://canvas.example.invalid"
+  },
+  "courses": [
+    {
+      "id": "101",
+      "code": "TECH 101",
+      "title": "Introduction to Computing"
+    },
+    {
+      "id": "102",
+      "code": "POLI 210",
+      "title": "Public Policy Workshop"
+    },
+    {
+      "id": "103",
+      "code": "ART 110",
+      "title": "Studio Foundations"
+    }
+  ],
+  "assignments": [
+    {
+      "id": "1001",
+      "courseId": "101",
+      "title": "Network lab reflection",
+      "effectiveDueAt": "2026-09-21T03:59:00Z",
+      "dueTimezone": "America/New_York",
+      "pointsPossible": 10,
+      "submission": {
+        "status": "unsubmitted"
+      },
+      "source": "canvas"
+    },
+    {
+      "id": "2001",
+      "courseId": "102",
+      "title": "Policy discussion",
+      "effectiveDueAt": "2026-09-28T03:59:00Z",
+      "dueTimezone": "America/New_York",
+      "pointsPossible": 20,
+      "submission": {
+        "status": "submitted"
+      },
+      "source": "canvas"
+    },
+    {
+      "id": "3001",
+      "courseId": "103",
+      "title": "Sketchbook preparation",
+      "effectiveDueAt": null,
+      "dueTimezone": "America/New_York",
+      "pointsPossible": 0,
+      "source": "canvas"
+    },
+    {
+      "id": "3002",
+      "courseId": "103",
+      "title": "Studio critique",
+      "effectiveDueAt": "2026-11-02T04:59:00Z",
+      "dueTimezone": "America/New_York",
+      "pointsPossible": null,
+      "submission": null,
+      "source": "canvas"
+    }
+  ],
+  "personalTasks": [
+    {
+      "id": "personal-1",
+      "courseId": "103",
+      "title": "Bring charcoal and sketchbook",
+      "source": "student",
+      "plannedDate": "2026-09-18",
+      "progress": "not_started"
+    }
+  ],
+  "studentState": [
+    {
+      "assignmentId": "1001",
+      "progress": "working",
+      "note": "Draft the observations section."
+    },
+    {
+      "assignmentId": "2001",
+      "progress": "working",
+      "note": "Initial post submitted; replies remain."
+    }
+  ],
+  "normalizedCheckpoints": [
+    {
+      "id": "cp-1",
+      "parentAssignmentId": "2001",
+      "kind": "initial_post",
+      "dueAt": "2026-09-24T03:59:00Z",
+      "completed": true
+    },
+    {
+      "id": "cp-2",
+      "parentAssignmentId": "2001",
+      "kind": "replies",
+      "requiredCount": 2,
+      "completedCount": 0,
+      "dueAt": "2026-09-28T03:59:00Z",
+      "completed": false
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "due-date-change",
+      "input": {
+        "assignmentId": "1001",
+        "effectiveDueAt": "2026-09-24T03:59:00Z"
+      },
+      "expected": "Update the official deadline; preserve the student note and progress."
+    },
+    {
+      "id": "partial-pages",
+      "input": {
+        "courseId": "101",
+        "page1": "success",
+        "page2": "http_429"
+      },
+      "expected": "Resource is incomplete; preserve prior committed tasks and show stale status."
+    },
+    {
+      "id": "omitted-submission",
+      "input": {
+        "assignmentId": "3001",
+        "submissionField": "omitted"
+      },
+      "expected": "Submission status remains unknown, not unsubmitted."
+    },
+    {
+      "id": "explicit-null",
+      "input": {
+        "assignmentId": "3002",
+        "effectiveDueAt": null
+      },
+      "expected": "Clear the known official due date when a complete applicable source explicitly supplies null."
+    },
+    {
+      "id": "zero-point-work",
+      "input": {
+        "assignmentId": "3001"
+      },
+      "expected": "Zero points and no deadline do not imply optional work."
+    },
+    {
+      "id": "no-op-import",
+      "input": {
+        "sourceEqualsSaved": true
+      },
+      "expected": "No assignment rewrites or duplicate change events; count metadata and staging costs separately."
+    },
+    {
+      "id": "partial-discussion",
+      "input": {
+        "assignmentId": "2001"
+      },
+      "expected": "Canvas submission and personal completion remain separate; unfinished replies are visible."
+    },
+    {
+      "id": "instructor-exception",
+      "input": {
+        "assignmentId": "1001",
+        "studentDismissed": true,
+        "laterSourceChanged": true
+      },
+      "expected": "Keep the personal dismissal and offer review of the material source change."
+    }
+  ]
+}

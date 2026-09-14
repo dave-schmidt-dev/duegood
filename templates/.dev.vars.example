@@ -1,0 +1,7 @@
+# Placeholders only; copy to an IGNORED .dev.vars after building the app scaffold.
+# Do not put secret values in frontend variables, wrangler vars, issues, or chat.
+# Actual production values belong in Cloudflare Worker secrets.
+CANVAS_CLIENT_SECRET="REPLACE_WITH_INSTITUTION_ISSUED_SECRET"
+TOKEN_ENCRYPTION_KEY_B64="REPLACE_WITH_BASE64_OF_32_RANDOM_BYTES"
+# Opaque session IDs and one-time state must be generated randomly by the server.
+# Add separate keys only if the reviewed session design actually needs them.

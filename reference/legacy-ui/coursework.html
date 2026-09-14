@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fall 2026 coursework — Marymount</title>
+  <link rel="stylesheet" href="coursework.css">
+</head>
+<body>
+  <!--
+    The whole page is built by coursework.js into this mount point. Keeping the
+    markup empty means there is exactly one rendering path, so what the Playwright
+    specs exercise is what a browser actually shows.
+  -->
+  <main id="coursework-root">
+    <noscript>
+      <p style="max-width:640px;margin:40px auto;color:#8b949e">
+        This timeline is rendered with JavaScript. The underlying data is plain
+        JSON at <code>coursework.json</code> if you need it directly.
+      </p>
+    </noscript>
+  </main>
+  <script type="module" src="coursework.js"></script>
+</body>
+</html>

@@ -1,0 +1,770 @@
+/* ============================================================================
+ * coursework.css — Styling for the Fall 2026 coursework timeline.
+ *
+ * Layout: one shared vertical time axis with three course lanes. The grid is
+ * [date gutter | IT530 | IT540 | IT570]; university milestones span all three
+ * lanes as full-width banner rows.
+ *
+ * Palette: the dark GitHub family scenarios.html uses, lifted a step brighter
+ * for readability (see --text/--muted/--border below). scenarios.html is a
+ * read-once document; this page is scanned daily, so it takes the contrast and
+ * accepts the small divergence. Course accents live in coursework.json, not
+ * here, because renderCourseHeads sets --accent per card from the data — the
+ * --it530/--it540/--it570 values below are the same hexes and must be changed
+ * in both places together (tests/coursework-data.test.mjs asserts that).
+ *
+ * Type: one --scale multiplier drives every --fs-* size through calc(), so the
+ * whole page grows or shrinks in proportion from a single value.
+ *
+ * No gradients, no animation beyond hover and expand/collapse.
+ * ========================================================================== */
+
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --card2: #1c2128;
+  /* Brighter than GitHub's default body text: this page is read as a dense
+     scanning surface, not prose, and the extra contrast carries the small
+     metadata chips. */
+  --text: #e6edf3;
+  --muted: #a6b1bd;
+  --border: #3d444d;
+  --it530: #6cb6ff;
+  --it540: #6bdd7c;
+  --it570: #b083f0;
+  --univ: #e3b341;
+  --warn: #e3b341;
+  --danger: #ff7b72;
+  --ok: #6bdd7c;
+
+  /* ---- Type scale --------------------------------------------------------
+     One knob for the whole page: raise --scale to enlarge every size below
+     proportionally (1.15 is a comfortable bump on a Retina display, 0.9
+     tightens it back down). Nothing hard-codes a font-size outside this
+     block, so the ratios hold at any scale. */
+  --scale: 1;
+  --fs-xs: calc(11px * var(--scale));    /* chips, uppercase micro-labels */
+  --fs-sm: calc(12.5px * var(--scale));  /* metadata, relative-day hints */
+  --fs-md: calc(14px * var(--scale));    /* body, buttons, item detail */
+  --fs-lg: calc(15.5px * var(--scale));  /* item titles */
+  --fs-xl: calc(17px * var(--scale));    /* course names, day dates */
+  --fs-2xl: calc(25px * var(--scale));   /* page title */
+
+  /* The single source of truth for the lane grid; the header and every date
+     row share it so the columns line up. */
+  --gutter: calc(150px * var(--scale));
+  --lane-gap: 14px;
+
+  /* Measured at runtime by coursework.js from the real rendered height of the
+     sticky chrome. The fallbacks only apply before the first measurement, and
+     exist so the page is never unusable if that script path changes. */
+  --toolbar-h: 60px;
+  --chrome-h: 250px;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  padding: 0 24px 140px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: var(--fs-md);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--it530); }
+
+/* ---- Page header ---------------------------------------------------------- */
+
+.page-head {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 26px 0 12px;
+}
+
+.page-head h1 {
+  margin: 0 0 6px;
+  font-size: var(--fs-2xl);
+  font-weight: 600;
+  letter-spacing: -0.3px;
+}
+
+.page-sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+/* ---- Toolbar -------------------------------------------------------------- */
+
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  max-width: 1600px;
+  margin: 14px auto 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.control-label {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.btn {
+  appearance: none;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 13px;
+  font-family: inherit;
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+
+.btn:hover { border-color: var(--it530); }
+
+.btn:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.btn:disabled:hover { border-color: var(--border); }
+
+/* Nothing in this file styled focus, and the item titles are divs carrying
+   tabindex="0" -- a keyboard user could tab onto one with no way to see where
+   they had landed. :focus-visible keeps the ring off plain mouse clicks. */
+:focus-visible {
+  outline: 2px solid var(--it530);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.btn--on {
+  border-color: var(--it530);
+  color: #fff;
+  background: rgba(108, 182, 255, 0.16);
+}
+
+.refresh-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.refresh-status {
+  max-width: 260px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.refresh-status--running { color: var(--warn); }
+.refresh-status--succeeded { color: var(--ok); }
+.refresh-status--error { color: var(--danger); }
+
+.btn--refresh-history { border-color: rgba(108, 182, 255, 0.5); }
+.btn--refresh-reviewed { margin-top: 10px; font-size: var(--fs-sm); }
+
+.refresh-history {
+  max-width: 1600px;
+  margin: 12px auto 0;
+  padding: 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.refresh-history h2 { margin: 0 0 10px; font-size: var(--fs-lg); }
+.refresh-history-empty, .refresh-event-meta { margin: 0; color: var(--muted); font-size: var(--fs-sm); }
+.refresh-event { padding: 12px 0; border-top: 1px solid var(--border); }
+.refresh-event:first-of-type { border-top: 0; }
+.refresh-event h3 { margin: 0; font-size: var(--fs-md); }
+.refresh-change { margin-top: 8px; padding-left: 10px; border-left: 2px solid var(--it530); font-size: var(--fs-sm); }
+.refresh-change strong { display: block; color: var(--text); }
+
+.save-status {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 13px;
+  border-radius: 999px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.save-status::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.save-status--saved { color: var(--ok); }
+.save-status--saving { color: var(--warn); }
+.save-status--error { color: var(--danger); }
+
+.btn--reconnect {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.btn--reconnect:hover,
+.btn--reconnect:focus-visible {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.item-check:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+/* ---- Course header strip -------------------------------------------------- */
+
+.lanes-head {
+  position: sticky;
+  /* Sits directly beneath the toolbar, whose height changes with --scale. */
+  top: var(--toolbar-h);
+  z-index: 30;
+  max-width: 1600px;
+  margin: 12px auto 0;
+  display: grid;
+  grid-template-columns: var(--gutter) repeat(3, 1fr);
+  gap: var(--lane-gap);
+  background: var(--bg);
+  padding-bottom: 10px;
+}
+
+.lanes-head-spacer {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  align-self: end;
+  padding-bottom: 12px;
+}
+
+.course-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--accent, var(--border));
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.course-card h2 {
+  margin: 0 0 3px;
+  font-size: var(--fs-xl);
+  font-weight: 600;
+}
+
+.course-card .course-code { color: var(--accent, var(--text)); }
+
+.course-meta {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  margin: 0 0 10px;
+}
+
+.course-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.course-links .btn { padding: 5px 11px; font-size: var(--fs-sm); }
+
+/* Progress bar: fraction of that course's gradable items checked off. */
+.progress {
+  height: 7px;
+  background: var(--card2);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 7px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent, var(--it530));
+  width: 0;
+}
+
+.progress-text { font-size: var(--fs-sm); color: var(--muted); }
+
+/* Course-level caveats (conflicts, unverified data). Collapsed by default. */
+.course-flags { margin-top: 10px; }
+
+.course-flags summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  color: var(--warn);
+  list-style: none;
+}
+
+.course-flags summary::-webkit-details-marker { display: none; }
+.course-flags summary::before { content: "\26A0  "; }
+
+.course-flags ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+.course-flags li { margin-bottom: 7px; }
+
+/* ---- Undated panel -------------------------------------------------------- */
+
+.undated {
+  max-width: 1600px;
+  margin: 16px auto 0;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--card);
+}
+
+.undated h3 {
+  margin: 0 0 10px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+}
+
+.undated .item { margin-bottom: 8px; }
+
+/* ---- Timeline ------------------------------------------------------------- */
+
+.timeline { max-width: 1600px; margin: 0 auto; }
+
+.week-sep {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 28px 0 8px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.week-sep::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.day-row {
+  /* Keep "Jump to today" from parking a row underneath the sticky chrome.
+     --chrome-h is measured from the real toolbar + course-header height, so
+     this stays correct when --scale changes their size. */
+  scroll-margin-top: calc(var(--chrome-h) + 10px);
+  display: grid;
+  grid-template-columns: var(--gutter) repeat(3, 1fr);
+  gap: var(--lane-gap);
+  padding: 9px 0;
+  border-top: 1px solid rgba(61, 68, 77, 0.6);
+}
+
+.day-row--today {
+  background: rgba(108, 182, 255, 0.08);
+  border-top-color: var(--it530);
+}
+
+/* Empty dates preserve calendar continuity without competing with work cards. */
+.day-row--empty {
+  min-height: 42px;
+  padding: 5px 0;
+}
+
+.day-row--empty .day-label { padding-top: 0; }
+.day-row--empty .day-date {
+  color: var(--muted);
+  font-size: var(--fs-lg);
+  font-weight: 500;
+}
+
+.day-row--empty.day-row--today .day-date { color: var(--it530); }
+
+/* Past days stay legible — dimmed enough to recede, not so far that a missed
+   deadline becomes hard to read. */
+.day-row--past .lane { opacity: 0.7; }
+
+.day-label {
+  padding-top: 4px;
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
+.day-dow {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.day-date { font-weight: 600; font-size: var(--fs-xl); }
+.day-rel { color: var(--muted); font-size: var(--fs-sm); }
+
+.day-row--today .day-date { color: var(--it530); }
+
+.lane { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+
+/* ---- Item cards ----------------------------------------------------------- */
+
+.item {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent, var(--border));
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.item--session {
+  background: transparent;
+  border-style: dashed;
+  border-left-style: solid;
+  opacity: 0.85;
+}
+
+.item--done { opacity: 0.5; }
+.item--done .item-title { text-decoration: line-through; }
+
+/* Collapsed completed card: one line of title, one small chip. */
+.item--min { padding: 6px 10px; }
+.item--min .item-title { font-size: var(--fs-md); font-weight: 400; }
+.item--min .item-sub { margin-top: 3px; }
+
+.item--overdue { border-color: var(--danger); }
+
+.item-head { display: flex; align-items: flex-start; gap: 10px; }
+
+.item-check {
+  appearance: none;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card2);
+  cursor: pointer;
+}
+
+.item-check:hover { border-color: var(--accent, var(--it530)); }
+
+.item-check:checked {
+  background: var(--accent, var(--it530));
+  border-color: var(--accent, var(--it530));
+}
+
+/* Checkmark drawn with a border, not an image or icon font. */
+.item-check:checked::after {
+  content: "";
+  display: block;
+  width: 4px;
+  height: 9px;
+  margin: 1px auto 0;
+  border: solid #0d1117;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg) translate(-1px, -1px);
+}
+
+.item-body { flex: 1; min-width: 0; }
+
+.item-title {
+  font-size: var(--fs-lg);
+  font-weight: 500;
+  line-height: 1.4;
+  cursor: pointer;
+  word-wrap: break-word;
+}
+
+.item-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: 6px;
+}
+
+.chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+/* The deadline is the most-scanned value on the card, so it reads at full
+   body weight rather than as a dimmed tag. */
+.chip--time {
+  color: var(--text);
+  border-color: var(--border);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: var(--fs-sm);
+}
+
+.chip--pts { color: var(--muted); text-transform: none; letter-spacing: 0; }
+.chip--grade {
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.chip--grade-pending { color: var(--warn); border-color: rgba(227, 179, 65, 0.45); }
+.chip--grade-graded { color: var(--ok); border-color: rgba(107, 221, 124, 0.45); }
+.chip--confirmed { color: var(--ok); border-color: rgba(107, 221, 124, 0.45); }
+.chip--inferred { color: var(--warn); border-color: rgba(227, 179, 65, 0.45); }
+.chip--provisional { color: var(--danger); border-color: rgba(255, 123, 114, 0.5); }
+.chip--changed { color: var(--it530); border-color: rgba(108, 182, 255, 0.55); }
+
+.item-refresh-detail {
+  margin-top: 8px;
+  color: var(--it530);
+  font-size: var(--fs-sm);
+}
+
+.item-flag {
+  margin-top: 7px;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--warn);
+  border-left: 2px solid rgba(227, 179, 65, 0.55);
+  padding-left: 8px;
+}
+
+.item-detail {
+  margin-top: 7px;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.item-detail a { font-size: var(--fs-sm); }
+
+.item-extra[hidden] { display: none; }
+
+/* ---- Milestone banner rows ------------------------------------------------ */
+
+.milestone-row {
+  scroll-margin-top: calc(var(--chrome-h) + 10px);
+  display: grid;
+  grid-template-columns: var(--gutter) 1fr;
+  gap: var(--lane-gap);
+  padding: 9px 0;
+  border-top: 1px solid rgba(61, 68, 77, 0.6);
+}
+
+.milestone {
+  border: 1px solid rgba(227, 179, 65, 0.4);
+  background: rgba(227, 179, 65, 0.08);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: var(--fs-md);
+  color: var(--univ);
+}
+
+.milestone-detail { color: var(--muted); }
+
+/* ---- Empty state ---------------------------------------------------------- */
+
+.empty {
+  max-width: 1600px;
+  margin: 48px auto;
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--fs-lg);
+}
+
+/* ---- Narrow screens: lanes stack, each item keeps its course colour -------- */
+
+@media (max-width: 900px) {
+  :root { --gutter: calc(100px * var(--scale)); }
+
+  body { padding: 0 14px 140px; }
+
+  .lanes-head { grid-template-columns: 1fr; top: 0; position: static; }
+  .lanes-head-spacer { display: none; }
+
+  .day-row { grid-template-columns: var(--gutter) 1fr; }
+  .day-row .lane { grid-column: 2; }
+  .milestone-row { grid-template-columns: var(--gutter) 1fr; }
+
+  /* The course strip scrolls away here, so only the toolbar occludes rows. */
+  .day-row, .milestone-row, .now-line { scroll-margin-top: calc(var(--toolbar-h) + 12px); }
+}
+
+/* Respect a reader who has asked the OS to stop animating scroll. */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}
+
+/* ---- Condensed sticky strip ------------------------------------------------
+ * Applied by coursework.js once the page header scrolls out of view. The
+ * course name, meeting details, grade weights and caveats all drop away; the
+ * accent colour, code, progress bar and both links stay, so the strip remains
+ * a working control surface rather than a decoration.
+ * -------------------------------------------------------------------------- */
+
+.lanes-head--compact .course-card { padding: 8px 12px; }
+
+.lanes-head--compact .course-name,
+.lanes-head--compact .course-meta,
+.lanes-head--compact .progress-weights,
+.lanes-head--compact .course-flags { display: none; }
+
+.lanes-head--compact .course-card h2 {
+  font-size: var(--fs-md);
+  margin-bottom: 7px;
+}
+
+.lanes-head--compact .course-links { margin-bottom: 7px; }
+.lanes-head--compact .progress { margin-bottom: 5px; }
+
+/* ----------------------------------------------------------------------------
+ * The now marker: one rule across the timeline at the boundary between what is
+ * due and what is not. Static by design — the file header promises no animation
+ * beyond hover and expand/collapse, and a pulsing line would break that on a
+ * page meant to be left open all day.
+ *
+ * Two forms, one shape. When the boundary lands on a day that has its own row
+ * the marker IS that row's top edge; when it lands on a day with no work — most
+ * days, since work clusters on Sundays and class nights — it is a standalone
+ * rule. Both look identical: a stamp sitting on the line at the left, slack
+ * above, content tight below.
+ * -------------------------------------------------------------------------- */
+
+/* The stamp sits ON the rule, punched through it with the page background, so
+   "NOW 1:48 PM ————" reads as one object. Stacked in its own row above the
+   line instead, the rule is an unlabelled divider between two days — and a
+   divider reads as belonging to the day above it, which is exactly how this
+   shipped looking like "the red line is on yesterday". */
+.now-label,
+.day-now {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform: translateY(-53%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 10px;
+  background: var(--bg);
+  white-space: nowrap;
+}
+
+.now-tag,
+.day-now-tag {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: var(--danger);
+}
+
+.now-time,
+.day-now-time {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Only the standalone form needs this: with no day row beneath it, nothing
+   else on screen says what today's date is. */
+.now-date {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* The dot marks where the rule meets the first lane, so the eye lands on the
+   boundary rather than sliding along the line. */
+.now-line::before,
+.day-row--now::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: calc(var(--gutter) + var(--lane-gap) - 4px);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+/* Standalone form. The element is the rule: no height of its own, so nothing
+   can open a gap between the line and the row it is about. The margin is
+   asymmetric on purpose — centred between two rows the rule binds to the wrong
+   one. */
+.now-line {
+  scroll-margin-top: calc(var(--chrome-h) + 10px);
+  position: relative;
+  height: 0;
+  border-top: 2px solid var(--danger);
+  margin: 26px 0 0;
+}
+
+/* The row directly beneath the marker gives up its own top border: the red rule
+   is already that edge, and two lines 2px apart read as a mistake. */
+.day-row--after-now,
+.milestone-row--after-now { border-top: none; }
+
+/* Pulled up tight so the rule caps the week header and its block, rather than
+   hanging 28px above it with the header's own hairline below. */
+.week-sep--after-now { margin-top: 9px; }
+
+/* Merged form: the marker IS today's row, so the rule is that row's top edge
+   and the stamp hangs off the row rather than stacking a second gutter label
+   above the existing one. */
+.day-row--now {
+  border-top: 2px solid var(--danger);
+  position: relative;
+  /* The rule was landing 9px below yesterday's last card and 11px above
+     today's first one — dead centre, so it read as a divider between the two
+     rather than as today's own top edge. */
+  margin-top: 20px;
+  padding-top: 3px;
+}

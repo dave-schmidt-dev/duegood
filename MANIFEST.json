@@ -1,0 +1,47 @@
+{
+  "project": "Due Good",
+  "slug": "duegood",
+  "version": "0.1",
+  "prepared_on": "2026-09-13",
+  "artifact_type": "specification-and-local-agent-handoff",
+  "implemented_here": [
+    "documentation",
+    "synthetic fixtures",
+    "offline usage estimator",
+    "package validation utilities"
+  ],
+  "not_done": [
+    "GitHub repository creation",
+    "Cloudflare provisioning",
+    "Marymount approval",
+    "application implementation",
+    "live OAuth verification"
+  ],
+  "copied_frontend": [
+    {
+      "path": "reference/legacy-ui/coursework.html",
+      "sha256": "48bdce22c4a18378d3b3c0f71902cd15fc021e12cb495db5e80c5fa080729d23"
+    },
+    {
+      "path": "reference/legacy-ui/coursework.css",
+      "sha256": "9958d6e1c531ff281084582fff060926d9717973521689c4707becc531c2a6cf"
+    },
+    {
+      "path": "reference/legacy-ui/coursework.js",
+      "sha256": "61112298b6e81243d41d918f3bd11daf90c4010e0e47ce93e986f56ff49b9f9f"
+    }
+  ],
+  "omitted_originals": [
+    "courses.json",
+    "coursework.json",
+    "coursework-refresh-history.json",
+    "coursework.sh"
+  ],
+  "not_supplied": [
+    "todo_server.py",
+    "sync_coursework.py",
+    "Canvas exporter implementation",
+    "original backend/frontend tests"
+  ],
+  "fixture_policy": "All fixture records are invented. Raw original student JSON is excluded."
+}
