@@ -4,7 +4,7 @@
 
 A planned, independent student assignment tracker, starting with Marymount University students using Canvas. Built for students of any major, not only people comfortable with developer tools.
 
-**Status: specification and local-agent handoff, not a working hosted application.** OAuth approval, infrastructure provisioning, application implementation, and live testing have not been completed by this package. No GitHub repository was created by this handoff.
+**Status: specification and local-agent handoff, not a working hosted application.** The public GitHub repository exists, but OAuth approval, infrastructure provisioning, application implementation, and live testing have not been completed by this package.
 
 ## Start here
 
@@ -43,6 +43,7 @@ Security, tenant isolation, honest persistence, and protection from data loss st
 | [`docs/05-ROADMAP-AND-TESTS.md`](docs/05-ROADMAP-AND-TESTS.md) | Ordered tickets and acceptance cases |
 | [`docs/06-SOURCE-REVIEW.md`](docs/06-SOURCE-REVIEW.md) | Evidence from the uploaded prototype, with limits of the review |
 | [`docs/07-SECURITY-AND-RELEASE.md`](docs/07-SECURITY-AND-RELEASE.md) | Security, privacy, publishing, and operational gates |
+| [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md) | Current four-phase implementation plan and quality gates |
 | [`docs/SOURCES.md`](docs/SOURCES.md) | Official documentation checked for this handoff |
 | `templates/` | Inert configuration examples and a Marymount administrator request |
 | `reference/legacy-ui/` | Original HTML/CSS/JS for inspection, not deployment |

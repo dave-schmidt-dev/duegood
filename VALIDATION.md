@@ -14,7 +14,7 @@ Utility environment: Python 3.13.5 and Node 22.16.0. Python utilities are writte
 
 ## Not established by these checks
 
-No public GitHub repository was created. No Cloudflare resource was provisioned or billed. Marymount developer-key approval and a live OAuth connection have not been obtained or tested here. The hosted application, sync engine, and proposed acceptance tests are not implemented by this package.
+This validation run did not create a GitHub repository; the public repository was created separately afterward. No Cloudflare resource was provisioned or billed. Marymount developer-key approval and a live OAuth connection have not been obtained or tested here. The hosted application, sync engine, and proposed acceptance tests are not implemented by this package.
 
 No browser/UI rendering, deployed Workers CPU benchmark, production database load test, institutional review, or independent security audit was performed. The legacy frontend needs its original backend and data to operate; they are deliberately not bundled. The synthetic checkpoint format is an application design example, not a verified Canvas payload.
 
