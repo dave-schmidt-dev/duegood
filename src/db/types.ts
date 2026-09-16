@@ -7,6 +7,21 @@ export interface Account {
 
 export type ConnectionStatus = "active" | "revoked";
 
+export interface Course {
+  readonly id: string;
+  readonly accountId: number;
+  readonly canvasCourseId: string;
+  readonly courseCode: string | null;
+  readonly title: string | null;
+  readonly term: string | null;
+  /** Fencing counter; bumped exactly once per successful import commit. */
+  readonly snapshotGeneration: number;
+  readonly importLeaseToken: string | null;
+  readonly importLeaseExpiresAt: number | null;
+  readonly lastSuccessfulCheckAt: number | null;
+  readonly createdAt: number;
+}
+
 export interface Connection {
   readonly id: string;
   readonly accountId: number;
