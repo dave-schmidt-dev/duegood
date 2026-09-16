@@ -51,3 +51,25 @@ CREATE TABLE sessions (
 
 CREATE UNIQUE INDEX sessions_token_hash_idx ON sessions (token_hash);
 CREATE INDEX sessions_account_id_idx ON sessions (account_id);
+
+-- A pre-identity record of one in-flight OAuth authorization attempt. No `account_id` — this
+-- exists before any account is known to exist. `state_hash` and `binding_hash` are SHA-256 of
+-- the random `state` value and the browser-bound secret respectively; like `sessions.token_hash`,
+-- the raw values are never stored, only handed back once to the caller (src/auth/oauth-state.ts).
+-- `consumed_at` makes the callback one-time-use: it's set by a single atomic
+-- `UPDATE ... WHERE consumed_at IS NULL RETURNING ...`, so two concurrent callbacks racing the
+-- same state can't both succeed. `institution_origin` and `redirect_uri` are checked again at
+-- consume time against what the callback presents, so a state minted for one institution or
+-- redirect can't be replayed against another.
+CREATE TABLE oauth_states (
+  id TEXT PRIMARY KEY,
+  state_hash TEXT NOT NULL,
+  binding_hash TEXT NOT NULL,
+  institution_origin TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  consumed_at INTEGER
+);
+
+CREATE UNIQUE INDEX oauth_states_state_hash_idx ON oauth_states (state_hash);

@@ -4,6 +4,7 @@
     "fullRunner": "test:unit",
     "tests": [
       "test/worker/asset-boundary.test.ts",
+      "test/worker/auth-state.test.ts",
       "test/worker/config-template.test.ts",
       "test/worker/connection-fence.test.ts",
       "test/worker/credential-envelope.test.ts",

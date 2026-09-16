@@ -25,6 +25,13 @@ export function base64Encode(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+/** Hex-encoded SHA-256 of a UTF-8 string. Used to store a one-way digest of a secret (session
+ * token, OAuth state, browser binding) so the raw value never touches the database. */
+export async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function base64Decode(value: string): Uint8Array<ArrayBuffer> {
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);

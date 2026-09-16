@@ -1,4 +1,4 @@
-import { base64Encode } from "../crypto";
+import { base64Encode, sha256Hex } from "../crypto";
 
 const SESSION_COOKIE_NAME = "__Host-duegood_session";
 
@@ -20,7 +20,7 @@ export interface Session {
 export interface CreatedSession {
   readonly session: Session;
   /** The raw opaque bearer token to place in the session cookie. Never stored — only its hash is
-   * persisted (see `hashToken`) — so this value exists only in this return and the response. */
+   * persisted (see `sha256Hex`) — so this value exists only in this return and the response. */
   readonly token: string;
 }
 
@@ -46,11 +46,6 @@ function toSession(row: SessionRow): Session {
 
 const SESSION_COLUMNS = "id, account_id, created_at, absolute_expires_at, idle_expires_at, revoked_at";
 
-async function hashToken(token: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 function generateToken(): string {
   return base64Encode(crypto.getRandomValues(new Uint8Array(TOKEN_BYTES)));
 }
@@ -60,7 +55,7 @@ function generateToken(): string {
  * should use `rotateSession` instead, so the pre-auth session can't be reused (session fixation). */
 export async function createSession(db: D1Database, accountId: number, now: number): Promise<CreatedSession> {
   const token = generateToken();
-  const tokenHash = await hashToken(token);
+  const tokenHash = await sha256Hex(token);
 
   const row = await db
     .prepare(
@@ -87,7 +82,7 @@ export async function createSession(db: D1Database, accountId: number, now: numb
  * `undefined` for a missing, revoked, or expired (absolute or idle) session; validation failure
  * here is an expected outcome of an unauthenticated request, not an error condition. */
 export async function validateSession(db: D1Database, token: string, now: number): Promise<Session | undefined> {
-  const tokenHash = await hashToken(token);
+  const tokenHash = await sha256Hex(token);
   const row = await db
     .prepare(
       `SELECT ${SESSION_COLUMNS} FROM sessions
@@ -121,7 +116,7 @@ export async function touchSessionActivity(db: D1Database, sessionId: string, no
 /** Revokes whichever session (if any) matches this raw token. A no-op, not an error, when the
  * token matches nothing or is already revoked — logging out a dead session should still succeed. */
 export async function revokeSessionByToken(db: D1Database, token: string, now: number): Promise<void> {
-  const tokenHash = await hashToken(token);
+  const tokenHash = await sha256Hex(token);
   await db
     .prepare(`UPDATE sessions SET revoked_at = ?2 WHERE token_hash = ?1 AND revoked_at IS NULL`)
     .bind(tokenHash, now)
