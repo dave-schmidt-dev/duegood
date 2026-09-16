@@ -27,7 +27,7 @@
       "name": "duegood",
       "workers_dev": true,
       "vars": {
-        "AUTH_MODE": "disabled",
+        "AUTH_MODE": "enabled",
         "APP_ORIGIN": "https://duegood.zerodelta.workers.dev",
         "CANVAS_ORIGIN": "https://marymount.instructure.com",
         "TOKEN_KEY_VERSION": "1"
