@@ -6,6 +6,8 @@
       "test/worker/asset-boundary.test.ts",
       "test/worker/config-template.test.ts",
       "test/worker/health.test.ts",
+      "test/worker/identity-migration.test.ts",
+      "test/worker/institution-identity.test.ts",
       "test/worker/migration-harness.test.ts"
     ]
   },
