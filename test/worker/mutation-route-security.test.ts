@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../../src/index";
 import { CANVAS_REQUIRED_SCOPE, resolveAuthConfig, type KeyRing } from "../../src/config";
-import { encryptCredential } from "../../src/crypto";
+import { decryptCredential, encryptCredential } from "../../src/crypto";
 import { createConnection, findOrCreateAccount, getActiveConnection } from "../../src/db/repository";
 import { CSRF_HEADER_NAME } from "../../src/auth/mutation-routes";
 import { mutationRoutes } from "../../src/auth/routes";
@@ -29,6 +29,10 @@ function enabledEnv(): typeof env {
 
 async function fetchWorker(request: Request): Promise<Response> {
   return worker.fetch(request as Parameters<typeof worker.fetch>[0], enabledEnv());
+}
+
+async function fetchWorkerWithEnv(request: Request, envOverride: typeof env): Promise<Response> {
+  return worker.fetch(request as Parameters<typeof worker.fetch>[0], envOverride);
 }
 
 function keyRing(): KeyRing {
@@ -376,5 +380,65 @@ describe("GET /auth/canvas/callback", () => {
   it("rejects a callback carrying a provider error instead of a code", async () => {
     const response = await fetchWorker(buildRequest("/auth/canvas/callback?error=access_denied&state=x", {}));
     expect(response.status).toBe(400);
+  });
+});
+
+describe("refresh performs lazy re-encryption under the current active key version", () => {
+  const NEW_ACTIVE_KEY_B64 = "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXowMTIzNDU=";
+
+  it("re-encrypts a connection stored under a now-legacy key version under today's active version", async () => {
+    const owner = await makeSession();
+    // Created while key version 1 is active — this is the "legacy" envelope by the time refresh runs.
+    const connection = await makeConnection(owner.account.id);
+    expect(connection.keyVersion).toBe(1);
+
+    const rotatedEnv: typeof env = {
+      ...enabledEnv(),
+      TOKEN_KEY_VERSION: "2",
+      TOKEN_ENCRYPTION_ACTIVE_KEY_B64: NEW_ACTIVE_KEY_B64,
+      TOKEN_ENCRYPTION_LEGACY_KEYS_JSON: JSON.stringify({ 1: ACTIVE_KEY_B64 }),
+    };
+    vi.mocked(globalThis.fetch).mockImplementation(
+      (async () =>
+        new Response(
+          JSON.stringify({ access_token: "refreshed-access-token", token_type: "Bearer", user: { id: 42, name: "x" }, expires_in: 3600 }),
+          { status: 200 },
+        )) as unknown as typeof fetch,
+    );
+
+    const response = await fetchWorkerWithEnv(
+      buildRequest(`/api/connections/${connection.id}/refresh`, {
+        method: "POST",
+        token: owner.token,
+        csrfToken: owner.csrfToken,
+        origin: APP_ORIGIN,
+      }),
+      rotatedEnv,
+    );
+    expect(response.status).toBe(204);
+
+    const refreshed = await getActiveConnection(env.DB, connection.id);
+    expect(refreshed?.keyVersion).toBe(2);
+
+    const resolved = resolveAuthConfig({
+      authMode: "enabled",
+      appOrigin: APP_ORIGIN,
+      institutionOrigin: INSTITUTION,
+      clientId: "client-123",
+      clientSecret: "secret-456",
+      scope: CANVAS_REQUIRED_SCOPE,
+      keyVersion: "2",
+      activeKeyB64: NEW_ACTIVE_KEY_B64,
+      legacyKeysJson: undefined,
+    });
+    if (resolved.mode !== "enabled") throw new Error("test fixture config did not enable");
+    // A version-2-only ring (no legacy key present) can still decrypt: proof the envelope was
+    // actually rewritten under version 2, not just the `key_version` column bumped in place.
+    const decrypted = await decryptCredential(
+      resolved.keyRing,
+      { accountId: owner.account.id, connectionId: connection.id },
+      { keyVersion: refreshed?.keyVersion ?? 0, envelopeB64: refreshed?.encryptedAccessToken ?? "" },
+    );
+    expect(decrypted).toBe("refreshed-access-token");
   });
 });
