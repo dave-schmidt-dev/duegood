@@ -5,10 +5,12 @@ export const CANVAS_REQUIRED_SCOPE =
 
 const CANVAS_CALLBACK_PATH = "/auth/canvas/callback";
 
-interface KeyRing {
+export interface KeyRing {
   readonly activeVersion: number;
-  /** Active version plus every still-referenced legacy version, for decrypt-only use. */
-  readonly keys: ReadonlyMap<number, Uint8Array>;
+  /** Active version plus every still-referenced legacy version, for decrypt-only use.
+   * `Uint8Array<ArrayBuffer>`, not the bare (ArrayBufferLike-defaulted) type, so these values are
+   * directly usable with Web Crypto's `BufferSource`-typed APIs without a cast at the call site. */
+  readonly keys: ReadonlyMap<number, Uint8Array<ArrayBuffer>>;
 }
 
 interface CanvasAuthConfig {
@@ -69,7 +71,7 @@ function isPlaceholder(value: string): boolean {
 /** Exact unpadded-free base64 shape for 32 bytes: 43 data characters plus one '=' pad. */
 const BASE64_32_BYTE_KEY = /^[A-Za-z0-9+/]{43}=$/;
 
-function decodeBase64Key(value: string): Uint8Array | undefined {
+function decodeBase64Key(value: string): Uint8Array<ArrayBuffer> | undefined {
   if (!BASE64_32_BYTE_KEY.test(value)) return undefined;
   let decoded: string;
   try {
@@ -117,7 +119,7 @@ export function resolveAuthConfig(input: AuthConfigInput): AuthConfig {
   const activeKey = decodeBase64Key(input.activeKeyB64);
   if (!activeKey) return disabled("invalid_active_key");
 
-  const keys = new Map<number, Uint8Array>([[activeVersion, activeKey]]);
+  const keys = new Map<number, Uint8Array<ArrayBuffer>>([[activeVersion, activeKey]]);
   if (input.legacyKeysJson !== undefined && !isPlaceholder(input.legacyKeysJson)) {
     let parsed: unknown;
     try {

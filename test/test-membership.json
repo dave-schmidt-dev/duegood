@@ -5,10 +5,13 @@
     "tests": [
       "test/worker/asset-boundary.test.ts",
       "test/worker/config-template.test.ts",
+      "test/worker/connection-fence.test.ts",
+      "test/worker/credential-envelope.test.ts",
       "test/worker/health.test.ts",
       "test/worker/identity-migration.test.ts",
       "test/worker/institution-identity.test.ts",
-      "test/worker/migration-harness.test.ts"
+      "test/worker/migration-harness.test.ts",
+      "test/worker/revocation-order.test.ts"
     ]
   },
   "browser": {
