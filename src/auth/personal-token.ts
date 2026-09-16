@@ -1,3 +1,5 @@
+import { CANVAS_USER_AGENT } from "../canvas/user-agent";
+
 const USERS_SELF_PATH = "/api/v1/users/self";
 
 export type FetchFn = typeof fetch;
@@ -35,7 +37,7 @@ export async function verifyPersonalAccessToken(
   let response: Response;
   try {
     response = await fetchFn(target.toString(), {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "User-Agent": CANVAS_USER_AGENT },
       // Never follow automatically: a redirect target has not been validated, and a login-page
       // redirect on this endpoint means the token didn't authenticate, not that the identity is
       // fine one hop further with the bearer token attached.

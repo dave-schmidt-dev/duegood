@@ -1,4 +1,5 @@
 import type { CanvasAuthConfig } from "../config";
+import { CANVAS_USER_AGENT } from "../canvas/user-agent";
 
 /**
  * Owns the Canvas OAuth2 confidential-client profile: the authorize-URL shape, the
@@ -63,7 +64,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 async function requestToken(institutionOrigin: string, body: Record<string, string>, fetchFn: FetchFn): Promise<CanvasTokenResult> {
   const response = await fetchFn(new URL(TOKEN_PATH, institutionOrigin), {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": CANVAS_USER_AGENT },
     body: new URLSearchParams(body).toString(),
   });
   if (!response.ok) throw new Error(`Canvas token endpoint returned ${String(response.status)}`);
@@ -139,7 +140,7 @@ export async function revokeProviderToken(config: CanvasAuthConfig, accessToken:
   try {
     const response = await fetchFn(new URL(TOKEN_PATH, config.institutionOrigin), {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: `Bearer ${accessToken}`, "User-Agent": CANVAS_USER_AGENT },
     });
     return response.ok;
   } catch {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { verifyPersonalAccessToken, type FetchFn } from "../../src/auth/personal-token";
+import { CANVAS_USER_AGENT } from "../../src/canvas/user-agent";
 
 const INSTITUTION = "https://marymount.instructure.com";
 
@@ -21,6 +22,8 @@ describe("verifyPersonalAccessToken", () => {
     const [requestUrl, init] = vi.mocked(fetchFn).mock.calls[0] as [string, RequestInit];
     expect(requestUrl).toBe("https://marymount.instructure.com/api/v1/users/self");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer student-pasted-token");
+    // Instructure rejects requests with no User-Agent — Workers' fetch() sends none by default.
+    expect((init.headers as Record<string, string>)["User-Agent"]).toBe(CANVAS_USER_AGENT);
     // Never follows a redirect automatically — a redirect target is unvalidated, so the safe
     // behavior is to stop rather than resend the bearer token one hop further.
     expect(init.redirect).toBe("manual");

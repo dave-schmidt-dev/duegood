@@ -8,6 +8,7 @@ import {
   type ConfiguredCanvasAuthConfig,
   type FetchFn,
 } from "../../src/auth/oauth-profile";
+import { CANVAS_USER_AGENT } from "../../src/canvas/user-agent";
 
 const COMPLETE_INPUT: AuthConfigInput = {
   authMode: "enabled",
@@ -77,7 +78,8 @@ describe("exchangeAuthorizationCode", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
     const [requestUrl, init] = vi.mocked(fetchFn).mock.calls[0] as [URL, RequestInit];
     expect(requestUrl.toString()).toBe("https://marymount.instructure.com/login/oauth2/token");
-    expect(init.headers).toMatchObject({ "Content-Type": "application/x-www-form-urlencoded" });
+    // Instructure rejects requests with no User-Agent — Workers' fetch() sends none by default.
+    expect(init.headers).toMatchObject({ "Content-Type": "application/x-www-form-urlencoded", "User-Agent": CANVAS_USER_AGENT });
     const body = new URLSearchParams(init.body as string);
     expect(body.get("grant_type")).toBe("authorization_code");
     expect(body.get("client_id")).toBe("client-123");
@@ -123,6 +125,7 @@ describe("refreshAccessToken", () => {
     const body = new URLSearchParams(init.body as string);
     expect(body.get("grant_type")).toBe("refresh_token");
     expect(body.get("refresh_token")).toBe("stored-refresh-token");
+    expect((init.headers as Record<string, string>)["User-Agent"]).toBe(CANVAS_USER_AGENT);
     expect(result.refreshToken).toBeUndefined();
     expect(result.accessToken).toBe("new-access-token");
   });
@@ -137,6 +140,7 @@ describe("revokeProviderToken", () => {
     expect(requestUrl.toString()).toBe("https://marymount.instructure.com/login/oauth2/token");
     expect(init.method).toBe("DELETE");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer access-token");
+    expect((init.headers as Record<string, string>)["User-Agent"]).toBe(CANVAS_USER_AGENT);
   });
 
   it("returns false, and never throws, when Canvas rejects the revocation", async () => {

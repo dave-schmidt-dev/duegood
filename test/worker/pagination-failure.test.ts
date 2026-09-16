@@ -4,6 +4,7 @@ import { fetchCanvasPage } from "../../src/canvas/client";
 import { parseCanvasId } from "../../src/canvas/id";
 import type { CanvasAssignmentRaw, CanvasCourseRaw, CanvasSubmissionRaw } from "../../src/canvas/types";
 import { BudgetExceededError, createBudgetTracker, createImportBudget } from "../../src/import/limits";
+import { CANVAS_USER_AGENT } from "../../src/canvas/user-agent";
 
 const CONFIG = { institutionOrigin: "https://canvas.example.invalid", accessToken: "token-1" };
 
@@ -60,6 +61,9 @@ describe("fetchCanvasPage", () => {
     );
     expect(result.items).toEqual(oneCoursePage);
     expect(result.nextLinkDropped).toBe(false);
+    // Instructure rejects requests with no User-Agent — Workers' fetch() sends none by default.
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>)["User-Agent"]).toBe(CANVAS_USER_AGENT);
   });
 
   it("follows a next link that stays on the allowlisted origin and path", async () => {

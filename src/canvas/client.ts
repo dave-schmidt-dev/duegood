@@ -1,4 +1,5 @@
 import type { BudgetTracker } from "../import/limits";
+import { CANVAS_USER_AGENT } from "./user-agent";
 
 export interface CanvasFetchConfig {
   readonly institutionOrigin: string;
@@ -61,7 +62,7 @@ export async function fetchCanvasPage<T>(
 
   budget.spendCanvasFetch();
   const response = await fetchImpl(target.toString(), {
-    headers: { Authorization: `Bearer ${config.accessToken}`, Accept: "application/json" },
+    headers: { Authorization: `Bearer ${config.accessToken}`, Accept: "application/json", "User-Agent": CANVAS_USER_AGENT },
     redirect: "manual",
   });
 
