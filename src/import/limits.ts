@@ -6,6 +6,9 @@
  */
 export const CANVAS_SUBREQUESTS_PER_INVOCATION = 50;
 export const D1_QUERIES_PER_INVOCATION = 50;
+/** Max rows a single D1 `batch()` call is assumed to cover; used to estimate how many batch calls
+ * a course's full commit needs, independent of which import strategy issues them. */
+export const D1_BATCH_ROWS = 100;
 
 export class BudgetExceededError extends Error {
   constructor(resource: string) {
