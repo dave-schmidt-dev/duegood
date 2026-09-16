@@ -19,7 +19,7 @@ export interface EncryptedCredential {
   readonly envelopeB64: string;
 }
 
-function base64Encode(bytes: Uint8Array): string {
+export function base64Encode(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary);

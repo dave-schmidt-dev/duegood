@@ -11,7 +11,10 @@
       "test/worker/identity-migration.test.ts",
       "test/worker/institution-identity.test.ts",
       "test/worker/migration-harness.test.ts",
-      "test/worker/revocation-order.test.ts"
+      "test/worker/response-headers.test.ts",
+      "test/worker/revocation-order.test.ts",
+      "test/worker/session-lifecycle.test.ts",
+      "test/worker/session-ownership.test.ts"
     ]
   },
   "browser": {

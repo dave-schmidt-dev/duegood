@@ -32,3 +32,22 @@ CREATE TABLE connections (
 
 CREATE INDEX connections_account_id_idx ON connections (account_id);
 CREATE INDEX connections_key_version_idx ON connections (key_version);
+
+-- A session is looked up only by `token_hash` (SHA-256 of the opaque bearer token issued to the
+-- browser) — the raw token is never stored, so a leaked DB row can't be replayed as a cookie.
+-- `id` is a separate UUID so future tables (e.g. CSRF binding in a later slice) can reference a
+-- session without ever handling its secret hash. Both `absolute_expires_at` and
+-- `idle_expires_at` are enforced (src/auth/session.ts, not here): the absolute bound caps a
+-- session's total lifetime regardless of activity; the idle bound ends it after inactivity.
+CREATE TABLE sessions (
+  id TEXT PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES accounts(id),
+  token_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  absolute_expires_at INTEGER NOT NULL,
+  idle_expires_at INTEGER NOT NULL,
+  revoked_at INTEGER
+);
+
+CREATE UNIQUE INDEX sessions_token_hash_idx ON sessions (token_hash);
+CREATE INDEX sessions_account_id_idx ON sessions (account_id);
