@@ -1,4 +1,5 @@
 import { base64Encode, sha256Hex } from "../crypto";
+import { readCookie } from "./cookies";
 
 const SESSION_COOKIE_NAME = "__Host-duegood_session";
 
@@ -161,4 +162,9 @@ export function buildSessionCookie(token: string): string {
 /** The `Set-Cookie` value that clears the session cookie on logout. */
 export function buildSessionClearCookie(): string {
   return `${SESSION_COOKIE_NAME}=; Secure; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`;
+}
+
+/** Reads the raw bearer token from an incoming request's session cookie, if present. */
+export function readSessionToken(request: Request): string | undefined {
+  return readCookie(request, SESSION_COOKIE_NAME);
 }

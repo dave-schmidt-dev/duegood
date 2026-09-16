@@ -167,6 +167,56 @@ export async function deleteConnection(db: D1Database, connectionId: string): Pr
   if (result.meta.changes === 0) throw new Error("connection not found or not yet revoked");
 }
 
+/** Every connection an account owns, active or revoked. Route handlers project this down to a
+ * credential-free summary before returning it to a caller — this function itself still returns
+ * the full row (including the encrypted envelope) because it's also the right shape for internal
+ * callers that need it, e.g. re-encrypting on refresh. */
+export async function getConnectionsForAccount(db: D1Database, accountId: number): Promise<Connection[]> {
+  const result = await db
+    .prepare(`SELECT ${CONNECTION_COLUMNS} FROM connections WHERE account_id = ?1 ORDER BY created_at ASC`)
+    .bind(accountId)
+    .all<ConnectionRow>();
+  return result.results.map(toConnection);
+}
+
+export interface RefreshedCredentials {
+  readonly keyVersion: number;
+  readonly encryptedAccessToken: string;
+  readonly encryptedRefreshToken: string | null;
+  readonly accessTokenExpiresAt: number | null;
+}
+
+/** Persists a re-encrypted credential after a token refresh. Folds the connection fence into the
+ * same atomic statement as the write (`status = 'active' AND generation = ?`), so a connection
+ * revoked between the caller's fence check and this write can never have its envelope silently
+ * resurrected — the same TOCTOU concern `revokeConnection`'s single-statement update guards
+ * against. */
+export async function updateConnectionCredentials(
+  db: D1Database,
+  connectionId: string,
+  expectedGeneration: number,
+  credentials: RefreshedCredentials,
+): Promise<Connection> {
+  const row = await db
+    .prepare(
+      `UPDATE connections
+       SET key_version = ?3, encrypted_access_token = ?4, encrypted_refresh_token = ?5, access_token_expires_at = ?6
+       WHERE id = ?1 AND status = 'active' AND generation = ?2
+       RETURNING ${CONNECTION_COLUMNS}`,
+    )
+    .bind(
+      connectionId,
+      expectedGeneration,
+      credentials.keyVersion,
+      credentials.encryptedAccessToken,
+      credentials.encryptedRefreshToken,
+      credentials.accessTokenExpiresAt,
+    )
+    .first<ConnectionRow>();
+  if (!row) throw new Error("connection is not active");
+  return toConnection(row);
+}
+
 /** True when no connection row (active or revoked-but-not-yet-deleted) still references this key
  * version — i.e. it's safe to drop the key from the ring's legacy map. A revoked connection still
  * counts until its row is actually deleted, since its stored envelope is still encrypted under

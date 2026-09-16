@@ -13,7 +13,7 @@ export interface KeyRing {
   readonly keys: ReadonlyMap<number, Uint8Array<ArrayBuffer>>;
 }
 
-interface CanvasAuthConfig {
+export interface CanvasAuthConfig {
   readonly appOrigin: string;
   readonly institutionOrigin: string;
   readonly clientId: string;
