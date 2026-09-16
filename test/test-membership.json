@@ -4,6 +4,7 @@
     "fullRunner": "test:unit",
     "tests": [
       "test/worker/asset-boundary.test.ts",
+      "test/worker/config-template.test.ts",
       "test/worker/health.test.ts",
       "test/worker/migration-harness.test.ts"
     ]
