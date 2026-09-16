@@ -21,5 +21,32 @@
       "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "migrations"
     }
-  ]
+  ],
+  "env": {
+    "production": {
+      "name": "duegood",
+      "workers_dev": true,
+      "vars": {
+        "AUTH_MODE": "disabled",
+        "APP_ORIGIN": "https://duegood.zerodelta.workers.dev",
+        "CANVAS_ORIGIN": "https://marymount.instructure.com",
+        "TOKEN_KEY_VERSION": "1"
+      },
+      "assets": {
+        "directory": "./dist/public",
+        "binding": "ASSETS",
+        "run_worker_first": ["/health", "/api/*", "/auth/*"],
+        "html_handling": "auto-trailing-slash",
+        "not_found_handling": "none"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "duegood",
+          "database_id": "c6917be3-b1cc-44b5-98be-3a9a97c17237",
+          "migrations_dir": "migrations"
+        }
+      ]
+    }
+  }
 }

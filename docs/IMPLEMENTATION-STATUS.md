@@ -63,7 +63,14 @@ single-owner path rather than general onboarding.
 
 ### External gates (not evidenced by this repository, and never claimed here)
 
-- [ ] Cloudflare account creation, resource provisioning, and a live deployment.
+- [ ] Cloudflare account creation, resource provisioning, and a live deployment. (Deliberately left
+      unchecked — `check:implementation-status` hard-fails if this box is ever checked, since none
+      of these four gates may be claimed done by an agent. As a factual note, not a completed-gate
+      claim: David personally authenticated `wrangler` on 2026-09-16 and, with the repository's
+      help executing his own account's commands, provisioned a production D1 database, deployed
+      the Worker to `https://duegood.zerodelta.workers.dev` with `AUTH_MODE=disabled`, and set the
+      `TOKEN_ENCRYPTION_ACTIVE_KEY_B64` secret. `AUTH_MODE` stays `disabled` in production until
+      David decides to enable the owner-only PAT connect path.)
 - [ ] Marymount Canvas OAuth developer-key submission and approval.
 - [ ] Any live call to a real Canvas instance (every import in this repository's tests uses a
       synthetic `fetchImpl`).
