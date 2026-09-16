@@ -59,6 +59,7 @@ describe("fetchCanvasPage", () => {
       fetchImpl,
     );
     expect(result.items).toEqual(oneCoursePage);
+    expect(result.nextLinkDropped).toBe(false);
   });
 
   it("follows a next link that stays on the allowlisted origin and path", async () => {
@@ -72,9 +73,10 @@ describe("fetchCanvasPage", () => {
     );
     expect(result.items).toEqual(oneAssignmentPage);
     expect(result.nextUrl).toBe(nextUrl);
+    expect(result.nextLinkDropped).toBe(false);
   });
 
-  it("drops a next link pointing off the allowlisted origin, instead of following it", async () => {
+  it("drops a next link pointing off the allowlisted origin, instead of following it, and flags it as dropped", async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValue(
@@ -87,9 +89,10 @@ describe("fetchCanvasPage", () => {
       fetchImpl,
     );
     expect(result.nextUrl).toBeUndefined();
+    expect(result.nextLinkDropped).toBe(true);
   });
 
-  it("drops a next link pointing at a non-allowed path on the same origin", async () => {
+  it("drops a next link pointing at a non-allowed path on the same origin, and flags it as dropped", async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValue(
@@ -102,6 +105,19 @@ describe("fetchCanvasPage", () => {
       fetchImpl,
     );
     expect(result.nextUrl).toBeUndefined();
+    expect(result.nextLinkDropped).toBe(true);
+  });
+
+  it("reports no dropped link when the response simply has no Link header at all", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(oneAssignmentPage));
+    const result = await fetchCanvasPage<CanvasAssignmentRaw>(
+      `${CONFIG.institutionOrigin}/api/v1/courses`,
+      CONFIG,
+      createBudgetTracker(),
+      fetchImpl,
+    );
+    expect(result.nextUrl).toBeUndefined();
+    expect(result.nextLinkDropped).toBe(false);
   });
 
   it("spends the Canvas-fetch budget before the network call, and never calls fetch once exhausted", async () => {

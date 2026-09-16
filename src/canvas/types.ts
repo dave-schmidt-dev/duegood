@@ -26,3 +26,15 @@ export interface CanvasAssignmentRaw {
   readonly points_possible?: number | null;
   readonly submission?: CanvasSubmissionRaw | null;
 }
+
+/**
+ * One entry from an assignment's `overrides` list (returned only when requested via
+ * `include[]=overrides`). `student_ids` names exactly which students this override applies to —
+ * an override naming other students only must never be applied to the caller's own projection.
+ * `due_at` follows the assignment's own present-but-nullable shape.
+ */
+export interface CanvasAssignmentOverrideRaw {
+  readonly id: number | string;
+  readonly student_ids?: readonly (number | string)[];
+  readonly due_at: string | null;
+}

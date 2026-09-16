@@ -32,6 +32,12 @@ export interface CanvasPageResult<T> {
   /** Present only when the next-page link was itself validated as an allowlisted destination; an
    * unsafe or off-origin `next` link stops pagination rather than being followed. */
   readonly nextUrl?: string;
+  /** True when the response's `Link` header named a `rel="next"` target that failed the allowlist
+   * check — pagination was cut short here, not genuinely exhausted. A caller MUST treat this as a
+   * truncated fetch (commit nothing, report not-refreshed), never as "this course simply has no
+   * more pages": `nextUrl === undefined` alone can't tell those two apart, and collapsing them
+   * would make a dropped link look identical to a real last page. */
+  readonly nextLinkDropped: boolean;
 }
 
 /**
@@ -67,5 +73,5 @@ export async function fetchCanvasPage<T>(
   const items = (await response.json()) as T[];
   const nextUrl = parseNextLink(response.headers.get("Link"));
   const nextIsAllowed = nextUrl !== undefined && isAllowedDestination(new URL(nextUrl), config.institutionOrigin);
-  return { items, nextUrl: nextIsAllowed ? nextUrl : undefined };
+  return { items, nextUrl: nextIsAllowed ? nextUrl : undefined, nextLinkDropped: nextUrl !== undefined && !nextIsAllowed };
 }

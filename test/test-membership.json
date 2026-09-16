@@ -3,6 +3,7 @@
     "focusedRunner": "test:worker",
     "fullRunner": "test:unit",
     "tests": [
+      "test/worker/assignment-override.test.ts",
       "test/worker/asset-boundary.test.ts",
       "test/worker/auth-rate-limit.test.ts",
       "test/worker/auth-state.test.ts",
@@ -17,6 +18,7 @@
       "test/worker/import-lease-reclaim.test.ts",
       "test/worker/import-limits.test.ts",
       "test/worker/institution-identity.test.ts",
+      "test/worker/inventory-anomaly.test.ts",
       "test/worker/migration-harness.test.ts",
       "test/worker/mutation-route-security.test.ts",
       "test/worker/oauth-profile.test.ts",
