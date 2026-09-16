@@ -12,6 +12,7 @@
       "test/worker/csrf.test.ts",
       "test/worker/health.test.ts",
       "test/worker/identity-migration.test.ts",
+      "test/worker/import-limits.test.ts",
       "test/worker/institution-identity.test.ts",
       "test/worker/migration-harness.test.ts",
       "test/worker/mutation-route-security.test.ts",

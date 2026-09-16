@@ -1,0 +1,72 @@
+{
+  "synthetic": true,
+  "format": "duegood-canvas-phase1-fixtures-v1",
+  "warning": "Invented Canvas-shaped API payloads for testing the import pipeline (feasibility benchmark, adapter, normalization). Not real Canvas API responses and not real student data.",
+  "institution": {
+    "id": "demo-campus",
+    "canvasOrigin": "https://canvas.example.invalid"
+  },
+  "profiles": {
+    "small": { "courseCount": 1, "assignmentsPerCourse": 3 },
+    "typical": { "courseCount": 5, "assignmentsPerCourse": 30 },
+    "large": { "courseCount": 12, "assignmentsPerCourse": 200 }
+  },
+  "courses": [
+    {
+      "id": "9001",
+      "code": "TECH 101",
+      "name": "Introduction to Computing",
+      "term": "Fall 2026",
+      "submissionIncludeSupported": true
+    },
+    {
+      "id": "9002",
+      "code": "POLI 210",
+      "name": "Public Policy Workshop",
+      "term": "Fall 2026",
+      "submissionIncludeSupported": true
+    },
+    {
+      "id": "9003",
+      "code": "HIST 050",
+      "name": "Legacy Systems Survey",
+      "term": "Fall 2026",
+      "submissionIncludeSupported": false
+    }
+  ],
+  "assignments": [
+    {
+      "id": "50001",
+      "courseId": "9001",
+      "name": "Network lab reflection",
+      "due_at": "2026-09-21T03:59:00Z",
+      "points_possible": 10,
+      "submission": { "workflow_state": "submitted", "submitted_at": "2026-09-20T22:10:00Z" }
+    },
+    {
+      "id": "50002",
+      "courseId": "9001",
+      "name": "Reading response",
+      "due_at": null,
+      "points_possible": 10,
+      "submission": null
+    },
+    {
+      "id": "50003",
+      "courseId": "9002",
+      "name": "Participation",
+      "due_at": "2026-10-01T03:59:00Z",
+      "points_possible": null
+    },
+    {
+      "id": "50004",
+      "courseId": "9003",
+      "name": "Orientation quiz",
+      "due_at": "2026-09-15T03:59:00Z",
+      "points_possible": 5,
+      "submission": { "workflow_state": "submitted" }
+    }
+  ],
+  "unsafeCourseId": "9007199254740993",
+  "notes": "unsafeCourseId exceeds Number.MAX_SAFE_INTEGER (2^53 - 1 = 9007199254740991) on purpose: it must be handled as a string identity everywhere, never round-tripped through a JS number."
+}
