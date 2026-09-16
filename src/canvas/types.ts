@@ -25,6 +25,8 @@ export interface CanvasAssignmentRaw {
   readonly due_at: string | null;
   readonly points_possible?: number | null;
   readonly submission?: CanvasSubmissionRaw | null;
+  /** Present only when requested via `include[]=overrides`. */
+  readonly overrides?: readonly CanvasAssignmentOverrideRaw[];
 }
 
 /**

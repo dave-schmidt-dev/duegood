@@ -82,6 +82,14 @@ export async function findOrCreateAccount(
   return toAccount(existing);
 }
 
+export async function getAccountById(db: D1Database, accountId: number): Promise<Account | undefined> {
+  const row = await db
+    .prepare(`SELECT id, institution_origin, canvas_user_id, created_at FROM accounts WHERE id = ?1`)
+    .bind(accountId)
+    .first<AccountRow>();
+  return row ? toAccount(row) : undefined;
+}
+
 interface CourseRow {
   readonly id: string;
   readonly account_id: number;
@@ -156,6 +164,33 @@ export async function findOrCreateCourse(db: D1Database, input: CreateCourseInpu
 export async function getCourseById(db: D1Database, courseId: string): Promise<Course | undefined> {
   const row = await db.prepare(`SELECT ${COURSE_COLUMNS} FROM courses WHERE id = ?1`).bind(courseId).first<CourseRow>();
   return row ? toCourse(row) : undefined;
+}
+
+export interface CommittedSourceItem {
+  readonly canvasItemId: string;
+  readonly fingerprint: string;
+  readonly available: boolean;
+}
+
+interface SourceItemRow {
+  readonly canvas_item_id: string;
+  readonly fingerprint: string;
+  readonly available: number;
+}
+
+/** Every source item ever committed for this course, available or not — the "last known inventory"
+ * `compareInventory` diffs a fresh fetch against, and the same read a fresh course's feasibility
+ * estimate is drawn from (see `src/import/course-import.ts`). */
+export async function listSourceItems(db: D1Database, courseId: string): Promise<CommittedSourceItem[]> {
+  const result = await db
+    .prepare(`SELECT canvas_item_id, fingerprint, available FROM source_items WHERE course_id = ?1`)
+    .bind(courseId)
+    .all<SourceItemRow>();
+  return result.results.map((row) => ({
+    canvasItemId: row.canvas_item_id,
+    fingerprint: row.fingerprint,
+    available: row.available === 1,
+  }));
 }
 
 export interface CreateConnectionInput {

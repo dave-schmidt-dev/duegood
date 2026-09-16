@@ -2,6 +2,13 @@ import { knownField, knownNullField, type SourceField } from "../import/normaliz
 import { parseCanvasId } from "./id";
 import type { CanvasAssignmentOverrideRaw } from "./types";
 
+/**
+ * Phase 1 has no per-institution capability probe for the `overrides` include, so every import
+ * treats it as supported. Replace with a real probe (or a config-driven flag) once an institution
+ * is found where requesting `include[]=overrides` fails or is silently ignored.
+ */
+export const OVERRIDES_SUPPORTED_PHASE_1 = true;
+
 function overrideDueAt(override: CanvasAssignmentOverrideRaw): SourceField<string> {
   return override.due_at === null ? knownNullField<string>() : knownField(override.due_at);
 }

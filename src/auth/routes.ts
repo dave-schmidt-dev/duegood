@@ -4,11 +4,14 @@ import {
   createConnection,
   deleteConnection,
   findOrCreateAccount,
+  getAccountById,
   getActiveConnection,
   getConnectionsForAccount,
+  getCourseById,
   revokeConnection,
   updateConnectionCredentials,
 } from "../db/repository";
+import { importCourse } from "../import/course-import";
 import { readCookie } from "./cookies";
 import { checkMutationRequest, createMutationRouteRegistry } from "./mutation-routes";
 import { buildAuthorizeUrl, exchangeAuthorizationCode, refreshAccessToken, revokeProviderToken } from "./oauth-profile";
@@ -35,6 +38,7 @@ export const mutationRoutes = createMutationRouteRegistry();
 mutationRoutes.register("POST", "/auth/logout");
 mutationRoutes.register("POST", "/api/connections/:id/disconnect");
 mutationRoutes.register("POST", "/api/connections/:id/refresh");
+mutationRoutes.register("POST", "/api/connections/:id/courses/:courseId/import");
 
 const OAUTH_BINDING_COOKIE_NAME = "__Host-duegood_oauth_binding";
 const BINDING_BYTES = 32;
@@ -254,8 +258,59 @@ async function handleRefresh(
   return new Response(null, { status: 204 });
 }
 
+/**
+ * Keyed by the internal `courses.id` (UUID) with an explicit ownership check below, not by
+ * `canvasCourseId` fused with an implicit find-or-create — the latter can never surface a
+ * cross-account access attempt, since a lookup scoped to the caller's own account always finds
+ * either the caller's own course or nothing. "Select which Canvas course to track" is a separate,
+ * not-yet-built mechanism; this route only refreshes a course row that already exists.
+ */
+async function handleCourseImport(
+  request: Request,
+  config: CanvasAuthConfig,
+  db: D1Database,
+  connectionId: string,
+  courseId: string,
+): Promise<Response> {
+  const now = Date.now();
+  const session = await requireSession(request, db, now);
+  if (session === undefined) return jsonError(401, "unauthenticated");
+  if (!(await checkMutationRequest(request, session, config.appOrigin))) return jsonError(403, "forbidden");
+
+  const connection = await ownedActiveConnection(db, connectionId, session.accountId);
+  if (connection === undefined) return jsonError(404, "not_found");
+  if (!checkPostAuthThrottle(session.accountId, connectionId, now)) return jsonError(429, "rate_limited");
+
+  const course = await getCourseById(db, courseId);
+  if (course === undefined || course.accountId !== session.accountId) return jsonError(404, "not_found");
+
+  const account = await getAccountById(db, session.accountId);
+  if (account === undefined) return jsonError(404, "not_found");
+
+  const identity = { accountId: connection.accountId, connectionId: connection.id };
+  const accessToken = await decryptCredential(config.keyRing, identity, {
+    keyVersion: connection.keyVersion,
+    envelopeB64: connection.encryptedAccessToken,
+  });
+
+  const result = await importCourse({
+    db,
+    canvasConfig: { institutionOrigin: config.institutionOrigin, accessToken },
+    accountId: session.accountId,
+    courseId: course.id,
+    canvasCourseId: course.canvasCourseId,
+    connectionId: connection.id,
+    connectionGeneration: connection.generation,
+    studentCanvasUserId: account.canvasUserId,
+    now,
+    fetchImpl: fetch,
+  });
+  return Response.json(result);
+}
+
 const DISCONNECT_PATH = /^\/api\/connections\/([^/]+)\/disconnect$/;
 const REFRESH_PATH = /^\/api\/connections\/([^/]+)\/refresh$/;
+const IMPORT_PATH = /^\/api\/connections\/([^/]+)\/courses\/([^/]+)\/import$/;
 
 /** Routes every `/auth/*` and `/api/*` request once authentication is configured (`index.ts`
  * keeps its own unconditional 404 for this namespace while auth is disabled). */
@@ -275,6 +330,11 @@ export async function handleAuthRoutes(request: Request, config: CanvasAuthConfi
   const refreshMatch = REFRESH_PATH.exec(url.pathname);
   if (request.method === "POST" && refreshMatch?.[1] !== undefined) {
     return handleRefresh(request, config, db, refreshMatch[1]);
+  }
+
+  const importMatch = IMPORT_PATH.exec(url.pathname);
+  if (request.method === "POST" && importMatch?.[1] !== undefined && importMatch[2] !== undefined) {
+    return handleCourseImport(request, config, db, importMatch[1], importMatch[2]);
   }
 
   return jsonError(404, "not_found");
