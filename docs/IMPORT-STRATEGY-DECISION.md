@@ -64,3 +64,14 @@ Canvas pages, >50 estimated D1 batches) gets `status: "blocked"` and the fixed
 partial/truncated import. A client-driven multi-request continuation is deliberately not
 implemented — a lost tab can't guarantee completion — so the only durable alternative is a
 server-owned resumable continuation, which is Task 2.1's job, not phase 1's.
+
+## No `src/import/strategy.ts` file
+
+Task 1.4's master file list names `src/import/strategy.ts`, written before this benchmark ran. With
+exactly one strategy chosen and durable staging explicitly not implemented, a `strategy.ts`
+exporting a single hardcoded value would have no second implementation to abstract over and no
+consumer needing the indirection — knip's "no consumer, no export" discipline applies to a whole
+file, not just an unused symbol inside one. `src/import/feasibility.ts`'s `FeasibilityResult`
+already carries `strategy: "in_memory_snapshot"` as the one real value this phase produces;
+`src/import/course-import.ts` consumes that result directly. Add the file when a second strategy
+actually exists to select between, not before.
