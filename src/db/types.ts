@@ -35,3 +35,14 @@ export interface Connection {
   readonly createdAt: number;
   readonly revokedAt: number | null;
 }
+
+/** A student's own completion mark for one `source_items` row. Never written by import — see
+ * `migrations/0002_import.sql`'s `task_state` table comment. */
+export interface TaskState {
+  readonly id: string;
+  readonly accountId: number;
+  readonly sourceItemId: string;
+  readonly completed: boolean;
+  readonly completedAt: number | null;
+  readonly updatedAt: number;
+}

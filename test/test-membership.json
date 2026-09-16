@@ -26,6 +26,8 @@
       "test/worker/mutation-route-security.test.ts",
       "test/worker/oauth-profile.test.ts",
       "test/worker/pagination-failure.test.ts",
+      "test/worker/personal-completion-phase1.test.ts",
+      "test/worker/personal-completion-security.test.ts",
       "test/worker/response-headers.test.ts",
       "test/worker/revocation-order.test.ts",
       "test/worker/session-lifecycle.test.ts",

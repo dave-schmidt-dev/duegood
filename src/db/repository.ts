@@ -1,4 +1,4 @@
-import type { Account, Connection, ConnectionStatus, Course } from "./types";
+import type { Account, Connection, ConnectionStatus, Course, TaskState } from "./types";
 
 interface AccountRow {
   readonly id: number;
@@ -335,4 +335,69 @@ export async function updateConnectionCredentials(
 export async function isKeyVersionRetirable(db: D1Database, keyVersion: number): Promise<boolean> {
   const row = await db.prepare(`SELECT 1 FROM connections WHERE key_version = ?1 LIMIT 1`).bind(keyVersion).first();
   return row === null;
+}
+
+/** The owning account of one `source_items` row, or `undefined` if no such row exists. The only
+ * fact a completion-route ownership check needs — callers must never fetch more than this to
+ * decide whether a caller may read or write that item's completion state. */
+export async function getSourceItemAccountId(db: D1Database, sourceItemId: string): Promise<number | undefined> {
+  const row = await db.prepare(`SELECT account_id FROM source_items WHERE id = ?1`).bind(sourceItemId).first<{ account_id: number }>();
+  return row?.account_id;
+}
+
+interface TaskStateRow {
+  readonly id: string;
+  readonly account_id: number;
+  readonly source_item_id: string;
+  readonly completed: number;
+  readonly completed_at: number | null;
+  readonly updated_at: number;
+}
+
+function toTaskState(row: TaskStateRow): TaskState {
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    sourceItemId: row.source_item_id,
+    completed: row.completed === 1,
+    completedAt: row.completed_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+const TASK_STATE_COLUMNS = "id, account_id, source_item_id, completed, completed_at, updated_at";
+
+export async function getTaskState(db: D1Database, sourceItemId: string): Promise<TaskState | undefined> {
+  const row = await db
+    .prepare(`SELECT ${TASK_STATE_COLUMNS} FROM task_state WHERE source_item_id = ?1`)
+    .bind(sourceItemId)
+    .first<TaskStateRow>();
+  return row ? toTaskState(row) : undefined;
+}
+
+/** Sets one source item's completion mark, creating the row on first use. The caller has already
+ * verified `accountId` owns `sourceItemId` (see `getSourceItemAccountId`) — this never re-derives
+ * ownership itself, matching `findOrCreateCourse`'s "repository methods take a verified id, never
+ * an unverified one" convention. `completedAt` clears back to `null` when un-completing, rather
+ * than retaining the last completion time, so a later read can't mistake it for still-completed
+ * metadata. */
+export async function upsertTaskCompletion(
+  db: D1Database,
+  accountId: number,
+  sourceItemId: string,
+  completed: boolean,
+  now: number,
+): Promise<TaskState> {
+  const row = await db
+    .prepare(
+      `INSERT INTO task_state (id, account_id, source_item_id, completed, completed_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+       ON CONFLICT (source_item_id) DO UPDATE SET
+         completed = excluded.completed, completed_at = excluded.completed_at, updated_at = excluded.updated_at
+       RETURNING ${TASK_STATE_COLUMNS}`,
+    )
+    .bind(crypto.randomUUID(), accountId, sourceItemId, completed ? 1 : 0, completed ? now : null, now)
+    .first<TaskStateRow>();
+  if (!row) throw new Error("task_state upsert returned no row");
+  return toTaskState(row);
 }

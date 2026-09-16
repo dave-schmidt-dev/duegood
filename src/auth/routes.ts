@@ -11,7 +11,9 @@ import {
   revokeConnection,
   updateConnectionCredentials,
 } from "../db/repository";
+import type { TaskState } from "../db/types";
 import { importCourse } from "../import/course-import";
+import { readCompletion, writeCompletion } from "../planning/completion";
 import { readCookie } from "./cookies";
 import { checkMutationRequest, createMutationRouteRegistry } from "./mutation-routes";
 import { buildAuthorizeUrl, exchangeAuthorizationCode, refreshAccessToken, revokeProviderToken } from "./oauth-profile";
@@ -39,6 +41,7 @@ mutationRoutes.register("POST", "/auth/logout");
 mutationRoutes.register("POST", "/api/connections/:id/disconnect");
 mutationRoutes.register("POST", "/api/connections/:id/refresh");
 mutationRoutes.register("POST", "/api/connections/:id/courses/:courseId/import");
+mutationRoutes.register("POST", "/api/source-items/:id/completion");
 
 const OAUTH_BINDING_COOKIE_NAME = "__Host-duegood_oauth_binding";
 const BINDING_BYTES = 32;
@@ -308,9 +311,50 @@ async function handleCourseImport(
   return Response.json(result);
 }
 
+function completionBody(taskState: TaskState | undefined): { completed: boolean; completedAt: number | null } {
+  return { completed: taskState?.completed ?? false, completedAt: taskState?.completedAt ?? null };
+}
+
+async function handleGetCompletion(request: Request, db: D1Database, sourceItemId: string): Promise<Response> {
+  const now = Date.now();
+  const session = await requireSession(request, db, now);
+  if (session === undefined) return jsonError(401, "unauthenticated");
+
+  const result = await readCompletion(db, session.accountId, sourceItemId);
+  if (result.status === "not_found") return jsonError(404, "not_found");
+  return Response.json(completionBody(result.taskState));
+}
+
+/**
+ * Sets one student's completion mark for one source item. Never touched by the import path —
+ * `commitSnapshot` has no reference to `task_state` at all, so a re-import can never overwrite a
+ * value this route wrote, by construction rather than by a runtime check.
+ */
+async function handleSetCompletion(request: Request, config: CanvasAuthConfig, db: D1Database, sourceItemId: string): Promise<Response> {
+  const now = Date.now();
+  const session = await requireSession(request, db, now);
+  if (session === undefined) return jsonError(401, "unauthenticated");
+  if (!(await checkMutationRequest(request, session, config.appOrigin))) return jsonError(403, "forbidden");
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonError(400, "invalid_body");
+  }
+  if (typeof body !== "object" || body === null || typeof (body as { completed?: unknown }).completed !== "boolean") {
+    return jsonError(400, "invalid_body");
+  }
+
+  const result = await writeCompletion(db, session.accountId, sourceItemId, (body as { completed: boolean }).completed, now);
+  if (result.status === "not_found") return jsonError(404, "not_found");
+  return Response.json(completionBody(result.taskState));
+}
+
 const DISCONNECT_PATH = /^\/api\/connections\/([^/]+)\/disconnect$/;
 const REFRESH_PATH = /^\/api\/connections\/([^/]+)\/refresh$/;
 const IMPORT_PATH = /^\/api\/connections\/([^/]+)\/courses\/([^/]+)\/import$/;
+const COMPLETION_PATH = /^\/api\/source-items\/([^/]+)\/completion$/;
 
 /** Routes every `/auth/*` and `/api/*` request once authentication is configured (`index.ts`
  * keeps its own unconditional 404 for this namespace while auth is disabled). */
@@ -335,6 +379,12 @@ export async function handleAuthRoutes(request: Request, config: CanvasAuthConfi
   const importMatch = IMPORT_PATH.exec(url.pathname);
   if (request.method === "POST" && importMatch?.[1] !== undefined && importMatch[2] !== undefined) {
     return handleCourseImport(request, config, db, importMatch[1], importMatch[2]);
+  }
+
+  const completionMatch = COMPLETION_PATH.exec(url.pathname);
+  if (completionMatch?.[1] !== undefined) {
+    if (request.method === "GET") return handleGetCompletion(request, db, completionMatch[1]);
+    if (request.method === "POST") return handleSetCompletion(request, config, db, completionMatch[1]);
   }
 
   return jsonError(404, "not_found");

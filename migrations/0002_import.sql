@@ -43,3 +43,22 @@ CREATE TABLE source_items (
 
 CREATE INDEX source_items_course_id_idx ON source_items (course_id);
 CREATE INDEX source_items_account_id_idx ON source_items (account_id);
+
+-- The minimal student-owned completion record phase 1's UI needs: one row per source item, never
+-- per Canvas submission. Deliberately distinct from `source_items` (Canvas-owned, import-owned) so
+-- a re-import can freely rewrite `source_items` without ever touching this table — no import code
+-- path references `task_state` at all. `account_id` is stored redundantly (also reachable via
+-- `source_items.account_id`) so an ownership check never needs a join, matching `source_items`'
+-- own redundant `account_id` column. Phase 3 owns the general `tasks` entity (notes, subtasks,
+-- exceptions, rules); this table is only the phase-1 completion boolean.
+CREATE TABLE task_state (
+  id TEXT PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES accounts(id),
+  source_item_id TEXT NOT NULL REFERENCES source_items(id),
+  completed INTEGER NOT NULL DEFAULT 0 CHECK (completed IN (0, 1)),
+  completed_at INTEGER,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (source_item_id)
+);
+
+CREATE INDEX task_state_account_id_idx ON task_state (account_id);
