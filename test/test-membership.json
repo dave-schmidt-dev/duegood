@@ -14,6 +14,7 @@
       "test/worker/health.test.ts",
       "test/worker/identity-migration.test.ts",
       "test/worker/import-atomic-swap.test.ts",
+      "test/worker/import-delete-fence.test.ts",
       "test/worker/import-feasibility.test.ts",
       "test/worker/import-lease-reclaim.test.ts",
       "test/worker/import-limits.test.ts",

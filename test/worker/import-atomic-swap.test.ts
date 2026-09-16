@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { findOrCreateAccount, findOrCreateCourse, getCourseById } from "../../src/db/repository";
+import { createConnection, findOrCreateAccount, findOrCreateCourse, getCourseById } from "../../src/db/repository";
 import { acquireImportLease } from "../../src/import/lease";
 import { commitSnapshot, LeaseFencedError } from "../../src/import/snapshot-commit";
 
@@ -15,7 +15,16 @@ async function makeCourse(canvasUserId: string, canvasCourseId: string) {
     term: "Fall 2026",
     now: 1000,
   });
-  return { account, course };
+  const connection = await createConnection(env.DB, {
+    id: crypto.randomUUID(),
+    accountId: account.id,
+    keyVersion: 1,
+    encryptedAccessToken: "envelope",
+    encryptedRefreshToken: null,
+    accessTokenExpiresAt: null,
+    now: 1000,
+  });
+  return { account, course, connection };
 }
 
 async function sourceItem(courseId: string, canvasItemId: string) {
@@ -26,7 +35,7 @@ async function sourceItem(courseId: string, canvasItemId: string) {
 
 describe("commitSnapshot", () => {
   it("upserts new rows and bumps the course generation, exposing nothing before the batch returns", async () => {
-    const { account, course } = await makeCourse("swap-1", "9001");
+    const { account, course, connection } = await makeCourse("swap-1", "9001");
     const lease = await acquireImportLease(env.DB, course.id, 2000);
 
     const newGeneration = await commitSnapshot(
@@ -34,6 +43,8 @@ describe("commitSnapshot", () => {
       {
         accountId: account.id,
         lease: lease!,
+        connectionId: connection.id,
+        expectedConnectionGeneration: connection.generation,
         upserts: [
           { canvasItemId: "50001", fingerprint: "fp-a" },
           { canvasItemId: "50002", fingerprint: "fp-b" },
@@ -56,18 +67,32 @@ describe("commitSnapshot", () => {
   });
 
   it("marks a previously-seen item unavailable without deleting its row", async () => {
-    const { account, course } = await makeCourse("swap-2", "9001");
+    const { account, course, connection } = await makeCourse("swap-2", "9001");
     const firstLease = await acquireImportLease(env.DB, course.id, 2000);
     await commitSnapshot(
       env.DB,
-      { accountId: account.id, lease: firstLease!, upserts: [{ canvasItemId: "50001", fingerprint: "fp-a" }], newlyUnavailableCanvasItemIds: [] },
+      {
+        accountId: account.id,
+        lease: firstLease!,
+        connectionId: connection.id,
+        expectedConnectionGeneration: connection.generation,
+        upserts: [{ canvasItemId: "50001", fingerprint: "fp-a" }],
+        newlyUnavailableCanvasItemIds: [],
+      },
       3000,
     );
 
     const secondLease = await acquireImportLease(env.DB, course.id, 4000);
     await commitSnapshot(
       env.DB,
-      { accountId: account.id, lease: secondLease!, upserts: [], newlyUnavailableCanvasItemIds: ["50001"] },
+      {
+        accountId: account.id,
+        lease: secondLease!,
+        connectionId: connection.id,
+        expectedConnectionGeneration: connection.generation,
+        upserts: [],
+        newlyUnavailableCanvasItemIds: ["50001"],
+      },
       5000,
     );
 
@@ -77,20 +102,34 @@ describe("commitSnapshot", () => {
   });
 
   it("rejects a commit against a lease token that no longer matches, writing nothing", async () => {
-    const { account, course } = await makeCourse("swap-3", "9001");
+    const { account, course, connection } = await makeCourse("swap-3", "9001");
     const staleLease = await acquireImportLease(env.DB, course.id, 2000);
     // Someone else reclaims after expiry and commits first, advancing the generation.
     const laterLease = await acquireImportLease(env.DB, course.id, staleLease!.expiresAt + 1);
     await commitSnapshot(
       env.DB,
-      { accountId: account.id, lease: laterLease!, upserts: [{ canvasItemId: "50001", fingerprint: "fp-real" }], newlyUnavailableCanvasItemIds: [] },
+      {
+        accountId: account.id,
+        lease: laterLease!,
+        connectionId: connection.id,
+        expectedConnectionGeneration: connection.generation,
+        upserts: [{ canvasItemId: "50001", fingerprint: "fp-real" }],
+        newlyUnavailableCanvasItemIds: [],
+      },
       staleLease!.expiresAt + 100,
     );
 
     await expect(
       commitSnapshot(
         env.DB,
-        { accountId: account.id, lease: staleLease!, upserts: [{ canvasItemId: "50002", fingerprint: "fp-stale" }], newlyUnavailableCanvasItemIds: [] },
+        {
+          accountId: account.id,
+          lease: staleLease!,
+          connectionId: connection.id,
+          expectedConnectionGeneration: connection.generation,
+          upserts: [{ canvasItemId: "50002", fingerprint: "fp-stale" }],
+          newlyUnavailableCanvasItemIds: [],
+        },
         staleLease!.expiresAt + 200,
       ),
     ).rejects.toThrow(LeaseFencedError);
@@ -101,13 +140,20 @@ describe("commitSnapshot", () => {
   });
 
   it("chains correctly across two real sequential commits, each fenced on the generation before it", async () => {
-    const { account, course } = await makeCourse("swap-4", "9001");
+    const { account, course, connection } = await makeCourse("swap-4", "9001");
 
     const firstLease = await acquireImportLease(env.DB, course.id, 2000);
     expect(firstLease?.expectedGeneration).toBe(0);
     await commitSnapshot(
       env.DB,
-      { accountId: account.id, lease: firstLease!, upserts: [{ canvasItemId: "50001", fingerprint: "fp-a" }], newlyUnavailableCanvasItemIds: [] },
+      {
+        accountId: account.id,
+        lease: firstLease!,
+        connectionId: connection.id,
+        expectedConnectionGeneration: connection.generation,
+        upserts: [{ canvasItemId: "50001", fingerprint: "fp-a" }],
+        newlyUnavailableCanvasItemIds: [],
+      },
       3000,
     );
 
@@ -115,7 +161,14 @@ describe("commitSnapshot", () => {
     expect(secondLease?.expectedGeneration).toBe(1);
     const finalGeneration = await commitSnapshot(
       env.DB,
-      { accountId: account.id, lease: secondLease!, upserts: [{ canvasItemId: "50001", fingerprint: "fp-a-updated" }], newlyUnavailableCanvasItemIds: [] },
+      {
+        accountId: account.id,
+        lease: secondLease!,
+        connectionId: connection.id,
+        expectedConnectionGeneration: connection.generation,
+        upserts: [{ canvasItemId: "50001", fingerprint: "fp-a-updated" }],
+        newlyUnavailableCanvasItemIds: [],
+      },
       5000,
     );
 
