@@ -17,7 +17,15 @@ export default {
         // unauthenticated caller distinguish "misconfigured secret" from "key version conflict".
         return withSecurityHeaders(Response.json({ available: false, reason: "not_configured" }, { status: 503 }));
       }
-      return withSecurityHeaders(Response.json({ available: true, institution: authConfig.institutionOrigin }));
+      return withSecurityHeaders(
+        Response.json({
+          available: true,
+          institution: authConfig.institutionOrigin,
+          // Lets the disconnected recovery panel choose between the OAuth link and the
+          // Personal-Access-Token form without exposing which specific OAuth field is missing.
+          oauthConfigured: authConfig.clientId !== undefined && authConfig.clientSecret !== undefined,
+        }),
+      );
     }
 
     if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/auth/")) {

@@ -43,9 +43,23 @@ lists — so this document cannot go stale next to the suite without the check c
       populated route and two real recovery states.
 
 Test counts as of this section (verified by `check:implementation-status` against
-`test/test-membership.json`'s array lengths, not hand-maintained): **32** worker test files
+`test/test-membership.json`'s array lengths, not hand-maintained): **34** worker test files
 (`npm run test:worker`), **1** UI contract test file (`npm run test:ui`), **9** browser test files
 (`npm run test:browser`, run once as part of `npm run test:all`).
+
+### Post-phase-1: Canvas Personal Access Token connect path
+
+Owner-only escape hatch around the Marymount OAuth admin-approval dependency above — David hit the
+"I need the admin to enable OAuth first" wall and chose a Personal Access Token path for his own
+use rather than waiting on institutional approval. `AUTH_MODE=enabled` no longer requires an OAuth
+`clientId`/`clientSecret` (`src/config.ts`); `POST /auth/canvas/connect-token`
+(`src/auth/routes.ts`) verifies a pasted token via `GET /api/v1/users/self`
+(`src/auth/personal-token.ts`) and connects it the same way `handleCallback` connects an OAuth
+grant, minus a refresh token and a real expiry (both stored `null` — a PAT has neither). The OAuth
+state machine, its routes, and this document's Task 1.3 evidence above are unchanged; nothing was
+removed. A Personal Access Token is **not** scope-limited the way `CANVAS_REQUIRED_SCOPE` is — see
+`src/auth/personal-token.ts`'s doc comment — which is the documented reason this stays a
+single-owner path rather than general onboarding.
 
 ### External gates (not evidenced by this repository, and never claimed here)
 

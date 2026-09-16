@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { CANVAS_REQUIRED_SCOPE, resolveAuthConfig, type AuthConfigInput, type CanvasAuthConfig } from "../../src/config";
+import { CANVAS_REQUIRED_SCOPE, resolveAuthConfig, type AuthConfigInput } from "../../src/config";
 import {
   buildAuthorizeUrl,
   exchangeAuthorizationCode,
   refreshAccessToken,
   revokeProviderToken,
+  type ConfiguredCanvasAuthConfig,
   type FetchFn,
 } from "../../src/auth/oauth-profile";
 
@@ -20,10 +21,13 @@ const COMPLETE_INPUT: AuthConfigInput = {
   legacyKeysJson: undefined,
 };
 
-function enabledConfig(): CanvasAuthConfig {
+function enabledConfig(): ConfiguredCanvasAuthConfig {
   const resolved = resolveAuthConfig(COMPLETE_INPUT);
   if (resolved.mode !== "enabled") throw new Error("test fixture config did not enable");
-  return resolved;
+  if (resolved.clientId === undefined || resolved.clientSecret === undefined) {
+    throw new Error("test fixture config did not carry its client credentials");
+  }
+  return { ...resolved, clientId: resolved.clientId, clientSecret: resolved.clientSecret };
 }
 
 function mockFetch(response: { status: number; body?: unknown }): FetchFn {
@@ -146,11 +150,15 @@ describe("revokeProviderToken", () => {
 });
 
 describe("configuration gate", () => {
-  it("keeps auth unavailable when institution, client, redirect, or scope configuration is incomplete", () => {
+  it("keeps auth unavailable when institution, redirect, or scope configuration is incomplete", () => {
     expect(resolveAuthConfig({ ...COMPLETE_INPUT, institutionOrigin: undefined })).toMatchObject({ mode: "disabled" });
-    expect(resolveAuthConfig({ ...COMPLETE_INPUT, clientId: undefined })).toMatchObject({ mode: "disabled" });
     expect(resolveAuthConfig({ ...COMPLETE_INPUT, appOrigin: undefined })).toMatchObject({ mode: "disabled" });
     expect(resolveAuthConfig({ ...COMPLETE_INPUT, scope: "" })).toMatchObject({ mode: "disabled" });
+  });
+
+  it("stays enabled without a client id/secret — the Personal Access Token path needs no OAuth client", () => {
+    const result = resolveAuthConfig({ ...COMPLETE_INPUT, clientId: undefined, clientSecret: undefined });
+    expect(result).toMatchObject({ mode: "enabled", clientId: undefined, clientSecret: undefined });
   });
 
   it("has no configuration surface for a PKCE extension to be enabled through", () => {

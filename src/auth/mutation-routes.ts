@@ -43,7 +43,10 @@ export function createMutationRouteRegistry(): MutationRouteRegistry {
  * mutation). Fails closed (denies) when both headers are absent: a same-origin fetch/XHR always
  * sends `Origin` for non-GET requests, so an absent `Origin` on a state-changing request is itself
  * anomalous. */
-function originAllowed(request: Request, expectedOrigin: string): boolean {
+/** Exported for the one pre-session mutation route (`/auth/canvas/connect-token`) that cannot use
+ * `checkMutationRequest` — there is no `Session` yet to bind a CSRF token to. See the exclusion
+ * comment above `mutationRoutes` in `routes.ts`. */
+export function originAllowed(request: Request, expectedOrigin: string): boolean {
   const origin = request.headers.get("Origin");
   if (origin !== null) return origin === expectedOrigin;
 

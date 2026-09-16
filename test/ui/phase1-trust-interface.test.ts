@@ -3,7 +3,7 @@ import type { AssignmentListItem } from "../../src/db/types";
 import { assignmentDetail, submissionStateText } from "../../src/ui/components/assignment-detail";
 import { assignmentRow, formatDueAt } from "../../src/ui/components/assignment-row";
 import { completionToggle } from "../../src/ui/components/completion-toggle";
-import { recoveryPanel, type RecoveryState } from "../../src/ui/components/recovery-panel";
+import { recoveryPanel, type RecoveryState, type TokenConnectState } from "../../src/ui/components/recovery-panel";
 import { syncStatus, type SyncStatusState } from "../../src/ui/components/sync-status";
 import type { ElementDescriptor } from "../../src/ui/dom";
 import { renderThisWeekPage, type ThisWeekPageHandlers, type ThisWeekPageState } from "../../src/ui/pages/this-week";
@@ -179,9 +179,12 @@ describe("sync-status.ts — the truthful sync-status line", () => {
   });
 });
 
+const EMPTY_TOKEN_CONNECT: TokenConnectState = { value: "", pending: false, error: undefined };
+const NOOP_TOKEN_HANDLERS = { onTokenInput: () => undefined, onTokenSubmit: () => undefined };
+
 describe("recovery-panel.ts — connection/course recovery states", () => {
   const cases: readonly [RecoveryState, RegExp][] = [
-    [{ kind: "disconnected" }, /No Canvas connection/],
+    [{ kind: "disconnected", oauthConfigured: true }, /No Canvas connection/],
     [{ kind: "no_course_selected" }, /No course connected yet/],
     [{ kind: "quota_exhausted" }, /Sync paused/],
     [{ kind: "retrying" }, /Retrying/],
@@ -194,11 +197,44 @@ describe("recovery-panel.ts — connection/course recovery states", () => {
     expect(flattenText(node)).toMatch(expected);
   });
 
-  it("only the disconnected state offers the Canvas connect action", () => {
-    const disconnected = recoveryPanel({ kind: "disconnected" });
+  it("only the disconnected+OAuth-configured state offers the Canvas connect link", () => {
+    const disconnected = recoveryPanel({ kind: "disconnected", oauthConfigured: true });
     const noCourse = recoveryPanel({ kind: "no_course_selected" });
     expect(findAll(disconnected, (d) => d.attrs?.href === "/auth/canvas/start")).toHaveLength(1);
     expect(findAll(noCourse, (d) => d.attrs?.href === "/auth/canvas/start")).toHaveLength(0);
+  });
+
+  it("disconnected without an OAuth client renders a token-paste form instead of the link", () => {
+    const node = recoveryPanel({ kind: "disconnected", oauthConfigured: false }, EMPTY_TOKEN_CONNECT, NOOP_TOKEN_HANDLERS);
+    expect(findAll(node, (d) => d.attrs?.href === "/auth/canvas/start")).toHaveLength(0);
+    const form = findAll(node, (d) => d.tag === "form")[0];
+    expect(form).toBeDefined();
+    const input = findAll(node, (d) => d.attrs?.type === "password")[0];
+    expect(input).toBeDefined();
+    expect(input?.attrs?.autocomplete).toBe("off");
+  });
+
+  it("never puts the token value in a plain-text field, and disables the form while pending", () => {
+    const node = recoveryPanel(
+      { kind: "disconnected", oauthConfigured: false },
+      { value: "secret-canvas-token", pending: true, error: undefined },
+      NOOP_TOKEN_HANDLERS,
+    );
+    expect(findAll(node, (d) => d.attrs?.type === "text" && d.attrs.value === "secret-canvas-token")).toHaveLength(0);
+    const input = findAll(node, (d) => d.attrs?.type === "password")[0];
+    expect(input?.attrs?.disabled).toBe("");
+    const submit = findAll(node, (d) => d.attrs?.type === "submit")[0];
+    expect(submit?.attrs?.disabled).toBe("");
+  });
+
+  it("surfaces a connect error as an accessible status message", () => {
+    const node = recoveryPanel(
+      { kind: "disconnected", oauthConfigured: false },
+      { value: "", pending: false, error: "That token wasn't accepted. Double-check it and try again." },
+      NOOP_TOKEN_HANDLERS,
+    );
+    const status = findAll(node, (d) => d.attrs?.role === "status" && (d.text?.includes("wasn't accepted") ?? false))[0];
+    expect(status?.attrs?.["aria-live"]).toBe("polite");
   });
 });
 
@@ -210,8 +246,9 @@ describe("pages/this-week.ts — page composition", () => {
     sync: { kind: "connected_synced", lastSyncedAt: Date.now() },
     assignments: [BASE_ITEM],
     assignmentUi: new Map(),
+    tokenConnect: EMPTY_TOKEN_CONNECT,
   };
-  const handlers: ThisWeekPageHandlers = { onToggleDetail: () => undefined, onToggleCompletion: () => undefined };
+  const handlers: ThisWeekPageHandlers = { ...NOOP_HANDLERS, ...NOOP_TOKEN_HANDLERS };
 
   it("renders the This Week heading and nav", () => {
     const page = renderThisWeekPage(baseState, handlers);
@@ -227,7 +264,10 @@ describe("pages/this-week.ts — page composition", () => {
   });
 
   it("shows the recovery panel instead of the assignment list when disconnected", () => {
-    const page = renderThisWeekPage({ ...baseState, recovery: { kind: "disconnected" }, sync: undefined, assignments: [] }, handlers);
+    const page = renderThisWeekPage(
+      { ...baseState, recovery: { kind: "disconnected", oauthConfigured: true }, sync: undefined, assignments: [] },
+      handlers,
+    );
     expect(flattenText(page)).toMatch(/No Canvas connection/);
     expect(flattenText(page)).not.toContain("Reading response");
   });

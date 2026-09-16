@@ -39,7 +39,14 @@ export interface CanvasTokenResult {
 
 export type FetchFn = typeof fetch;
 
-export function buildAuthorizeUrl(config: CanvasAuthConfig, state: string): string {
+/** The OAuth-specific routes (`handleStart`/`handleCallback`/refresh) narrow to this before
+ * calling anything below — see `requireOauthClient` in `routes.ts`. */
+export interface ConfiguredCanvasAuthConfig extends CanvasAuthConfig {
+  readonly clientId: string;
+  readonly clientSecret: string;
+}
+
+export function buildAuthorizeUrl(config: ConfiguredCanvasAuthConfig, state: string): string {
   const url = new URL(AUTHORIZE_PATH, config.institutionOrigin);
   url.searchParams.set("client_id", config.clientId);
   url.searchParams.set("response_type", "code");
@@ -87,7 +94,7 @@ async function requestToken(institutionOrigin: string, body: Record<string, stri
  * most once per code — Canvas invalidates the code on first use, and `consumeOauthAttempt` has
  * already made the *callback* itself single-use before this is ever reached. */
 export async function exchangeAuthorizationCode(
-  config: CanvasAuthConfig,
+  config: ConfiguredCanvasAuthConfig,
   code: string,
   fetchFn: FetchFn,
 ): Promise<CanvasTokenResult> {
@@ -107,7 +114,7 @@ export async function exchangeAuthorizationCode(
 /** Mints a fresh access token from a stored refresh token. The caller must keep using its
  * existing refresh token afterward — `result.refreshToken` is `undefined` on this grant. */
 export async function refreshAccessToken(
-  config: CanvasAuthConfig,
+  config: ConfiguredCanvasAuthConfig,
   refreshToken: string,
   fetchFn: FetchFn,
 ): Promise<CanvasTokenResult> {

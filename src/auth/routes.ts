@@ -17,9 +17,16 @@ import type { TaskState } from "../db/types";
 import { importCourse } from "../import/course-import";
 import { readCompletion, writeCompletion } from "../planning/completion";
 import { buildCsrfClearCookie, buildCsrfCookie, readCookie } from "./cookies";
-import { checkMutationRequest, createMutationRouteRegistry } from "./mutation-routes";
-import { buildAuthorizeUrl, exchangeAuthorizationCode, refreshAccessToken, revokeProviderToken } from "./oauth-profile";
+import { checkMutationRequest, createMutationRouteRegistry, originAllowed } from "./mutation-routes";
+import {
+  buildAuthorizeUrl,
+  exchangeAuthorizationCode,
+  refreshAccessToken,
+  revokeProviderToken,
+  type ConfiguredCanvasAuthConfig,
+} from "./oauth-profile";
 import { consumeOauthAttempt, createOauthAttempt } from "./oauth-state";
+import { verifyPersonalAccessToken } from "./personal-token";
 import { checkPostAuthThrottle, checkPreAuthThrottle } from "./rate-limit";
 import {
   buildSessionClearCookie,
@@ -37,7 +44,12 @@ import {
  * plain top-level cross-site GET navigations (a link, and the institution's own redirect), so
  * they can carry neither a same-origin `Origin`/`Referer` nor a custom header. Each is guarded by
  * a different mechanism instead — the pre-auth throttle, and the one-time atomic state+binding
- * consumption, respectively. */
+ * consumption, respectively. `/auth/canvas/connect-token` is ALSO deliberately excluded, for a
+ * third reason: it's a same-origin `fetch` POST (so it CAN carry `Origin`), but it runs before any
+ * session exists, so there's no CSRF token yet to bind one to — `mutation-route-security.test.ts`
+ * asserts every registered route rejects a *missing* CSRF token, which this route can never
+ * satisfy by design. Guarded instead by `originAllowed` (exported from `mutation-routes.ts` for
+ * this one caller) plus the same pre-auth throttle `handleStart` uses. */
 export const mutationRoutes = createMutationRouteRegistry();
 mutationRoutes.register("POST", "/auth/logout");
 mutationRoutes.register("POST", "/api/connections/:id/disconnect");
@@ -71,6 +83,14 @@ function clientAddressOf(request: Request): string {
   return request.headers.get("CF-Connecting-IP") ?? "unknown";
 }
 
+/** The OAuth developer key hasn't necessarily been issued (`docs/OAUTH-REQUEST-CHECKLIST.md`) —
+ * `AUTH_MODE` can be `"enabled"` on Personal-Access-Token-only connections alone. Only the routes
+ * that actually speak the OAuth client protocol need this narrowing. */
+function requireOauthClient(config: CanvasAuthConfig): ConfiguredCanvasAuthConfig | undefined {
+  if (config.clientId === undefined || config.clientSecret === undefined) return undefined;
+  return { ...config, clientId: config.clientId, clientSecret: config.clientSecret };
+}
+
 async function requireSession(request: Request, db: D1Database, now: number): Promise<Session | undefined> {
   const token = readSessionToken(request);
   if (token === undefined) return undefined;
@@ -81,6 +101,9 @@ async function requireSession(request: Request, db: D1Database, now: number): Pr
 }
 
 async function handleStart(request: Request, config: CanvasAuthConfig, db: D1Database): Promise<Response> {
+  const oauthConfig = requireOauthClient(config);
+  if (oauthConfig === undefined) return jsonError(503, "oauth_not_configured");
+
   const now = Date.now();
   const clientAddress = clientAddressOf(request);
   const allowed = await checkPreAuthThrottle(config.institutionOrigin, clientAddress, now);
@@ -93,13 +116,16 @@ async function handleStart(request: Request, config: CanvasAuthConfig, db: D1Dat
     now,
   );
 
-  const headers = new Headers({ Location: buildAuthorizeUrl(config, created.state) });
+  const headers = new Headers({ Location: buildAuthorizeUrl(oauthConfig, created.state) });
   const lifetimeSeconds = Math.max(1, Math.floor((created.attempt.expiresAt - now) / 1000));
   headers.append("Set-Cookie", buildOauthBindingCookie(binding, lifetimeSeconds));
   return new Response(null, { status: 302, headers });
 }
 
 async function handleCallback(request: Request, config: CanvasAuthConfig, db: D1Database): Promise<Response> {
+  const oauthConfig = requireOauthClient(config);
+  if (oauthConfig === undefined) return jsonError(503, "oauth_not_configured");
+
   const now = Date.now();
   const url = new URL(request.url);
   if (url.searchParams.get("error") !== null) return jsonError(400, "provider_denied");
@@ -120,7 +146,7 @@ async function handleCallback(request: Request, config: CanvasAuthConfig, db: D1
 
   let tokenResult;
   try {
-    tokenResult = await exchangeAuthorizationCode(config, code, fetch);
+    tokenResult = await exchangeAuthorizationCode(oauthConfig, code, fetch);
   } catch {
     return jsonError(502, "provider_exchange_failed");
   }
@@ -152,6 +178,64 @@ async function handleCallback(request: Request, config: CanvasAuthConfig, db: D1
   headers.append("Set-Cookie", buildCsrfCookie(created.csrfToken));
   headers.append("Set-Cookie", buildOauthBindingClearCookie());
   return new Response(null, { status: 302, headers });
+}
+
+/**
+ * Owner-only escape hatch around the Marymount OAuth admin-approval dependency (TASKS.md):
+ * connects a Canvas Personal Access Token the caller pasted in, rather than an OAuth grant. No
+ * `mutationRoutes` entry (see the comment above that registry) — guarded by same-origin +
+ * pre-auth throttle instead of session-bound CSRF, since no session exists yet.
+ *
+ * Stores `encryptedRefreshToken: null`/`accessTokenExpiresAt: null`: a PAT has no refresh grant,
+ * and Canvas's `users/self` response carries no expiry to record, so `null` ("unknown"), not a
+ * fabricated far-future date. `handleRefresh` already treats `encryptedRefreshToken === null` as
+ * `409 no_refresh_token`, so this connection safely never attempts an OAuth-shaped refresh.
+ */
+async function handleConnectToken(request: Request, config: CanvasAuthConfig, db: D1Database): Promise<Response> {
+  if (!originAllowed(request, config.appOrigin)) return jsonError(403, "forbidden");
+
+  const now = Date.now();
+  const clientAddress = clientAddressOf(request);
+  const allowed = await checkPreAuthThrottle(config.institutionOrigin, clientAddress, now);
+  if (!allowed) return jsonError(429, "rate_limited");
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonError(400, "invalid_body");
+  }
+  const token = typeof body === "object" && body !== null ? (body as { token?: unknown }).token : undefined;
+  if (typeof token !== "string" || token.length === 0) return jsonError(400, "invalid_body");
+
+  const verification = await verifyPersonalAccessToken(config.institutionOrigin, token, fetch);
+  if (!verification.ok) {
+    return jsonError(verification.reason === "invalid_token" ? 401 : 502, verification.reason);
+  }
+
+  const account = await findOrCreateAccount(db, config.institutionOrigin, verification.canvasUserId, now);
+  const connectionId = crypto.randomUUID();
+  const identity = { accountId: account.id, connectionId };
+  const accessEnc = await encryptCredential(config.keyRing, identity, token);
+
+  await createConnection(db, {
+    id: connectionId,
+    accountId: account.id,
+    keyVersion: accessEnc.keyVersion,
+    encryptedAccessToken: accessEnc.envelopeB64,
+    encryptedRefreshToken: null,
+    accessTokenExpiresAt: null,
+    now,
+  });
+
+  // Rotates rather than creates: same session-fixation reasoning as `handleCallback`.
+  const previousToken = readSessionToken(request);
+  const created = await rotateSession(db, previousToken, account.id, now);
+
+  const headers = new Headers();
+  headers.append("Set-Cookie", buildSessionCookie(created.token));
+  headers.append("Set-Cookie", buildCsrfCookie(created.csrfToken));
+  return new Response(null, { status: 204, headers });
 }
 
 async function handleLogout(request: Request, config: CanvasAuthConfig, db: D1Database): Promise<Response> {
@@ -232,6 +316,8 @@ async function handleRefresh(
   if (connection === undefined) return jsonError(404, "not_found");
   if (!checkPostAuthThrottle(session.accountId, connectionId, now)) return jsonError(429, "rate_limited");
   if (connection.encryptedRefreshToken === null) return jsonError(409, "no_refresh_token");
+  const oauthConfig = requireOauthClient(config);
+  if (oauthConfig === undefined) return jsonError(503, "oauth_not_configured");
 
   const identity = { accountId: connection.accountId, connectionId: connection.id };
   const refreshToken = await decryptCredential(config.keyRing, identity, {
@@ -241,7 +327,7 @@ async function handleRefresh(
 
   let tokenResult;
   try {
-    tokenResult = await refreshAccessToken(config, refreshToken, fetch);
+    tokenResult = await refreshAccessToken(oauthConfig, refreshToken, fetch);
   } catch {
     return jsonError(502, "provider_exchange_failed");
   }
@@ -405,6 +491,7 @@ export async function handleAuthRoutes(request: Request, config: CanvasAuthConfi
 
   if (request.method === "GET" && url.pathname === "/auth/canvas/start") return handleStart(request, config, db);
   if (request.method === "GET" && url.pathname === "/auth/canvas/callback") return handleCallback(request, config, db);
+  if (request.method === "POST" && url.pathname === "/auth/canvas/connect-token") return handleConnectToken(request, config, db);
   if (request.method === "POST" && url.pathname === "/auth/logout") return handleLogout(request, config, db);
   if (request.method === "GET" && url.pathname === "/api/connections") return handleListConnections(request, db);
   if (request.method === "GET" && url.pathname === "/api/courses") return handleListCourses(request, db);

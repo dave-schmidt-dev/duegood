@@ -1,7 +1,7 @@
 import type { AssignmentListItem } from "../../db/types";
 import { assignmentDetail } from "../components/assignment-detail";
 import { assignmentRow } from "../components/assignment-row";
-import { recoveryPanel, type RecoveryState } from "../components/recovery-panel";
+import { recoveryPanel, type RecoveryState, type TokenConnectState } from "../components/recovery-panel";
 import { syncStatus, type SyncStatusState } from "../components/sync-status";
 import type { ElementDescriptor } from "../dom";
 import { primaryNav } from "../routes";
@@ -29,11 +29,16 @@ export interface ThisWeekPageState {
   readonly sync: SyncStatusState | undefined;
   readonly assignments: readonly AssignmentListItem[];
   readonly assignmentUi: ReadonlyMap<string, AssignmentUiState>;
+  /** Only rendered when `recovery.kind === "disconnected"` and OAuth isn't configured; otherwise
+   * carried but unused, same as `assignmentUi` entries for rows not currently expanded. */
+  readonly tokenConnect: TokenConnectState;
 }
 
 export interface ThisWeekPageHandlers {
   readonly onToggleDetail: (sourceItemId: string) => void;
   readonly onToggleCompletion: (sourceItemId: string) => void;
+  readonly onTokenInput: (value: string) => void;
+  readonly onTokenSubmit: () => void;
 }
 
 function skeleton(): ElementDescriptor {
@@ -75,7 +80,9 @@ function assignmentList(state: ThisWeekPageState, handlers: ThisWeekPageHandlers
 export function renderThisWeekPage(state: ThisWeekPageState, handlers: ThisWeekPageHandlers): ElementDescriptor {
   const statusRegion: ElementDescriptor = state.loading
     ? { tag: "p", attrs: { class: "sync-status", role: "status", "aria-live": "polite" }, text: "Loading…" }
-    : (state.recovery !== undefined ? recoveryPanel(state.recovery) : syncStatus(state.sync as SyncStatusState));
+    : (state.recovery !== undefined
+        ? recoveryPanel(state.recovery, state.tokenConnect, { onTokenInput: handlers.onTokenInput, onTokenSubmit: handlers.onTokenSubmit })
+        : syncStatus(state.sync as SyncStatusState));
 
   return {
     tag: "div",

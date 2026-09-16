@@ -1,5 +1,5 @@
 import type { AssignmentListItem } from "../db/types";
-import type { RecoveryState } from "./components/recovery-panel";
+import type { RecoveryState, TokenConnectState } from "./components/recovery-panel";
 import { STALE_AFTER_MS, type SyncStatusState } from "./components/sync-status";
 import { CSRF_HEADER_NAME, readCsrfToken } from "./csrf";
 import { render, type ElementDescriptor } from "./dom";
@@ -85,19 +85,20 @@ interface LoadedThisWeekData {
  * surface — see `src/auth/routes.ts`. A 401 on any of them reads as "no session", which collapses
  * to the same disconnected recovery state as "no active connection" from the caller's point of
  * view; there is no separate "signed out" UI in phase 1. */
-async function loadThisWeekData(): Promise<LoadedThisWeekData> {
+async function loadThisWeekData(oauthConfigured: boolean): Promise<LoadedThisWeekData> {
+  const disconnected = { recovery: { kind: "disconnected", oauthConfigured } as const, sync: undefined, assignments: [] };
   const connectionsResponse = await fetch("/api/connections", { credentials: "same-origin" });
-  if (connectionsResponse.status === 401) return { recovery: { kind: "disconnected" }, sync: undefined, assignments: [] };
+  if (connectionsResponse.status === 401) return disconnected;
   const connectionsBody = (await connectionsResponse.json()) as { connections: ConnectionSummary[] };
   const hasActiveConnection = connectionsBody.connections.some((connection) => connection.status === "active");
-  if (!hasActiveConnection) return { recovery: { kind: "disconnected" }, sync: undefined, assignments: [] };
+  if (!hasActiveConnection) return disconnected;
 
   const [coursesResponse, assignmentsResponse] = await Promise.all([
     fetch("/api/courses", { credentials: "same-origin" }),
     fetch("/api/assignments", { credentials: "same-origin" }),
   ]);
   if (coursesResponse.status === 401 || assignmentsResponse.status === 401) {
-    return { recovery: { kind: "disconnected" }, sync: undefined, assignments: [] };
+    return disconnected;
   }
   const coursesBody = (await coursesResponse.json()) as { courses: CourseSummary[] };
   const assignmentsBody = (await assignmentsResponse.json()) as { assignments: AssignmentListItem[] };
@@ -108,7 +109,9 @@ async function loadThisWeekData(): Promise<LoadedThisWeekData> {
   return { recovery: undefined, sync: computeSyncStatus(course), assignments: assignmentsBody.assignments };
 }
 
-function mountThisWeek(mount: HTMLElement): void {
+const EMPTY_TOKEN_CONNECT: TokenConnectState = { value: "", pending: false, error: undefined };
+
+function mountThisWeek(mount: HTMLElement, oauthConfigured: boolean): void {
   let state: ThisWeekPageState = {
     currentPath: window.location.pathname,
     loading: true,
@@ -116,10 +119,53 @@ function mountThisWeek(mount: HTMLElement): void {
     sync: undefined,
     assignments: [],
     assignmentUi: new Map(),
+    tokenConnect: EMPTY_TOKEN_CONNECT,
   };
 
   function draw(): void {
     mount.replaceChildren(render(renderThisWeekPage(state, handlers)));
+  }
+
+  function patchTokenConnect(patch: Partial<TokenConnectState>): void {
+    state = { ...state, tokenConnect: { ...state.tokenConnect, ...patch } };
+  }
+
+  /** Never logs the token or the request body on any path — a rejected/failed attempt reports only
+   * a fixed, non-echoing message. Clears the field's value on both success and failure, so a
+   * rejected token is never left sitting in the DOM/state a moment longer than necessary. */
+  async function submitToken(): Promise<void> {
+    const token = state.tokenConnect.value;
+    if (token.length === 0) return;
+
+    patchTokenConnect({ pending: true, error: undefined });
+    draw();
+
+    try {
+      const response = await fetch("/auth/canvas/connect-token", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      if (!response.ok) {
+        patchTokenConnect({ value: "", pending: false, error: "That token wasn't accepted. Double-check it and try again." });
+        draw();
+        return;
+      }
+    } catch {
+      patchTokenConnect({ value: "", pending: false, error: "Couldn't reach Due Good. Check your connection and try again." });
+      draw();
+      return;
+    }
+
+    // A new session cookie is now set; re-run the same load this page uses at boot rather than a
+    // full reload, so the just-connected state renders without a network round trip for the shell.
+    patchTokenConnect(EMPTY_TOKEN_CONNECT);
+    state = { ...state, loading: true };
+    draw();
+    const data = await loadThisWeekData(oauthConfigured);
+    state = { ...state, loading: false, recovery: data.recovery, sync: data.sync, assignments: data.assignments };
+    draw();
   }
 
   function patchUi(sourceItemId: string, patch: Partial<AssignmentUiState>): void {
@@ -181,11 +227,18 @@ function mountThisWeek(mount: HTMLElement): void {
     onToggleCompletion(sourceItemId) {
       void toggleCompletion(sourceItemId);
     },
+    onTokenInput(value) {
+      patchTokenConnect({ value, error: undefined });
+      draw();
+    },
+    onTokenSubmit() {
+      void submitToken();
+    },
   };
 
   draw();
 
-  void loadThisWeekData().then((data) => {
+  void loadThisWeekData(oauthConfigured).then((data) => {
     state = { ...state, loading: false, recovery: data.recovery, sync: data.sync, assignments: data.assignments };
     draw();
   });
@@ -206,8 +259,9 @@ export function mount(): void {
   fetch("/api/auth/status", { credentials: "same-origin" })
     .then((response) => (response.ok ? response.json() : { available: false }))
     .then((body) => {
-      const available = typeof body === "object" && body !== null && (body as { available?: unknown }).available === true;
-      if (available) mountThisWeek(mountEl);
+      const record = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+      const available = record.available === true;
+      if (available) mountThisWeek(mountEl, record.oauthConfigured === true);
       else renderDisabledShell(mountEl);
     })
     .catch(() => renderDisabledShell(mountEl));

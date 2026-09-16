@@ -16,8 +16,12 @@ export interface KeyRing {
 export interface CanvasAuthConfig {
   readonly appOrigin: string;
   readonly institutionOrigin: string;
-  readonly clientId: string;
-  readonly clientSecret: string;
+  /** Undefined when the OAuth developer key hasn't been issued yet — see
+   * `docs/OAUTH-REQUEST-CHECKLIST.md`. `AUTH_MODE` can still be `"enabled"` without these; routes
+   * that need the OAuth client (`handleStart`/`handleCallback`/refresh) check for `undefined`
+   * themselves and return `oauth_not_configured` rather than this ever blocking the whole config. */
+  readonly clientId: string | undefined;
+  readonly clientSecret: string | undefined;
   readonly redirectUri: string;
   readonly scope: string;
   readonly keyRing: KeyRing;
@@ -29,8 +33,6 @@ type AuthConfigDisabledReason =
   | "invalid_app_origin"
   | "missing_institution_origin"
   | "invalid_institution_origin"
-  | "missing_client_id"
-  | "missing_client_secret"
   | "invalid_scope"
   | "missing_key_version"
   | "invalid_key_version"
@@ -92,18 +94,18 @@ function disabled(reason: AuthConfigDisabledReason): AuthConfig {
 export function resolveAuthConfig(input: AuthConfigInput): AuthConfig {
   if (input.authMode !== "enabled") return disabled("auth_mode_disabled");
 
-  const { appOrigin, institutionOrigin, clientId, clientSecret, scope } = input;
+  const { appOrigin, institutionOrigin, scope } = input;
   if (appOrigin === undefined || isPlaceholder(appOrigin)) return disabled("missing_app_origin");
   if (!isHttpsUrl(appOrigin)) return disabled("invalid_app_origin");
   if (institutionOrigin === undefined || isPlaceholder(institutionOrigin)) {
     return disabled("missing_institution_origin");
   }
   if (!isHttpsUrl(institutionOrigin)) return disabled("invalid_institution_origin");
-  if (clientId === undefined || isPlaceholder(clientId)) return disabled("missing_client_id");
-  if (clientSecret === undefined || isPlaceholder(clientSecret)) {
-    return disabled("missing_client_secret");
-  }
   if (isPlaceholder(scope) || !/^\S+ \S+$/.test(scope)) return disabled("invalid_scope");
+
+  const clientId = input.clientId !== undefined && !isPlaceholder(input.clientId) ? input.clientId : undefined;
+  const clientSecret =
+    input.clientSecret !== undefined && !isPlaceholder(input.clientSecret) ? input.clientSecret : undefined;
 
   if (input.keyVersion === undefined || isPlaceholder(input.keyVersion)) {
     return disabled("missing_key_version");

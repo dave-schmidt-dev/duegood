@@ -34,8 +34,6 @@ describe("auth configuration gate", () => {
     ["app origin scheme", { appOrigin: "http://insecure.example" }, "invalid_app_origin"],
     ["institution origin", { institutionOrigin: undefined }, "missing_institution_origin"],
     ["institution origin scheme", { institutionOrigin: "http://insecure.example" }, "invalid_institution_origin"],
-    ["client id", { clientId: undefined }, "missing_client_id"],
-    ["client secret", { clientSecret: undefined }, "missing_client_secret"],
     ["scope", { scope: "" }, "invalid_scope"],
     ["scope shape", { scope: "url:GET|/api/v1/courses" }, "invalid_scope"],
     ["key version", { keyVersion: undefined }, "missing_key_version"],
@@ -70,14 +68,13 @@ describe("auth configuration gate", () => {
     expect(resolveAuthConfig({ ...complete, ...override })).toEqual({ mode: "disabled", reason });
   });
 
-  it("treats template placeholder strings as absent, not as configured values", () => {
-    expect(
-      resolveAuthConfig({
-        ...complete,
-        clientId: "REPLACE_AFTER_ADMIN_ENABLEMENT",
-        clientSecret: "REPLACE_WITH_INSTITUTION_ISSUED_SECRET",
-      }),
-    ).toEqual({ mode: "disabled", reason: "missing_client_id" });
+  it("treats template placeholder client credentials as absent — enabled, but without an OAuth client", () => {
+    const result = resolveAuthConfig({
+      ...complete,
+      clientId: "REPLACE_AFTER_ADMIN_ENABLEMENT",
+      clientSecret: "REPLACE_WITH_INSTITUTION_ISSUED_SECRET",
+    });
+    expect(result).toMatchObject({ mode: "enabled", clientId: undefined, clientSecret: undefined });
   });
 
   it("resolves a legacy key ring alongside the active version", () => {
