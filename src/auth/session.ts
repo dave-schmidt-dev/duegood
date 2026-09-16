@@ -26,9 +26,12 @@ export interface CreatedSession {
   /** The raw opaque bearer token to place in the session cookie. Never stored — only its hash is
    * persisted (see `sha256Hex`) — so this value exists only in this return and the response. */
   readonly token: string;
-  /** The raw CSRF token to hand to the page (e.g. embedded in the shell HTML) so mutation
-   * requests can present it. Never stored — only its hash — same lifecycle as `token`. Rotates
-   * together with the session on every `createSession`/`rotateSession` call. */
+  /** The raw CSRF token to hand to the page so mutation requests can present it — delivered via a
+   * separate, JS-readable cookie (`buildCsrfCookie`, `../auth/cookies.ts`), not embedded in HTML:
+   * the static shell is built once ahead of time (`scripts/build-ui.mjs`) and served untouched
+   * through the `ASSETS` binding, so there is no per-request HTML to embed a token into. Never
+   * stored — only its hash — same lifecycle as `token`. Rotates together with the session on
+   * every `createSession`/`rotateSession` call. */
   readonly csrfToken: string;
 }
 

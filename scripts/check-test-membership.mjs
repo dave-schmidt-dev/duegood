@@ -19,7 +19,7 @@ function list(command, args) {
   return `${result.stdout}\n${result.stderr}`;
 }
 
-for (const testPath of [...manifest.worker.tests, ...manifest.browser.tests]) {
+for (const testPath of [...manifest.worker.tests, ...manifest.ui.tests, ...manifest.browser.tests]) {
   if (!existsSync(path.join(root, testPath))) {
     throw new Error(`Membership names missing test ${testPath}.`);
   }
@@ -43,6 +43,19 @@ for (const runner of [manifest.worker.focusedRunner, manifest.worker.fullRunner]
   }
 }
 
+{
+  const script = packageJson.scripts[manifest.ui.focusedRunner];
+  if (typeof script !== "string" || script.includes("playwright")) {
+    throw new Error(`${manifest.ui.focusedRunner} must be a non-browser runner.`);
+  }
+  const discovery = list(path.join(root, "node_modules", ".bin", "vitest"), ["list", "--config", "vitest.ui.config.ts"]);
+  for (const testPath of manifest.ui.tests) {
+    if (!discovery.includes(testPath)) {
+      throw new Error(`${manifest.ui.focusedRunner} does not discover ${testPath}.`);
+    }
+  }
+}
+
 const browserDiscovery = list(path.join(root, "node_modules", ".bin", "playwright"), ["test", "--list"]);
 for (const testPath of manifest.browser.tests) {
   if (!browserDiscovery.includes(path.basename(testPath))) {
@@ -61,4 +74,5 @@ for (const runner of manifest.browser.forbiddenRunners) {
 }
 
 console.log(`Verified ${manifest.worker.tests.length} worker tests in both non-browser runners.`);
+console.log(`Verified ${manifest.ui.tests.length} UI contract tests in ${manifest.ui.focusedRunner}.`);
 console.log(`Verified ${manifest.browser.tests.length} browser tests are reserved for test:all.`);

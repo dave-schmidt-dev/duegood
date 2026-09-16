@@ -23,6 +23,8 @@ PRIVATE_REFERENCE_HASHES = {
 LOCAL_ONLY_NAMES = {
     "Codex Image Sep 13, 2026, 08_42_01 PM.png",
     "Codex Image Sep 13, 2026, 08_43_40 PM.png",
+    "Codex Image Sep 16, 2026, 02_55_45 PM.png",
+    "Codex Image Sep 16, 2026, 02_55_51 PM.png",
 }
 IGNORED_PARTS = {
     ".git", "__pycache__", "node_modules", ".wrangler", ".evidence", ".logs",

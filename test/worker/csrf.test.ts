@@ -4,6 +4,7 @@ import { sha256Hex } from "../../src/crypto";
 import { findOrCreateAccount } from "../../src/db/repository";
 import { createSession, rotateSession } from "../../src/auth/session";
 import { validateCsrfToken } from "../../src/auth/csrf";
+import { buildCsrfClearCookie, buildCsrfCookie, parseCookieHeader } from "../../src/auth/cookies";
 import { CSRF_HEADER_NAME, checkMutationRequest, createMutationRouteRegistry } from "../../src/auth/mutation-routes";
 
 const APP_ORIGIN = "https://duegood.example";
@@ -120,6 +121,37 @@ describe("checkMutationRequest", () => {
     const request = mutationRequest({ Origin: APP_ORIGIN, [CSRF_HEADER_NAME]: "wrong-token" });
 
     await expect(checkMutationRequest(request, created.session, APP_ORIGIN)).resolves.toBe(false);
+  });
+});
+
+describe("CSRF cookie", () => {
+  it("builds a cookie with exactly the required attributes, deliberately not HttpOnly", () => {
+    const cookie = buildCsrfCookie("token-value");
+
+    expect(cookie).toMatch(/^__Host-duegood_csrf=token-value;/);
+    expect(cookie).toMatch(/;\s*Secure(;|$)/);
+    expect(cookie).not.toMatch(/;\s*HttpOnly/i);
+    expect(cookie).toMatch(/;\s*Path=\/(;|$)/);
+    expect(cookie).toMatch(/;\s*SameSite=Lax(;|$)/);
+    expect(cookie).not.toMatch(/Domain=/i);
+  });
+
+  it("builds a clearing cookie with the same attributes and Max-Age=0", () => {
+    const cookie = buildCsrfClearCookie();
+
+    expect(cookie).toMatch(/^__Host-duegood_csrf=;/);
+    expect(cookie).toMatch(/;\s*Secure(;|$)/);
+    expect(cookie).not.toMatch(/;\s*HttpOnly/i);
+    expect(cookie).toMatch(/;\s*Max-Age=0(;|$)/);
+    expect(cookie).not.toMatch(/Domain=/i);
+  });
+
+  it("round-trips through parseCookieHeader the same way a browser's document.cookie would present it", () => {
+    const cookie = buildCsrfCookie("token-value");
+    const nameValue = cookie.split(";")[0];
+    if (nameValue === undefined) throw new Error("unreachable: buildCsrfCookie always yields a name=value pair");
+
+    expect(parseCookieHeader(nameValue, "__Host-duegood_csrf")).toBe("token-value");
   });
 });
 

@@ -1,0 +1,123 @@
+/* Responsive shell per docs/DESIGN-SYSTEM.md's Responsive shell section: desktop >=1024px gets a
+   persistent sidebar, mobile <768px gets a fixed bottom tab bar, tablet keeps the sidebar. Same
+   nav markup at every breakpoint (`src/ui/routes.ts`'s `primaryNav`) — only this stylesheet
+   repositions it. */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-heading);
+  color: var(--color-primary);
+}
+
+.skip-link {
+  position: absolute;
+  left: -999px;
+  top: 0;
+}
+
+.skip-link:focus {
+  left: 1rem;
+  top: 1rem;
+  background: var(--color-surface);
+  color: var(--color-primary);
+  padding: 0.75rem;
+  outline: 3px solid var(--color-classic-gold);
+  z-index: 10;
+}
+
+.shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.panel {
+  padding: clamp(1rem, 4vw, 2rem);
+  padding-bottom: 5rem; /* clears the fixed bottom tab bar on mobile */
+}
+
+/* Used only by the pre-auth disabled shell (src/ui/app.ts's renderDisabledShell). */
+.eyebrow {
+  color: var(--color-sage);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.primary-nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.primary-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 1rem;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.primary-nav a[aria-current="page"] {
+  color: var(--color-primary);
+}
+
+.primary-nav a:focus-visible {
+  outline: 3px solid var(--color-classic-gold);
+  outline-offset: 2px;
+}
+
+/* Mobile (<768px): fixed bottom tab bar, 5-slot max (phase 1 has a single tab). */
+@media (max-width: 767px) {
+  .primary-nav {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--color-surface);
+    border-top: 1px solid var(--color-border);
+  }
+
+  .primary-nav ul {
+    justify-content: space-around;
+  }
+}
+
+/* Tablet/desktop (>=768px): sidebar. */
+@media (min-width: 768px) {
+  .shell {
+    grid-template-columns: 16rem 1fr;
+  }
+
+  .primary-nav {
+    border-right: 1px solid var(--color-border);
+    padding: 1.5rem 1rem;
+  }
+
+  .primary-nav ul {
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

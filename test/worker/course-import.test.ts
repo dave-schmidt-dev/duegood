@@ -55,9 +55,19 @@ function baseParams(fixture: Fixture, fetchImpl: typeof fetch, now = 2000) {
 }
 
 async function sourceItemsFor(courseId: string) {
-  const result = await env.DB.prepare(`SELECT canvas_item_id, fingerprint, available FROM source_items WHERE course_id = ?1`)
+  const result = await env.DB.prepare(
+    `SELECT canvas_item_id, fingerprint, available, title, due_at, due_at_state, submission_state FROM source_items WHERE course_id = ?1`,
+  )
     .bind(courseId)
-    .all<{ canvas_item_id: string; fingerprint: string; available: number }>();
+    .all<{
+      canvas_item_id: string;
+      fingerprint: string;
+      available: number;
+      title: string | null;
+      due_at: string | null;
+      due_at_state: string;
+      submission_state: string;
+    }>();
   return result.results;
 }
 
@@ -74,9 +84,28 @@ describe("importCourse", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.canvas_item_id).toBe("50001");
     expect(rows[0]?.available).toBe(1);
+    expect(rows[0]?.title).toBe("Reading response");
     const stored = await getCourseById(env.DB, fx.course.id);
     expect(stored?.snapshotGeneration).toBe(1);
     expect(stored?.importLeaseToken).toBeNull();
+  });
+
+  it("stores the resolved due date and Canvas submission state alongside the fingerprint", async () => {
+    const fx = await makeFixture();
+    const page: CanvasAssignmentRaw[] = [
+      { id: 51001, name: "Submitted work", due_at: "2026-09-20T22:00:00Z", points_possible: 10, submission: { workflow_state: "submitted" } },
+      { id: 51002, name: "No deadline", due_at: null, points_possible: 5, submission: { workflow_state: "unsubmitted" } },
+      { id: 51003, name: "No submission data", due_at: "2026-09-21T22:00:00Z", points_possible: 5 },
+    ];
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(page));
+
+    await importCourse(baseParams(fx, fetchImpl));
+
+    const rows = await sourceItemsFor(fx.course.id);
+    const byId = new Map(rows.map((row) => [row.canvas_item_id, row]));
+    expect(byId.get("51001")).toMatchObject({ title: "Submitted work", due_at: "2026-09-20T22:00:00Z", due_at_state: "known", submission_state: "known_submitted" });
+    expect(byId.get("51002")).toMatchObject({ title: "No deadline", due_at: null, due_at_state: "known_null", submission_state: "known_not_submitted" });
+    expect(byId.get("51003")).toMatchObject({ title: "No submission data", due_at_state: "known", submission_state: "unknown" });
   });
 
   it("follows pagination and commits every page's items", async () => {

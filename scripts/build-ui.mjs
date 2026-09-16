@@ -1,10 +1,11 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputDirectory = path.join(root, "dist", "public");
+const stylesDirectory = path.join(root, "src", "ui", "styles");
 
 const html = `<!doctype html>
 <html lang="en">
@@ -23,9 +24,15 @@ const html = `<!doctype html>
 </html>
 `;
 
-const css = `:root{color-scheme:light dark;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f1e9;color:#1f2937}*{box-sizing:border-box}body{margin:0;min-height:100vh}.skip-link{position:absolute;left:-999px;top:0}.skip-link:focus{left:1rem;top:1rem;background:#fff;color:#0e2a47;padding:.75rem;outline:3px solid #b08d57}.shell{min-height:100vh;display:grid;place-items:center;padding:2rem}.panel{width:min(42rem,100%);background:#fff;border:1px solid #c7c1b5;border-radius:.75rem;padding:clamp(1.5rem,5vw,3rem);box-shadow:0 .5rem 2rem rgb(14 42 71/.08)}.eyebrow{color:#5a6f47;font-weight:700;letter-spacing:.08em;text-transform:uppercase}h1{color:#0e2a47;font-family:Georgia,serif;font-size:clamp(2rem,6vw,3.25rem);margin:.25rem 0 1rem}p{line-height:1.6}.status{border-left:.25rem solid #b08d57;padding:.75rem 1rem;background:#f4f1e9}.status strong{display:block;color:#0e2a47}@media (prefers-color-scheme:dark){:root{background:#101820;color:#edf2f7}.panel{background:#172433;border-color:#41556a}.eyebrow{color:#a9bc99}h1,.status strong{color:#f1d7a6}.status{background:#202f3f}}`;
-
 const serviceWorker = `self.addEventListener("install",event=>{event.waitUntil(self.skipWaiting())});self.addEventListener("activate",event=>{event.waitUntil(self.clients.claim())});`;
+
+// Concatenated in token/shell/component order so later rules (component-specific) can override
+// earlier ones (shell-generic) at equal specificity, same as the source layout under src/ui/styles/.
+const css = (
+  await Promise.all(
+    ["tokens.css", "shell.css", "components.css"].map((file) => readFile(path.join(stylesDirectory, file), "utf8")),
+  )
+).join("\n");
 
 await rm(outputDirectory, { recursive: true, force: true });
 await mkdir(outputDirectory, { recursive: true });

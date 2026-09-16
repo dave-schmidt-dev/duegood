@@ -1,13 +1,14 @@
 import { fetchCanvasPage, type CanvasFetchConfig } from "../canvas/client";
 import { parseCanvasId } from "../canvas/id";
 import { OVERRIDES_SUPPORTED_PHASE_1, resolveEffectiveDueAt } from "../canvas/overrides";
+import { resolveSubmissionState, SUBMISSION_SUPPORTED_PHASE_1 } from "../canvas/submission";
 import type { CanvasAssignmentRaw } from "../canvas/types";
 import { listSourceItems } from "../db/repository";
 import { compareInventory, type FetchedItem } from "./compare";
 import { assessFeasibility } from "./feasibility";
 import { acquireImportLease, releaseImportLease } from "./lease";
 import { BudgetExceededError, createBudgetTracker } from "./limits";
-import { readSourceField } from "./normalize";
+import { readSourceField, type SourceField } from "./normalize";
 import { commitSnapshot, LeaseFencedError } from "./snapshot-commit";
 
 export interface ImportCourseParams {
@@ -45,7 +46,29 @@ function assignmentsUrl(institutionOrigin: string, canvasCourseId: string): stri
   const url = new URL(`/api/v1/courses/${canvasCourseId}/assignments`, institutionOrigin);
   url.searchParams.set("per_page", "100");
   url.searchParams.append("include[]", "overrides");
+  url.searchParams.append("include[]", "submission");
   return url.toString();
+}
+
+interface NormalizedAssignment {
+  readonly name: SourceField<string>;
+  readonly dueAt: SourceField<string>;
+  readonly pointsPossible: SourceField<number>;
+  readonly submissionState: ReturnType<typeof resolveSubmissionState>;
+}
+
+/** Reads every field this app projects to the student out of one raw Canvas assignment, resolving
+ * the due date that actually applies to them (after overrides) exactly once — both the change-
+ * detection fingerprint and the stored display columns read from this same result, so they can
+ * never diverge under an override edge case. */
+function normalizeAssignment(raw: CanvasAssignmentRaw, studentCanvasUserId: string): NormalizedAssignment {
+  const record = raw as unknown as Record<string, unknown>;
+  const name = readSourceField<string>(record, "name", true);
+  const pointsPossible = readSourceField<number>(record, "points_possible", true);
+  const baseDueAt = readSourceField<string>(record, "due_at", true);
+  const dueAt = resolveEffectiveDueAt(baseDueAt, raw.overrides ?? [], studentCanvasUserId, OVERRIDES_SUPPORTED_PHASE_1);
+  const submissionState = resolveSubmissionState(record, SUBMISSION_SUPPORTED_PHASE_1);
+  return { name, dueAt, pointsPossible, submissionState };
 }
 
 /**
@@ -53,16 +76,11 @@ function assignmentsUrl(institutionOrigin: string, canvasCourseId: string): stri
  * applies after resolving overrides, and points possible. Submission state (grade, submitted-at)
  * is deliberately excluded — it changes on its own cadence, independent of the assignment's own
  * shape, and folding it in here would upsert every row on every grade change instead of only when
- * the assignment itself changes. A later personal-completion slice owns submission state
- * separately.
+ * the assignment itself changes. Submission state is still stored (see `snapshot-commit.ts`), just
+ * not part of what gates an upsert.
  */
-function fingerprintOf(raw: CanvasAssignmentRaw, studentCanvasUserId: string): string {
-  const record = raw as unknown as Record<string, unknown>;
-  const name = readSourceField<string>(record, "name", true);
-  const pointsPossible = readSourceField<number>(record, "points_possible", true);
-  const baseDueAt = readSourceField<string>(record, "due_at", true);
-  const dueAt = resolveEffectiveDueAt(baseDueAt, raw.overrides ?? [], studentCanvasUserId, OVERRIDES_SUPPORTED_PHASE_1);
-  return JSON.stringify({ name, dueAt, pointsPossible });
+function fingerprintOf(normalized: NormalizedAssignment): string {
+  return JSON.stringify({ name: normalized.name, dueAt: normalized.dueAt, pointsPossible: normalized.pointsPossible });
 }
 
 /**
@@ -120,7 +138,15 @@ export async function importCourse(params: ImportCourseParams): Promise<ImportCo
         await releaseImportLease(params.db, params.courseId, lease.token);
         return { status: "not_refreshed", reason: "unsafe_id" };
       }
-      fetched.push({ canvasItemId: idResult.id, fingerprint: fingerprintOf(raw, params.studentCanvasUserId) });
+      const normalized = normalizeAssignment(raw, params.studentCanvasUserId);
+      fetched.push({
+        canvasItemId: idResult.id,
+        fingerprint: fingerprintOf(normalized),
+        title: normalized.name.state === "known" ? normalized.name.value : null,
+        dueAt: normalized.dueAt.state === "known" ? normalized.dueAt.value : null,
+        dueAtState: normalized.dueAt.state,
+        submissionState: normalized.submissionState,
+      });
     }
     url = page.nextUrl;
   }

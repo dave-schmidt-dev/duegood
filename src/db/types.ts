@@ -1,3 +1,6 @@
+import type { SubmissionState } from "../canvas/submission";
+import type { FieldState } from "../import/normalize";
+
 export interface Account {
   readonly id: number;
   readonly institutionOrigin: string;
@@ -45,4 +48,22 @@ export interface TaskState {
   readonly completed: boolean;
   readonly completedAt: number | null;
   readonly updatedAt: number;
+}
+
+/** One row of the This Week projection: an available, imported assignment joined with its
+ * owning course and (if any) the student's own completion mark. `dueAtState`/`submissionState`
+ * carry the same four-state contract `source_items` stores them under (`migrations/
+ * 0003_display_fields.sql`) — a route rendering this must not collapse `known_null`/`not_returned`/
+ * `unsupported` into a bare absence. */
+export interface AssignmentListItem {
+  readonly sourceItemId: string;
+  readonly courseId: string;
+  readonly courseCode: string | null;
+  readonly courseTitle: string | null;
+  readonly title: string | null;
+  readonly dueAt: string | null;
+  readonly dueAtState: FieldState;
+  readonly submissionState: SubmissionState;
+  readonly completed: boolean;
+  readonly completedAt: number | null;
 }

@@ -1,8 +1,14 @@
+import type { SubmissionState } from "../canvas/submission";
 import type { AcquiredLease } from "./lease";
+import type { FieldState } from "./normalize";
 
 interface SourceItemUpsert {
   readonly canvasItemId: string;
   readonly fingerprint: string;
+  readonly title: string | null;
+  readonly dueAt: string | null;
+  readonly dueAtState: FieldState;
+  readonly submissionState: SubmissionState;
 }
 
 export interface CommitCandidate {
@@ -54,11 +60,12 @@ export async function commitSnapshot(db: D1Database, candidate: CommitCandidate,
   const upsertStatements = candidate.upserts.map((item) =>
     db
       .prepare(
-        `INSERT INTO source_items (id, account_id, course_id, canvas_item_id, fingerprint, available, last_seen_generation, created_at, updated_at)
-         SELECT ?1, ?2, id, ?3, ?4, 1, ?5, ?6, ?6
-         FROM courses WHERE id = ?7 AND import_lease_token = ?8 AND snapshot_generation = ?9 AND ${connectionFenceSql(10, 11)}
+        `INSERT INTO source_items (id, account_id, course_id, canvas_item_id, fingerprint, available, last_seen_generation, created_at, updated_at, title, due_at, due_at_state, submission_state)
+         SELECT ?1, ?2, id, ?3, ?4, 1, ?5, ?6, ?6, ?10, ?11, ?12, ?13
+         FROM courses WHERE id = ?7 AND import_lease_token = ?8 AND snapshot_generation = ?9 AND ${connectionFenceSql(14, 15)}
          ON CONFLICT (course_id, canvas_item_id) DO UPDATE SET
-           fingerprint = excluded.fingerprint, available = 1, last_seen_generation = excluded.last_seen_generation, updated_at = excluded.updated_at`,
+           fingerprint = excluded.fingerprint, available = 1, last_seen_generation = excluded.last_seen_generation, updated_at = excluded.updated_at,
+           title = excluded.title, due_at = excluded.due_at, due_at_state = excluded.due_at_state, submission_state = excluded.submission_state`,
       )
       .bind(
         crypto.randomUUID(),
@@ -70,6 +77,10 @@ export async function commitSnapshot(db: D1Database, candidate: CommitCandidate,
         lease.courseId,
         lease.token,
         lease.expectedGeneration,
+        item.title,
+        item.dueAt,
+        item.dueAtState,
+        item.submissionState,
         candidate.connectionId,
         candidate.expectedConnectionGeneration,
       ),

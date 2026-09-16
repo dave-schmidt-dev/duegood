@@ -8,13 +8,15 @@ import {
   getActiveConnection,
   getConnectionsForAccount,
   getCourseById,
+  listAssignmentsForAccount,
+  listCoursesForAccount,
   revokeConnection,
   updateConnectionCredentials,
 } from "../db/repository";
 import type { TaskState } from "../db/types";
 import { importCourse } from "../import/course-import";
 import { readCompletion, writeCompletion } from "../planning/completion";
-import { readCookie } from "./cookies";
+import { buildCsrfClearCookie, buildCsrfCookie, readCookie } from "./cookies";
 import { checkMutationRequest, createMutationRouteRegistry } from "./mutation-routes";
 import { buildAuthorizeUrl, exchangeAuthorizationCode, refreshAccessToken, revokeProviderToken } from "./oauth-profile";
 import { consumeOauthAttempt, createOauthAttempt } from "./oauth-state";
@@ -147,6 +149,7 @@ async function handleCallback(request: Request, config: CanvasAuthConfig, db: D1
 
   const headers = new Headers({ Location: "/" });
   headers.append("Set-Cookie", buildSessionCookie(created.token));
+  headers.append("Set-Cookie", buildCsrfCookie(created.csrfToken));
   headers.append("Set-Cookie", buildOauthBindingClearCookie());
   return new Response(null, { status: 302, headers });
 }
@@ -162,6 +165,7 @@ async function handleLogout(request: Request, config: CanvasAuthConfig, db: D1Da
 
   const headers = new Headers();
   headers.append("Set-Cookie", buildSessionClearCookie());
+  headers.append("Set-Cookie", buildCsrfClearCookie());
   return new Response(null, { status: 204, headers });
 }
 
@@ -311,6 +315,44 @@ async function handleCourseImport(
   return Response.json(result);
 }
 
+/** The This Week page's sync-status read: every course the account has selected, with the
+ * sync-lease fields `sync-status.ts` needs to distinguish syncing/stale/never-synced. Not in
+ * Task 1.5's file list in the master task doc — added because neither this route's data nor any
+ * equivalent existed anywhere else; see TASKS.md for the drift note. No CSRF check, matching
+ * `handleListConnections`/`handleListAssignments`'s existing session-only guard on a route that
+ * changes nothing. Explicit allowlist, never a spread, matching `handleListConnections`'s same
+ * comment: `Course` carries no credential material today, but a field-by-field projection means
+ * one never reaches this response by accident if that ever changes. `syncing` is computed here
+ * against the server's own clock rather than shipping the raw lease token/expiry to the client —
+ * one fewer place a client-side clock skew could turn an honest status line into a wrong one. */
+async function handleListCourses(request: Request, db: D1Database): Promise<Response> {
+  const now = Date.now();
+  const session = await requireSession(request, db, now);
+  if (session === undefined) return jsonError(401, "unauthenticated");
+
+  const courses = await listCoursesForAccount(db, session.accountId);
+  const summaries = courses.map((course) => ({
+    id: course.id,
+    courseCode: course.courseCode,
+    title: course.title,
+    lastSuccessfulCheckAt: course.lastSuccessfulCheckAt,
+    syncing: course.importLeaseToken !== null && (course.importLeaseExpiresAt === null || course.importLeaseExpiresAt > now),
+  }));
+  return Response.json({ courses: summaries });
+}
+
+/** The This Week page's one read: every available, imported assignment across the account's
+ * courses. No CSRF check — a `GET` that changes nothing, matching `handleListConnections`/
+ * `handleGetCompletion`'s existing session-only guard. */
+async function handleListAssignments(request: Request, db: D1Database): Promise<Response> {
+  const now = Date.now();
+  const session = await requireSession(request, db, now);
+  if (session === undefined) return jsonError(401, "unauthenticated");
+
+  const assignments = await listAssignmentsForAccount(db, session.accountId);
+  return Response.json({ assignments });
+}
+
 function completionBody(taskState: TaskState | undefined): { completed: boolean; completedAt: number | null } {
   return { completed: taskState?.completed ?? false, completedAt: taskState?.completedAt ?? null };
 }
@@ -365,6 +407,8 @@ export async function handleAuthRoutes(request: Request, config: CanvasAuthConfi
   if (request.method === "GET" && url.pathname === "/auth/canvas/callback") return handleCallback(request, config, db);
   if (request.method === "POST" && url.pathname === "/auth/logout") return handleLogout(request, config, db);
   if (request.method === "GET" && url.pathname === "/api/connections") return handleListConnections(request, db);
+  if (request.method === "GET" && url.pathname === "/api/courses") return handleListCourses(request, db);
+  if (request.method === "GET" && url.pathname === "/api/assignments") return handleListAssignments(request, db);
 
   const disconnectMatch = DISCONNECT_PATH.exec(url.pathname);
   if (request.method === "POST" && disconnectMatch?.[1] !== undefined) {

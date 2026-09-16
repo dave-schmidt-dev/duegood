@@ -33,6 +33,10 @@ async function sourceItem(courseId: string, canvasItemId: string) {
     .first<{ fingerprint: string; available: number; last_seen_generation: number }>();
 }
 
+function upsertItem(overrides: { canvasItemId: string; fingerprint: string }) {
+  return { title: "Title", dueAt: null, dueAtState: "not_returned" as const, submissionState: "unknown" as const, ...overrides };
+}
+
 describe("commitSnapshot", () => {
   it("upserts new rows and bumps the course generation, exposing nothing before the batch returns", async () => {
     const { account, course, connection } = await makeCourse("swap-1", "9001");
@@ -46,8 +50,8 @@ describe("commitSnapshot", () => {
         connectionId: connection.id,
         expectedConnectionGeneration: connection.generation,
         upserts: [
-          { canvasItemId: "50001", fingerprint: "fp-a" },
-          { canvasItemId: "50002", fingerprint: "fp-b" },
+          upsertItem({ canvasItemId: "50001", fingerprint: "fp-a" }),
+          upsertItem({ canvasItemId: "50002", fingerprint: "fp-b" }),
         ],
         newlyUnavailableCanvasItemIds: [],
       },
@@ -76,7 +80,7 @@ describe("commitSnapshot", () => {
         lease: firstLease!,
         connectionId: connection.id,
         expectedConnectionGeneration: connection.generation,
-        upserts: [{ canvasItemId: "50001", fingerprint: "fp-a" }],
+        upserts: [upsertItem({ canvasItemId: "50001", fingerprint: "fp-a" })],
         newlyUnavailableCanvasItemIds: [],
       },
       3000,
@@ -113,7 +117,7 @@ describe("commitSnapshot", () => {
         lease: laterLease!,
         connectionId: connection.id,
         expectedConnectionGeneration: connection.generation,
-        upserts: [{ canvasItemId: "50001", fingerprint: "fp-real" }],
+        upserts: [upsertItem({ canvasItemId: "50001", fingerprint: "fp-real" })],
         newlyUnavailableCanvasItemIds: [],
       },
       staleLease!.expiresAt + 100,
@@ -127,7 +131,7 @@ describe("commitSnapshot", () => {
           lease: staleLease!,
           connectionId: connection.id,
           expectedConnectionGeneration: connection.generation,
-          upserts: [{ canvasItemId: "50002", fingerprint: "fp-stale" }],
+          upserts: [upsertItem({ canvasItemId: "50002", fingerprint: "fp-stale" })],
           newlyUnavailableCanvasItemIds: [],
         },
         staleLease!.expiresAt + 200,
@@ -151,7 +155,7 @@ describe("commitSnapshot", () => {
         lease: firstLease!,
         connectionId: connection.id,
         expectedConnectionGeneration: connection.generation,
-        upserts: [{ canvasItemId: "50001", fingerprint: "fp-a" }],
+        upserts: [upsertItem({ canvasItemId: "50001", fingerprint: "fp-a" })],
         newlyUnavailableCanvasItemIds: [],
       },
       3000,
@@ -166,7 +170,7 @@ describe("commitSnapshot", () => {
         lease: secondLease!,
         connectionId: connection.id,
         expectedConnectionGeneration: connection.generation,
-        upserts: [{ canvasItemId: "50001", fingerprint: "fp-a-updated" }],
+        upserts: [upsertItem({ canvasItemId: "50001", fingerprint: "fp-a-updated" })],
         newlyUnavailableCanvasItemIds: [],
       },
       5000,

@@ -8,6 +8,10 @@ export type SourceField<T> =
   | { readonly state: "not_returned" }
   | { readonly state: "unsupported" };
 
+/** The state tag alone, independent of `T` — for callers (e.g. a `source_items` column) that
+ * persist which of the four states applied without also carrying a value. */
+export type FieldState = SourceField<unknown>["state"];
+
 export function knownField<T>(value: T): SourceField<T> {
   return { state: "known", value };
 }

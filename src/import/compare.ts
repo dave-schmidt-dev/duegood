@@ -1,12 +1,22 @@
+import type { SubmissionState } from "../canvas/submission";
+import type { FieldState } from "./normalize";
+
 export interface CommittedItem {
   readonly canvasItemId: string;
   readonly fingerprint: string;
   readonly available: boolean;
 }
 
+/** Display fields alongside the fingerprint used for change detection — carried through diffing
+ * untouched (`compareInventory` never reads them, only `fingerprint`/`canvasItemId`) so a
+ * committed upsert always has the data the This Week page renders. */
 export interface FetchedItem {
   readonly canvasItemId: string;
   readonly fingerprint: string;
+  readonly title: string | null;
+  readonly dueAt: string | null;
+  readonly dueAtState: FieldState;
+  readonly submissionState: SubmissionState;
 }
 
 export interface CompareResult {

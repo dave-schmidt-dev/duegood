@@ -1,7 +1,8 @@
+import { CSRF_HEADER_NAME } from "./cookies";
 import { validateCsrfToken } from "./csrf";
 import type { Session } from "./session";
 
-export const CSRF_HEADER_NAME = "X-DueGood-CSRF-Token";
+export { CSRF_HEADER_NAME };
 
 /** Every route this phase introduces that changes state, so a security test can enumerate this
  * list and assert each entry rejects a missing token and a cross-origin request, instead of the

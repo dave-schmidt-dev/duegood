@@ -19,6 +19,7 @@
   "include": [
     "src/**/*.ts",
     "test/**/*.ts",
+    "scripts/**/*.ts",
     "*.config.ts",
     "src/worker-env.d.ts"
   ]

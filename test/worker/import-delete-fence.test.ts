@@ -33,6 +33,10 @@ async function sourceItem(courseId: string, canvasItemId: string) {
     .first<{ fingerprint: string; available: number }>();
 }
 
+function upsertItem(overrides: { canvasItemId: string; fingerprint: string }) {
+  return { title: "Title", dueAt: null, dueAtState: "not_returned" as const, submissionState: "unknown" as const, ...overrides };
+}
+
 describe("commitSnapshot connection fence", () => {
   it("rejects the commit after the connection is revoked mid-import (generation bumps, status flips), writing nothing new and leaving the prior row untouched", async () => {
     const { account, course, connection } = await makeCourseAndConnection("fence-1", "9001");
@@ -44,7 +48,7 @@ describe("commitSnapshot connection fence", () => {
         lease: firstLease!,
         connectionId: connection.id,
         expectedConnectionGeneration: connection.generation,
-        upserts: [{ canvasItemId: "50001", fingerprint: "fp-a" }],
+        upserts: [upsertItem({ canvasItemId: "50001", fingerprint: "fp-a" })],
         newlyUnavailableCanvasItemIds: [],
       },
       3000,
@@ -62,7 +66,7 @@ describe("commitSnapshot connection fence", () => {
           lease: lease!,
           connectionId: connection.id,
           expectedConnectionGeneration: connection.generation,
-          upserts: [{ canvasItemId: "50002", fingerprint: "fp-b" }],
+          upserts: [upsertItem({ canvasItemId: "50002", fingerprint: "fp-b" })],
           newlyUnavailableCanvasItemIds: ["50001"],
         },
         5000,
@@ -88,7 +92,7 @@ describe("commitSnapshot connection fence", () => {
         lease: firstLease!,
         connectionId: connection.id,
         expectedConnectionGeneration: connection.generation,
-        upserts: [{ canvasItemId: "60001", fingerprint: "fp-a" }],
+        upserts: [upsertItem({ canvasItemId: "60001", fingerprint: "fp-a" })],
         newlyUnavailableCanvasItemIds: [],
       },
       3000,
@@ -106,7 +110,7 @@ describe("commitSnapshot connection fence", () => {
           lease: lease!,
           connectionId: connection.id,
           expectedConnectionGeneration: connection.generation,
-          upserts: [{ canvasItemId: "60002", fingerprint: "fp-b" }],
+          upserts: [upsertItem({ canvasItemId: "60002", fingerprint: "fp-b" })],
           newlyUnavailableCanvasItemIds: ["60001"],
         },
         5000,
@@ -132,7 +136,7 @@ describe("commitSnapshot connection fence", () => {
         lease: lease!,
         connectionId: connection.id,
         expectedConnectionGeneration: connection.generation,
-        upserts: [{ canvasItemId: "70001", fingerprint: "fp-a" }],
+        upserts: [upsertItem({ canvasItemId: "70001", fingerprint: "fp-a" })],
         newlyUnavailableCanvasItemIds: [],
       },
       3000,

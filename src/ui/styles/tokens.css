@@ -1,0 +1,60 @@
+/* Color/typography tokens transcribed verbatim from docs/DESIGN-SYSTEM.md's Color tokens and
+   Typography tables. Light values apply by default; dark values apply under
+   `prefers-color-scheme: dark` — phase 1 has no manual theme toggle, matching the design doc's
+   silence on one. */
+:root {
+  color-scheme: light dark;
+
+  /* Brand */
+  --color-scholar-navy: #0e2a47;
+  --color-classic-gold: #b08d57;
+  --color-sage: #5a6f56;
+  --color-warm-stone: #f4efe6;
+  --color-charcoal: #1f2937;
+  --color-alert-red: #d64545;
+
+  /* Neutrals (light) */
+  --color-mist: #d7dde4;
+  --color-slate: #687280;
+  --color-slate-text: #646d7b;
+  --color-ink: #0e1620;
+  --color-ink-surface: #16222b;
+
+  /* Status */
+  --color-status-success-fill: #2fa860;
+  --color-status-success-text: #207241;
+  --color-status-warning-fill: #ce8509;
+  --color-status-warning-text: #8e5c06;
+  --color-status-overdue-fill: var(--color-alert-red);
+  --color-status-overdue-text: #af3939;
+  --color-status-info-fill: #2f6feb;
+  --color-status-info-text: #275dc5;
+  --color-status-accent-fill: #7c4dff;
+  --color-status-accent-text: #6c43de;
+
+  /* Theme-relative roles (light) */
+  --color-bg: var(--color-warm-stone);
+  --color-surface: #ffffff;
+  --color-border: var(--color-mist);
+  --color-text: var(--color-charcoal);
+  --color-text-muted: var(--color-slate-text);
+  --color-primary: var(--color-scholar-navy);
+  --color-primary-text: #ffffff;
+
+  /* Typography: Playfair Display for headings/wordmark, platform serif fallback until Task 4.1
+     pins a licensed local/system font — never an unreviewed remote font request. */
+  --font-heading: "Playfair Display", Georgia, "Times New Roman", serif;
+  --font-body: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: var(--color-ink);
+    --color-surface: var(--color-ink-surface);
+    --color-border: var(--color-ink-surface);
+    --color-text: #ffffff;
+    --color-text-muted: var(--color-mist);
+    --color-primary: var(--color-classic-gold);
+    --color-primary-text: var(--color-ink);
+  }
+}

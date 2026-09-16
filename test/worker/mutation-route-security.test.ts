@@ -171,7 +171,9 @@ describe("POST /auth/logout", () => {
     const response = await fetchWorker(buildRequest("/auth/logout", { method: "POST", token, csrfToken, origin: APP_ORIGIN }));
 
     expect(response.status).toBe(204);
-    expect(response.headers.get("Set-Cookie")).toContain("__Host-duegood_session=;");
+    const setCookies = response.headers.getSetCookie();
+    expect(setCookies.some((cookie) => cookie.startsWith("__Host-duegood_session=;"))).toBe(true);
+    expect(setCookies.some((cookie) => cookie.startsWith("__Host-duegood_csrf=;"))).toBe(true);
 
     const retry = await fetchWorker(
       buildRequest("/api/connections", { method: "GET", token, origin: APP_ORIGIN }),
@@ -356,6 +358,15 @@ describe("GET /auth/canvas/callback", () => {
     const setCookies = response.headers.getSetCookie();
     expect(setCookies.some((cookie) => cookie.startsWith("__Host-duegood_session="))).toBe(true);
     expect(setCookies.some((cookie) => cookie.startsWith("__Host-duegood_oauth_binding=;"))).toBe(true);
+
+    const csrfCookie = setCookies.find((cookie) => cookie.startsWith("__Host-duegood_csrf="));
+    expect(csrfCookie).toBeDefined();
+    // Deliberately not HttpOnly: page JS must be able to read this one via document.cookie.
+    expect(csrfCookie).not.toMatch(/;\s*HttpOnly/i);
+    expect(csrfCookie).toMatch(/;\s*Secure(;|$)/);
+    expect(csrfCookie).toMatch(/;\s*Path=\/(;|$)/);
+    expect(csrfCookie).toMatch(/;\s*SameSite=Lax(;|$)/);
+    expect(csrfCookie).not.toMatch(/Domain=/i);
   });
 
   it("rejects a replayed callback: the state is consumed before the token exchange ever runs", async () => {

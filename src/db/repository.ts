@@ -1,4 +1,6 @@
-import type { Account, Connection, ConnectionStatus, Course, TaskState } from "./types";
+import type { SubmissionState } from "../canvas/submission";
+import type { FieldState } from "../import/normalize";
+import type { Account, AssignmentListItem, Connection, ConnectionStatus, Course, TaskState } from "./types";
 
 interface AccountRow {
   readonly id: number;
@@ -166,6 +168,18 @@ export async function getCourseById(db: D1Database, courseId: string): Promise<C
   return row ? toCourse(row) : undefined;
 }
 
+/** Every course row an account has selected, sync-lease fields included — the one read the This
+ * Week page's sync-status line derives "syncing"/"stale"/"never synced" from (see
+ * `src/ui/components/sync-status.ts`). Ordered by creation so a caller with exactly one course
+ * (the only case phase 1 renders) gets a stable pick without needing to sort itself. */
+export async function listCoursesForAccount(db: D1Database, accountId: number): Promise<Course[]> {
+  const result = await db
+    .prepare(`SELECT ${COURSE_COLUMNS} FROM courses WHERE account_id = ?1 ORDER BY created_at ASC`)
+    .bind(accountId)
+    .all<CourseRow>();
+  return result.results.map(toCourse);
+}
+
 export interface CommittedSourceItem {
   readonly canvasItemId: string;
   readonly fingerprint: string;
@@ -191,6 +205,59 @@ export async function listSourceItems(db: D1Database, courseId: string): Promise
     fingerprint: row.fingerprint,
     available: row.available === 1,
   }));
+}
+
+interface AssignmentListRow {
+  readonly source_item_id: string;
+  readonly course_id: string;
+  readonly course_code: string | null;
+  readonly course_title: string | null;
+  readonly title: string | null;
+  readonly due_at: string | null;
+  readonly due_at_state: FieldState;
+  readonly submission_state: SubmissionState;
+  readonly completed: number | null;
+  readonly completed_at: number | null;
+}
+
+function toAssignmentListItem(row: AssignmentListRow): AssignmentListItem {
+  return {
+    sourceItemId: row.source_item_id,
+    courseId: row.course_id,
+    courseCode: row.course_code,
+    courseTitle: row.course_title,
+    title: row.title,
+    dueAt: row.due_at,
+    dueAtState: row.due_at_state,
+    submissionState: row.submission_state,
+    completed: row.completed === 1,
+    completedAt: row.completed_at,
+  };
+}
+
+/** Every available, imported assignment across all of an account's courses, joined with the
+ * student's own completion mark (absent when never toggled — reads as incomplete, matching
+ * `completionBody`'s existing default in `routes.ts`). This is the This Week page's one read: no
+ * grouping or course filtering here, since phase 1 has neither (see `docs/DESIGN-SYSTEM.md`'s
+ * content model) — ordered by due date only, with items whose due date isn't known trailing last
+ * rather than sorting arbitrarily among dated ones. */
+export async function listAssignmentsForAccount(db: D1Database, accountId: number): Promise<AssignmentListItem[]> {
+  const result = await db
+    .prepare(
+      `SELECT
+         si.id AS source_item_id, si.course_id AS course_id,
+         c.course_code AS course_code, c.title AS course_title,
+         si.title AS title, si.due_at AS due_at, si.due_at_state AS due_at_state, si.submission_state AS submission_state,
+         ts.completed AS completed, ts.completed_at AS completed_at
+       FROM source_items si
+       JOIN courses c ON c.id = si.course_id
+       LEFT JOIN task_state ts ON ts.source_item_id = si.id
+       WHERE si.account_id = ?1 AND si.available = 1
+       ORDER BY (si.due_at IS NULL), si.due_at ASC`,
+    )
+    .bind(accountId)
+    .all<AssignmentListRow>();
+  return result.results.map(toAssignmentListItem);
 }
 
 export interface CreateConnectionInput {
