@@ -15,6 +15,9 @@ export interface Session {
   readonly absoluteExpiresAt: number;
   readonly idleExpiresAt: number;
   readonly revokedAt: number | null;
+  /** Hash of this session's CSRF token (see `sha256Hex`). Used by `csrf.ts` to check a
+   * caller-presented token without a second database round trip; never the raw token. */
+  readonly csrfTokenHash: string;
 }
 
 export interface CreatedSession {
@@ -22,6 +25,10 @@ export interface CreatedSession {
   /** The raw opaque bearer token to place in the session cookie. Never stored — only its hash is
    * persisted (see `sha256Hex`) — so this value exists only in this return and the response. */
   readonly token: string;
+  /** The raw CSRF token to hand to the page (e.g. embedded in the shell HTML) so mutation
+   * requests can present it. Never stored — only its hash — same lifecycle as `token`. Rotates
+   * together with the session on every `createSession`/`rotateSession` call. */
+  readonly csrfToken: string;
 }
 
 interface SessionRow {
@@ -31,6 +38,7 @@ interface SessionRow {
   readonly absolute_expires_at: number;
   readonly idle_expires_at: number;
   readonly revoked_at: number | null;
+  readonly csrf_token_hash: string;
 }
 
 function toSession(row: SessionRow): Session {
@@ -41,10 +49,12 @@ function toSession(row: SessionRow): Session {
     absoluteExpiresAt: row.absolute_expires_at,
     idleExpiresAt: row.idle_expires_at,
     revokedAt: row.revoked_at,
+    csrfTokenHash: row.csrf_token_hash,
   };
 }
 
-const SESSION_COLUMNS = "id, account_id, created_at, absolute_expires_at, idle_expires_at, revoked_at";
+const SESSION_COLUMNS =
+  "id, account_id, created_at, absolute_expires_at, idle_expires_at, revoked_at, csrf_token_hash";
 
 function generateToken(): string {
   return base64Encode(crypto.getRandomValues(new Uint8Array(TOKEN_BYTES)));
@@ -55,12 +65,14 @@ function generateToken(): string {
  * should use `rotateSession` instead, so the pre-auth session can't be reused (session fixation). */
 export async function createSession(db: D1Database, accountId: number, now: number): Promise<CreatedSession> {
   const token = generateToken();
+  const csrfToken = generateToken();
   const tokenHash = await sha256Hex(token);
+  const csrfTokenHash = await sha256Hex(csrfToken);
 
   const row = await db
     .prepare(
-      `INSERT INTO sessions (id, account_id, token_hash, created_at, absolute_expires_at, idle_expires_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+      `INSERT INTO sessions (id, account_id, token_hash, created_at, absolute_expires_at, idle_expires_at, csrf_token_hash)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
        RETURNING ${SESSION_COLUMNS}`,
     )
     .bind(
@@ -70,11 +82,12 @@ export async function createSession(db: D1Database, accountId: number, now: numb
       now,
       now + ABSOLUTE_SESSION_LIFETIME_SECONDS * 1000,
       now + IDLE_SESSION_LIFETIME_SECONDS * 1000,
+      csrfTokenHash,
     )
     .first<SessionRow>();
   if (!row) throw new Error("session insert returned no row");
 
-  return { session: toSession(row), token };
+  return { session: toSession(row), token, csrfToken };
 }
 
 /** Looks up a session by the hash of the raw bearer token only — never by `id` — so a caller can

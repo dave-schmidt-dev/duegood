@@ -35,10 +35,13 @@ CREATE INDEX connections_key_version_idx ON connections (key_version);
 
 -- A session is looked up only by `token_hash` (SHA-256 of the opaque bearer token issued to the
 -- browser) — the raw token is never stored, so a leaked DB row can't be replayed as a cookie.
--- `id` is a separate UUID so future tables (e.g. CSRF binding in a later slice) can reference a
--- session without ever handling its secret hash. Both `absolute_expires_at` and
--- `idle_expires_at` are enforced (src/auth/session.ts, not here): the absolute bound caps a
--- session's total lifetime regardless of activity; the idle bound ends it after inactivity.
+-- `id` is a separate UUID so future tables can reference a session without ever handling its
+-- secret hash. Both `absolute_expires_at` and `idle_expires_at` are enforced (src/auth/session.ts,
+-- not here): the absolute bound caps a session's total lifetime regardless of activity; the idle
+-- bound ends it after inactivity. `csrf_token_hash` is SHA-256 of a second opaque token minted
+-- alongside the session (src/auth/csrf.ts validates it) — a column rather than a separate table
+-- since nothing else ever references the CSRF binding, and it rotates for free whenever the
+-- session does (`rotateSession` calls `createSession`, which mints a fresh pair).
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
   account_id INTEGER NOT NULL REFERENCES accounts(id),
@@ -46,7 +49,8 @@ CREATE TABLE sessions (
   created_at INTEGER NOT NULL,
   absolute_expires_at INTEGER NOT NULL,
   idle_expires_at INTEGER NOT NULL,
-  revoked_at INTEGER
+  revoked_at INTEGER,
+  csrf_token_hash TEXT NOT NULL
 );
 
 CREATE UNIQUE INDEX sessions_token_hash_idx ON sessions (token_hash);

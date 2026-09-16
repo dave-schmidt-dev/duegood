@@ -4,10 +4,12 @@
     "fullRunner": "test:unit",
     "tests": [
       "test/worker/asset-boundary.test.ts",
+      "test/worker/auth-rate-limit.test.ts",
       "test/worker/auth-state.test.ts",
       "test/worker/config-template.test.ts",
       "test/worker/connection-fence.test.ts",
       "test/worker/credential-envelope.test.ts",
+      "test/worker/csrf.test.ts",
       "test/worker/health.test.ts",
       "test/worker/identity-migration.test.ts",
       "test/worker/institution-identity.test.ts",
