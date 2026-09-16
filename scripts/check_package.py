@@ -10,9 +10,21 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = ["README.md", "SPEC.md", "AGENTS.md", "AGENT_HANDOFF.md", "MANIFEST.json",
             "docs/SOURCES.md", "fixtures/planner-scenarios.json", "scripts/estimate_usage.py",
-            "templates/wrangler.example.jsonc", "templates/.dev.vars.example"]
+            "templates/wrangler.example.jsonc", "templates/.dev.vars.example",
+            "docs/IMPLEMENTATION-PLAN.md"]
 BANNED_NAMES = {"courses.json", "coursework.json", "coursework-refresh-history.json", "coursework.sh"}
-IGNORED_PARTS = {".git", "__pycache__", "node_modules", ".wrangler"}
+PRIVATE_REFERENCE_HASHES = {
+    "13485099d0cb205d4108f0de36b510059035b4bcae9f785b65e253c8d09b191a",
+    "248255d61f8219484333a86261e23780bba1ae87e7ac5db51a947fbe481689e8",
+}
+LOCAL_ONLY_NAMES = {
+    "Codex Image Sep 13, 2026, 08_42_01 PM.png",
+    "Codex Image Sep 13, 2026, 08_43_40 PM.png",
+}
+IGNORED_PARTS = {
+    ".git", "__pycache__", "node_modules", ".wrangler", ".evidence", ".logs",
+    "dist", "build", "coverage", "playwright-report", "test-results", ".playwright",
+}
 
 def validate_fixture(fixture: dict) -> None:
     if fixture.get('synthetic') is not True:
@@ -45,9 +57,14 @@ def check(root: Path = ROOT) -> list[str]:
         if not (root / name).is_file():
             errors.append('Missing ' + name)
     files = [p for p in root.rglob('*') if p.is_file()
+             and p.name not in LOCAL_ONLY_NAMES
              and not any(part in IGNORED_PARTS for part in p.relative_to(root).parts)]
     for path in files:
         rel = str(path.relative_to(root))
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest in PRIVATE_REFERENCE_HASHES:
+            errors.append('Supplied private design reference present: ' + rel)
+            continue
         if path.name in BANNED_NAMES:
             errors.append('Original private-data/launcher file present: ' + rel)
         if path.name.startswith(('.env', '.dev.vars')) and not path.name.endswith('.example'):

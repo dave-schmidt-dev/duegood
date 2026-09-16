@@ -1,0 +1,51 @@
+{
+  "name": "duegood",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build:ui": "node scripts/build-ui.mjs",
+    "dev:test": "npm run build:ui && wrangler dev --local --ip 127.0.0.1 --port 8788 --local-protocol https --show-interactive-dev-session=false",
+    "hooks:install": "node scripts/install-hooks.mjs",
+    "hooks:check": "node scripts/install-hooks.mjs --check",
+    "check:hooks": "npm run hooks:check",
+    "browser:install": "node scripts/install-test-browser.mjs",
+    "check:python": "node scripts/check-python.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "deadcode": "knip",
+    "test:unit": "npm run build:ui && vitest run --config vitest.config.ts test/worker",
+    "test:worker": "npm run build:ui && vitest run --config vitest.config.ts test/worker",
+    "test:browser": "npm run build:ui && playwright test",
+    "test:membership": "node scripts/check-test-membership.mjs",
+    "test:phase1": "npm run check:python && npm run typecheck && npm run lint && npm run deadcode && npm run test:worker && npm run test:membership",
+    "test:all": "npm run check:python && npm run typecheck && npm run lint && npm run deadcode && npm run test:unit && npm run check:package && npm run test:membership && npm run check:public-tree && npm run check:staged-public-tree && npm run integrity:baseline && npm run test:browser",
+    "check:package": "python3 scripts/check_package.py && python3 -m unittest discover -s tests -v",
+    "check:public-tree": "node scripts/check-public-tree.mjs",
+    "check:staged-public-tree": "node scripts/check-staged-public-tree.mjs",
+    "integrity:baseline": "node scripts/check-baseline-integrity.mjs",
+    "migrations:list": "node scripts/apply-local-migrations.mjs --list",
+    "migrations:local": "node scripts/apply-local-migrations.mjs"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@cloudflare/vitest-plugin": "1.1.9",
+    "@cloudflare/workers-types": "5.20260915.1",
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.63.0",
+    "@types/node": "26.5.1",
+    "@vitest/runner": "4.1.11",
+    "@vitest/snapshot": "4.1.11",
+    "esbuild": "0.28.2",
+    "eslint": "10.10.0",
+    "globals": "17.12.0",
+    "knip": "6.35.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.70.0",
+    "vitest": "4.1.11",
+    "wrangler": "4.131.2"
+  }
+}

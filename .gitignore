@@ -10,6 +10,7 @@ venv/
 # Node / JS
 node_modules/
 *.tsbuildinfo
+.playwright/
 
 # Secrets / local state (never commit)
 etc/bws-config.txt
@@ -36,6 +37,8 @@ Codex Image Sep 13, 2026, 08_43_40 PM.png
 dist/
 build/
 *.log
+.logs/
+.evidence/
 .wrangler/
 coverage/
 playwright-report/
@@ -53,7 +56,12 @@ verifications/
 overnight-log.md
 overnight-report.html
 .verifier_prompt.md
+.adjudicator-*-prompt.txt
+.contrarian-*-prompt.txt
+.domain-specialist-*-prompt.txt
+.fresh-eyes-*-prompt.txt
 spikes/
+.trash-*/
 
 # Personal opencode agent-permission config (not shared team config)
 opencode.jsonc

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/ui/router.ts",
+    "scripts/*.mjs",
+    "test/worker/**/*.test.ts",
+    "test/browser/**/*.spec.ts"
+  ],
+  "project": [
+    "src/**/*.ts",
+    "scripts/**/*.mjs",
+    "test/**/*.ts",
+    "*.config.ts"
+  ],
+  "ignoreDependencies": [
+    "cloudflare"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "worker": {
+    "focusedRunner": "test:worker",
+    "fullRunner": "test:unit",
+    "tests": [
+      "test/worker/asset-boundary.test.ts",
+      "test/worker/health.test.ts",
+      "test/worker/migration-harness.test.ts"
+    ]
+  },
+  "browser": {
+    "inclusiveRunner": "test:all",
+    "componentRunner": "test:browser",
+    "forbiddenRunners": ["test:unit", "test:worker", "test:phase1"],
+    "tests": [
+      "test/browser/test-origin.spec.ts",
+      "test/browser/shell.spec.ts"
+    ]
+  }
+}
