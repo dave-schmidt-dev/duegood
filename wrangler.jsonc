@@ -25,7 +25,7 @@
   "env": {
     "production": {
       "name": "duegood",
-      "workers_dev": true,
+      "workers_dev": false,
       "vars": {
         "AUTH_MODE": "enabled",
         "APP_ORIGIN": "https://duegood.zerodelta.workers.dev",
