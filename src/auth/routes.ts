@@ -14,6 +14,7 @@ import {
   updateConnectionCredentials,
 } from "../db/repository";
 import type { TaskState } from "../db/types";
+import { discoverCourses } from "../import/course-discovery";
 import { importCourse } from "../import/course-import";
 import { readCompletion, writeCompletion } from "../planning/completion";
 import { buildCsrfClearCookie, buildCsrfCookie, readCookie } from "./cookies";
@@ -190,6 +191,14 @@ async function handleCallback(request: Request, config: CanvasAuthConfig, db: D1
  * and Canvas's `users/self` response carries no expiry to record, so `null` ("unknown"), not a
  * fabricated far-future date. `handleRefresh` already treats `encryptedRefreshToken === null` as
  * `409 no_refresh_token`, so this connection safely never attempts an OAuth-shaped refresh.
+ *
+ * Also runs `discoverCourses` before returning, so the account's course list is populated the
+ * moment a token connects rather than staying empty until some separate, still-unbuilt "select a
+ * course" step. This only creates `courses` rows (find-or-create, idempotent) — it never imports
+ * assignments, which stays the existing per-course `POST .../courses/:courseId/import` route's job
+ * (see that handler's comment): chaining every discovered course's assignment import into this one
+ * request would blow past the phase-1 single-course budget fence the moment an account has more
+ * than a couple of courses.
  */
 async function handleConnectToken(request: Request, config: CanvasAuthConfig, db: D1Database): Promise<Response> {
   if (!originAllowed(request, config.appOrigin)) return jsonError(403, "forbidden");
@@ -227,6 +236,21 @@ async function handleConnectToken(request: Request, config: CanvasAuthConfig, db
     accessTokenExpiresAt: null,
     now,
   });
+
+  // Best-effort: populates the account's course list immediately so "This Week" has something to
+  // show without a separate manual step. Never fails the connection itself — the token was already
+  // verified above, and a Canvas hiccup here just leaves discovery to run again on a later connect.
+  const discovery = await discoverCourses({
+    db,
+    canvasConfig: { institutionOrigin: config.institutionOrigin, accessToken: token },
+    accountId: account.id,
+    now,
+    fetchImpl: fetch,
+  });
+  // No token or PII in this line — visible in `wrangler tail` when Canvas's course list came back
+  // short (a dropped next-link, a mid-page failure), which otherwise looks identical to "this
+  // account really has no active courses" from the client's point of view.
+  if (discovery.truncated) console.warn(`discoverCourses truncated for account ${String(account.id)}: found ${String(discovery.courseIds.length)} course(s)`);
 
   // Rotates rather than creates: same session-fixation reasoning as `handleCallback`.
   const previousToken = readSessionToken(request);
@@ -355,8 +379,9 @@ async function handleRefresh(
  * Keyed by the internal `courses.id` (UUID) with an explicit ownership check below, not by
  * `canvasCourseId` fused with an implicit find-or-create — the latter can never surface a
  * cross-account access attempt, since a lookup scoped to the caller's own account always finds
- * either the caller's own course or nothing. "Select which Canvas course to track" is a separate,
- * not-yet-built mechanism; this route only refreshes a course row that already exists.
+ * either the caller's own course or nothing. `discoverCourses` (run inline with token connect,
+ * see `handleConnectToken`) already populates a row per active Canvas enrollment; this route only
+ * refreshes one course's assignment inventory, never selects or excludes a course.
  */
 async function handleCourseImport(
   request: Request,

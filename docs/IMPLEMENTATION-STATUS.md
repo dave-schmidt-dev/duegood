@@ -43,7 +43,7 @@ lists — so this document cannot go stale next to the suite without the check c
       populated route and two real recovery states.
 
 Test counts as of this section (verified by `check:implementation-status` against
-`test/test-membership.json`'s array lengths, not hand-maintained): **34** worker test files
+`test/test-membership.json`'s array lengths, not hand-maintained): **35** worker test files
 (`npm run test:worker`), **1** UI contract test file (`npm run test:ui`), **9** browser test files
 (`npm run test:browser`, run once as part of `npm run test:all`).
 

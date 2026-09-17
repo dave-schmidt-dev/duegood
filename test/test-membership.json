@@ -11,6 +11,7 @@
       "test/worker/config-template.test.ts",
       "test/worker/connect-token-route.test.ts",
       "test/worker/connection-fence.test.ts",
+      "test/worker/course-discovery.test.ts",
       "test/worker/course-import.test.ts",
       "test/worker/course-list.test.ts",
       "test/worker/credential-envelope.test.ts",

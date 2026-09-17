@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../../src/index";
-import { findOrCreateAccount, getActiveConnection, getConnectionsForAccount } from "../../src/db/repository";
+import { findOrCreateAccount, getActiveConnection, getConnectionsForAccount, listCoursesForAccount } from "../../src/db/repository";
 import { mutationRoutes } from "../../src/auth/routes";
 import { CSRF_HEADER_NAME } from "../../src/auth/mutation-routes";
 
@@ -59,6 +59,25 @@ function mockUsersSelf(status: number, body?: unknown): void {
   );
 }
 
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
+}
+
+/** Routes `users/self` and `courses` to independent responses, since `handleConnectToken` calls
+ * both in one request (identity verification, then `discoverCourses`) — unlike `mockUsersSelf`,
+ * which answers every URL identically and is only safe for tests that don't care what discovery
+ * sees. */
+function mockUsersSelfAndCourses(userBody: unknown, courses: readonly unknown[]): void {
+  vi.mocked(globalThis.fetch).mockImplementation((async (input: RequestInfo | URL) => {
+    const url = requestUrl(input);
+    if (url.includes("/api/v1/users/self")) return new Response(JSON.stringify(userBody), { status: 200 });
+    if (url.includes("/api/v1/courses")) return new Response(JSON.stringify(courses), { status: 200 });
+    throw new Error(`unexpected fetch to ${url}`);
+  }) as unknown as typeof fetch);
+}
+
 beforeEach(() => {
   // Same fail-loud default as mutation-route-security.test.ts: any un-mocked live fetch is a bug.
   vi.spyOn(globalThis, "fetch").mockImplementation(() => {
@@ -93,6 +112,36 @@ describe("POST /auth/canvas/connect-token", () => {
     const full = await getActiveConnection(env.DB, connection.id);
     expect(full?.encryptedRefreshToken).toBeNull();
     expect(full?.accessTokenExpiresAt).toBeNull();
+  });
+
+  it("auto-populates the account's course list from Canvas's active enrollments on connect", async () => {
+    mockUsersSelfAndCourses(
+      { id: 900, name: "Student" },
+      [
+        { id: 5001, course_code: "TECH 101", name: "Introduction to Computing" },
+        { id: 5002, course_code: "MATH 201", name: "Calculus II" },
+      ],
+    );
+    const response = await fetchWorker(buildConnectRequest({ origin: APP_ORIGIN, cfConnectingIp: freshClientIp() }));
+    expect(response.status).toBe(204);
+
+    const account = await findOrCreateAccount(env.DB, INSTITUTION, "900", Date.now());
+    const courses = await listCoursesForAccount(env.DB, account.id);
+    expect(courses.map((c) => c.canvasCourseId).sort()).toEqual(["5001", "5002"]);
+  });
+
+  it("still connects successfully even when course discovery itself fails", async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.includes("/api/v1/users/self")) return new Response(JSON.stringify({ id: 901, name: "Student" }), { status: 200 });
+      return new Response("service unavailable", { status: 503 });
+    }) as unknown as typeof fetch);
+
+    const response = await fetchWorker(buildConnectRequest({ origin: APP_ORIGIN, cfConnectingIp: freshClientIp() }));
+    expect(response.status).toBe(204);
+
+    const account = await findOrCreateAccount(env.DB, INSTITUTION, "901", Date.now());
+    expect(await listCoursesForAccount(env.DB, account.id)).toEqual([]);
   });
 
   it("connecting via a PAT still works when an OAuth client happens to be configured too", async () => {
