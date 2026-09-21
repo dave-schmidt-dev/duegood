@@ -1,0 +1,13 @@
+---
+version: v1
+services:
+  - name: duegood
+    project: duegood
+    action: enforce
+    allowed_domains:
+      - opencode.ai
+      - "*.opencode.ai"
+default:
+  project: duegood
+  action: enforce
+  allowed_domains: []

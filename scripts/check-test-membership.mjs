@@ -19,9 +19,36 @@ function list(command, args) {
   return `${result.stdout}\n${result.stderr}`;
 }
 
-for (const testPath of [...manifest.worker.tests, ...manifest.ui.tests, ...manifest.browser.tests]) {
+for (const testPath of [...manifest.worker.tests, ...manifest.ui.tests, ...manifest.browser.tests, ...manifest.container.tests, ...manifest.local.tests]) {
   if (!existsSync(path.join(root, testPath))) {
     throw new Error(`Membership names missing test ${testPath}.`);
+  }
+}
+
+{
+  const script = packageJson.scripts[manifest.local.runner];
+  if (typeof script !== "string" || !script.includes("vitest.local.config.ts")) {
+    throw new Error(`${manifest.local.runner} must invoke the local Vitest configuration.`);
+  }
+  const discovery = list(path.join(root, "node_modules", ".bin", "vitest"), ["list", "--config", "vitest.local.config.ts"]);
+  for (const testPath of manifest.local.tests) {
+    if (!discovery.includes(testPath)) throw new Error(`${manifest.local.runner} does not discover ${testPath}.`);
+  }
+  if (!(packageJson.scripts[manifest.local.inclusiveRunner] ?? "").includes(`npm run ${manifest.local.runner}`)) {
+    throw new Error(`${manifest.local.inclusiveRunner} must include ${manifest.local.runner}.`);
+  }
+}
+
+{
+  const script = packageJson.scripts[manifest.container.runner];
+  if (typeof script !== "string" || !script.includes("test/container/run.sh")) {
+    throw new Error(`${manifest.container.runner} must invoke the container qualification runner.`);
+  }
+  if (manifest.container.includedInTestAll !== false) {
+    throw new Error("Container qualification must remain an explicit host gate, not part of test:all.");
+  }
+  if ((packageJson.scripts["test:all"] ?? "").includes("test:container")) {
+    throw new Error("test:all must not launch Docker qualification.");
   }
 }
 
@@ -76,3 +103,5 @@ for (const runner of manifest.browser.forbiddenRunners) {
 console.log(`Verified ${manifest.worker.tests.length} worker tests in both non-browser runners.`);
 console.log(`Verified ${manifest.ui.tests.length} UI contract tests in ${manifest.ui.focusedRunner}.`);
 console.log(`Verified ${manifest.browser.tests.length} browser tests are reserved for test:all.`);
+console.log(`Verified ${manifest.container.tests.length} container checks in the explicit host-only runner.`);
+console.log(`Verified ${manifest.local.tests.length} local-source tests in ${manifest.local.runner} and test:all.`);

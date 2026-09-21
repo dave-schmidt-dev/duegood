@@ -7,11 +7,13 @@ export const SECURE_TEST_ORIGIN = "https://127.0.0.1:8788";
  * AUTH_MODE=disabled (e.g. shell.spec.ts asserts the disabled-auth shell), so auth-only specs run
  * against this separate origin/port instead of changing the default server's config. */
 export const AUTH_TEST_ORIGIN = "https://127.0.0.1:8789";
+export const LOCAL_TEST_ORIGIN = "http://127.0.0.1:8790";
 // Every spec that needs a signed-in session (the seeded fixture from `dev:test:auth`'s
 // `seed:playwright` step) matches here — "phase1" covers all four phase1-*.spec.ts files plus
 // accessibility-phase1.spec.ts in one pattern, so a later phase-1 spec never needs this regex
 // edited again the way csrf-cookie/session-seed did one at a time.
 const AUTH_SPEC_PATTERN = /\/(csrf-cookie|session-seed|.*phase1.*)\.spec\.ts$/;
+const LOCAL_SPEC_PATTERN = /\/local-dashboard\.spec\.ts$/;
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= path.resolve(".playwright");
 
@@ -43,13 +45,18 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      testIgnore: AUTH_SPEC_PATTERN,
+      testIgnore: [AUTH_SPEC_PATTERN, LOCAL_SPEC_PATTERN],
       use: { ...devices["Desktop Chrome"] },
     },
     {
       name: "chromium-auth",
       testMatch: AUTH_SPEC_PATTERN,
       use: { ...devices["Desktop Chrome"], baseURL: AUTH_TEST_ORIGIN },
+    },
+    {
+      name: "chromium-local",
+      testMatch: LOCAL_SPEC_PATTERN,
+      use: { ...devices["Desktop Chrome"], baseURL: LOCAL_TEST_ORIGIN },
     },
   ],
   webServer: [
@@ -66,6 +73,14 @@ export default defineConfig({
       command: "npm run dev:test:auth",
       url: `${AUTH_TEST_ORIGIN}/health`,
       ignoreHTTPSErrors: true,
+      reuseExistingServer: false,
+      timeout: 120_000,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+    {
+      command: "node scripts/serve-playwright-local.mjs --port 8790",
+      url: `${LOCAL_TEST_ORIGIN}/health`,
       reuseExistingServer: false,
       timeout: 120_000,
       stdout: "pipe",

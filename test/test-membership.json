@@ -9,6 +9,9 @@
       "test/worker/auth-rate-limit.test.ts",
       "test/worker/auth-state.test.ts",
       "test/worker/config-template.test.ts",
+      "test/worker/canvas-conversations.test.ts",
+      "test/worker/canvas-conversation-sync.test.ts",
+      "test/worker/canvas-profile-sync.test.ts",
       "test/worker/connect-token-route.test.ts",
       "test/worker/connection-fence.test.ts",
       "test/worker/course-discovery.test.ts",
@@ -44,6 +47,7 @@
     "focusedRunner": "test:ui",
     "tests": [
       "test/ui/phase1-trust-interface.test.ts"
+      ,"test/ui/dashboard.test.ts"
     ]
   },
   "browser": {
@@ -59,7 +63,31 @@
       "test/browser/phase1-completion.spec.ts",
       "test/browser/phase1-desktop.spec.ts",
       "test/browser/phase1-mobile.spec.ts",
-      "test/browser/accessibility-phase1.spec.ts"
+      "test/browser/accessibility-phase1.spec.ts",
+      "test/browser/local-dashboard.spec.ts"
+    ]
+  },
+  "container": {
+    "runner": "test:container",
+    "includedInTestAll": false,
+    "tests": [
+      "test/container/assert-topology.sh",
+      "test/container/assert-network.sh",
+      "test/container/assert-lifecycle.sh",
+      "test/container/assert-patch.sh"
+    ]
+  },
+  "local": {
+    "runner": "test:local",
+    "inclusiveRunner": "test:all",
+    "tests": [
+      "test/local/coursework-store.test.ts",
+      "test/local/canvas-conversation-entrypoint.test.ts",
+      "test/local/dashboard-store.test.ts",
+      "test/local/canvas-profile-entrypoint.test.ts",
+      "test/local/local-server.test.ts",
+      "test/local/refresh-supervisor.test.ts"
+      ,"test/local/refresh-history.test.ts"
     ]
   }
 }

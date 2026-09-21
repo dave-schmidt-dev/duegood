@@ -8,7 +8,7 @@ The source reference is incomplete: the local Python server, Canvas exporter, re
 
 ## Owner priorities
 
-Work in this order: (1) OAuth + Cloudflare foundation, (2) optimization and sync durability, (3) generalization, (4) UI/accessibility. Build the smallest safe vertical slice first. Do not disappear into a UI rewrite, syllabus parser, generic plugin system, agent framework, or gradebook.
+For the current owner-authorized local replacement plan, work in this order: (1) qualify the isolated local executor, (2) capture the private legacy contract without exposing private data, (3) build the local coursework source and daily interface, and (4) rehearse a reversible cutover; OAuth and Cloudflare work are deferred. Build the smallest safe vertical slice first. Do not disappear into a UI rewrite, syllabus parser, generic plugin system, agent framework, or gradebook.
 
 ## Non-negotiables
 

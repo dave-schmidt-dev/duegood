@@ -1,0 +1,80 @@
+name: duegood-opencode
+
+services:
+  proxy:
+    build:
+      context: .
+      dockerfile: proxy.Dockerfile
+      args:
+        SMOKESCREEN_REVISION: 609eb8931420453daf5893509be0b25b21bd9edb
+    image: duegood-smokescreen:609eb8931420
+    user: "65533:65533"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=65533,gid=65533,mode=0700
+    networks:
+      - executor
+      - egress
+    restart: "no"
+
+  executor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        OPENCODE_VERSION: 1.18.30
+    image: duegood-opencode:1.18.30
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    environment:
+      HTTP_PROXY: http://proxy:4750
+      HTTPS_PROXY: http://proxy:4750
+      http_proxy: http://proxy:4750
+      https_proxy: http://proxy:4750
+      DUEGOOD_OPENCODE_MODEL: opencode-go/deepseek-v4.1-flash
+      DUEGOOD_OPENCODE_VARIANT: high
+      OPENCODE_DISABLE_AUTOUPDATE: "1"
+      OPENCODE_DISABLE_DEFAULT_PLUGINS: "1"
+      OPENCODE_DISABLE_LSP_DOWNLOAD: "1"
+      OPENCODE_DISABLE_CLAUDE_CODE: "1"
+      OPENCODE_DISABLE_MODELS_FETCH: "1"
+    volumes:
+      - type: bind
+        source: ${DUEGOOD_SOURCE_DIR:?set DUEGOOD_SOURCE_DIR}
+        target: /workspace
+        read_only: false
+      - type: bind
+        source: ${DUEGOOD_CREDENTIAL_DIR:?set DUEGOOD_CREDENTIAL_DIR}
+        target: /credentials
+        read_only: true
+      - type: volume
+        source: session
+        target: /home/opencode/.local/share/opencode
+      - type: volume
+        source: cache
+        target: /home/opencode/.cache/opencode
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=65532,gid=65532,mode=0700
+      - /home/opencode/.config:rw,noexec,nosuid,nodev,size=4m,uid=65532,gid=65532,mode=0700
+      - /home/opencode/.local/state:rw,noexec,nosuid,nodev,size=16m,uid=65532,gid=65532,mode=0700
+    networks:
+      - executor
+    depends_on:
+      - proxy
+    restart: "no"
+
+networks:
+  executor:
+    internal: true
+  egress: {}
+
+volumes:
+  session: {}
+  cache: {}

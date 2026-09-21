@@ -1,42 +1,35 @@
 import type { ElementDescriptor } from "./dom";
 
-/**
- * The full phase-1 route table — one entry. Every other destination in the mockup's navigation IA
- * (Timeline, Needs Attention, Courses, Completed, Search, Settings) is deferred past phase 1 and
- * must never appear here, even disabled — see `docs/DESIGN-SYSTEM.md`'s Navigation inventory and
- * the Task 1.5 "navigation test contains only available phase-1 destinations" done-when bullet.
- */
-export interface RouteDescriptor {
-  readonly path: string;
-  readonly label: string;
-}
-
+export interface RouteDescriptor { readonly path: string; readonly label: string }
 export const PHASE_1_ROUTES: readonly RouteDescriptor[] = [{ path: "/", label: "This Week" }];
 
-/** Same markup at every breakpoint — `shell.css` repositions it (sidebar vs. bottom tab bar) via
- * media queries, not a different component, per the Responsive shell section's "same component
- * set at every size". */
+export type DashboardPage = "timeline" | "grades" | "inbox" | "completed" | "courses" | "library" | "activity" | "more";
+export interface DashboardRoute { readonly page: DashboardPage; readonly label: string; readonly icon: string }
+export const DASHBOARD_ROUTES: readonly DashboardRoute[] = [
+  { page: "timeline", label: "Timeline", icon: "│" },
+  { page: "grades", label: "Grades", icon: "▦" },
+  { page: "inbox", label: "Inbox", icon: "✉" },
+  { page: "completed", label: "Done", icon: "✓" },
+  { page: "courses", label: "Courses", icon: "◫" },
+  { page: "library", label: "Library", icon: "≡" },
+  { page: "activity", label: "Activity", icon: "↻" },
+  { page: "more", label: "More", icon: "•••" },
+];
+
+/** Legacy one-route navigation retained for the disconnected phase-1 page contract. */
 export function primaryNav(currentPath: string): ElementDescriptor {
-  return {
-    tag: "nav",
-    attrs: { class: "primary-nav", "aria-label": "Primary" },
-    children: [
-      {
-        tag: "ul",
-        children: PHASE_1_ROUTES.map((route) => ({
-          tag: "li",
-          children: [
-            {
-              tag: "a",
-              attrs: {
-                href: route.path,
-                ...(route.path === currentPath ? { "aria-current": "page" } : {}),
-              },
-              text: route.label,
-            },
-          ],
-        })),
-      },
-    ],
-  };
+  return { tag: "nav", attrs: { class: "primary-nav", "aria-label": "Primary" }, children: [{
+    tag: "ul", children: PHASE_1_ROUTES.map((route) => ({ tag: "li", children: [{
+      tag: "a", attrs: { href: route.path, ...(route.path === currentPath ? { "aria-current": "page" } : {}) }, text: route.label,
+    }] })),
+  }] };
+}
+
+export function dashboardNav(currentPage: DashboardPage, onNavigate: (page: DashboardPage) => void): ElementDescriptor {
+  return { tag: "nav", attrs: { class: "nav", "aria-label": "Primary" }, children: DASHBOARD_ROUTES.map((route) => ({
+    tag: "a",
+    attrs: { href: `#${route.page}`, class: route.page === currentPage ? "active" : "", ...(route.page === currentPage ? { "aria-current": "page" } : {}) },
+    on: { click: (event) => { event.preventDefault(); onNavigate(route.page); } },
+    children: [{ tag: "span", attrs: { class: "nav-icon", "aria-hidden": "true" }, text: route.icon }, { tag: "span", text: route.label }],
+  })) };
 }

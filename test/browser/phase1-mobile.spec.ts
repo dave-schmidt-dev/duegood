@@ -22,31 +22,35 @@ test.beforeEach(async ({ context }) => {
 
 test("renders the fixed bottom tab bar at a mobile viewport (<768px) with no automated accessibility violations", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "This Week" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
 
   // Responsive shell section: mobile collapses the sidebar into a fixed bottom tab bar — same nav
   // markup as desktop (`src/ui/routes.ts`'s `primaryNav`), only the CSS position changes.
-  const nav = page.getByRole("navigation", { name: "Primary" });
-  await expect(nav).toHaveCSS("position", "fixed");
-  await expect(page.locator(".primary-nav ul")).not.toHaveCSS("flex-direction", "column");
+  await expect(page.locator(".sidebar")).toHaveCSS("position", "fixed");
 
   expect(await automaticAccessibilityViolations(page)).toEqual([]);
 });
 
-test("phase 1's mobile shell has a single tab, matching the deferred-navigation inventory", async ({ page }) => {
+test("the mobile shell exposes all approved destinations", async ({ page }) => {
   await page.goto("/");
   const nav = page.getByRole("navigation", { name: "Primary" });
-  await expect(nav.getByRole("link")).toHaveCount(1);
-  await expect(nav.getByRole("link", { name: "This Week" })).toBeVisible();
+  await expect(nav.getByRole("link")).toHaveCount(8);
+  await expect(nav.getByRole("link", { name: "Timeline" })).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Grades" })).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Inbox" })).toBeVisible();
 });
 
 test("every interactive control has a tap-equivalent target of at least 44x44px", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
   await page.goto("/");
-  const row = page.locator(".assignment-row").first();
-  const checkboxBox = await row.getByRole("checkbox").boundingBox();
-  const chevronBox = await row.getByRole("button").boundingBox();
-  expect(checkboxBox?.width).toBeGreaterThanOrEqual(44);
-  expect(checkboxBox?.height).toBeGreaterThanOrEqual(44);
+  await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
+  for (const link of await page.locator(".sidebar .nav a").all()) {
+    const box = await link.evaluate((element) => { const rect = element.getBoundingClientRect(); return { width: rect.width, height: rect.height }; });
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+  }
+  const row = page.locator(".event-card").first();
+  const chevronBox = await row.getByRole("button", { name: "Details" }).boundingBox();
   expect(chevronBox?.width).toBeGreaterThanOrEqual(44);
   expect(chevronBox?.height).toBeGreaterThanOrEqual(44);
 });

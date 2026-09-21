@@ -1,4 +1,4 @@
-import { CSRF_COOKIE_NAME, CSRF_HEADER_NAME, parseCookieHeader } from "../auth/cookies";
+import { CSRF_COOKIE_NAME, CSRF_HEADER_NAME, LOCAL_CSRF_COOKIE_NAME, parseCookieHeader } from "../auth/cookies";
 
 export { CSRF_HEADER_NAME };
 
@@ -8,5 +8,12 @@ export { CSRF_HEADER_NAME };
  * empty header" — `checkMutationRequest` rejects a missing header the same as a wrong one, so
  * there is no behavioral difference, only a clearer call site. */
 export function readCsrfToken(): string | undefined {
-  return parseCookieHeader(document.cookie, CSRF_COOKIE_NAME);
+  const cookie = document.cookie;
+  return parseCookieHeader(cookie, CSRF_COOKIE_NAME) ?? parseCookieHeader(cookie, LOCAL_CSRF_COOKIE_NAME);
+}
+
+/** Reads only the loopback server's token after a local renewal handshake. This avoids a stale
+ * cloud cookie shadowing the newly-issued local value when both names exist in one browser. */
+export function readLocalCsrfToken(): string | undefined {
+  return parseCookieHeader(document.cookie, LOCAL_CSRF_COOKIE_NAME);
 }

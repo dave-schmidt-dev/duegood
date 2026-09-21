@@ -1,10 +1,5 @@
 import type { ElementDescriptor } from "../dom";
 
-/** Threshold past which a persisted `lastSuccessfulCheckAt` reads as stale rather than synced.
- * Not sourced from the design doc (no numeric threshold is specified there) — chosen as a
- * defensible default for a course sync cadence and documented here rather than left implicit. */
-export const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
-
 /**
  * The This Week page's "truthful sync-status line" (`docs/DESIGN-SYSTEM.md`'s content-model
  * section) for a course that IS actively tracked — `connected_synced`/`never_synced`/`stale` are

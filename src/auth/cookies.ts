@@ -24,6 +24,9 @@ export function readCookie(request: Request, name: string): string | undefined {
  * `parseCookieHeader` — see that module's own doc comment for why the cookie itself is not
  * `HttpOnly`. */
 export const CSRF_COOKIE_NAME = "__Host-duegood_csrf";
+/** Local plain-HTTP launches cannot use a `__Host-`/`Secure` cookie. This name is deliberately
+ * scoped to the local server and is only read as a fallback by the local-capable UI. */
+export const LOCAL_CSRF_COOKIE_NAME = "duegood_local_csrf";
 export const CSRF_HEADER_NAME = "X-DueGood-CSRF-Token";
 
 /** Deliberately NOT `HttpOnly`: page JS (`src/ui/csrf.ts`) reads this cookie via `document.cookie`

@@ -24,38 +24,51 @@ test.beforeEach(async ({ context }) => {
 
 test("renders the persistent sidebar layout at a desktop viewport (>=1024px) with no automated accessibility violations", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "This Week" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
 
   // Responsive shell section: desktop keeps a persistent sidebar, i.e. the nav's list stacks
   // vertically rather than the mobile bottom tab bar's horizontal row.
-  await expect(page.locator(".primary-nav ul")).toHaveCSS("flex-direction", "column");
+  await expect(page.locator(".sidebar")).toHaveCSS("position", "sticky");
 
   expect(await automaticAccessibilityViolations(page)).toEqual([]);
 });
 
-test("is fully keyboard-operable: tab reaches the chevron and completion checkbox, and both activate without a pointer", async ({ page }) => {
+test("fills the available desktop workspace instead of retaining the former fixed-width cap", async ({ page }) => {
+  await page.setViewportSize({ width: 2400, height: 1000 });
   await page.goto("/");
-  const row = page.locator(".assignment-row", { hasText: "Discussion post (no deadline)" });
-  const checkbox = row.getByRole("checkbox");
-  const chevron = row.getByRole("button");
+  await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
+
+  const mainWidth = await page.getByRole("main").evaluate((main) => main.getBoundingClientRect().width);
+
+  expect(mainWidth).toBeGreaterThan(2000);
+  expect(mainWidth).toBeGreaterThan(2400 - 236 - 80);
+});
+
+test("is fully keyboard-operable: details and navigation activate without a pointer", async ({ page }) => {
+  await page.goto("/");
+  const row = page.locator(".event-card", { hasText: "Group project proposal" });
+  const chevron = row.getByRole("button", { name: "Details" });
 
   await chevron.focus();
   await expect(chevron).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(chevron).toHaveAttribute("aria-expanded", "true");
 
-  await checkbox.focus();
-  await expect(checkbox).toBeFocused();
-  const before = await checkbox.isChecked();
-  await page.keyboard.press("Space");
-  await expect(checkbox).toBeChecked({ checked: !before });
+  const inbox = page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Inbox" });
+  await inbox.focus();
+  await expect(inbox).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { level: 1, name: "Inbox" })).toBeVisible();
 });
 
-test("applies the dark-mode surface tokens under prefers-color-scheme: dark", async ({ page }) => {
-  await page.emulateMedia({ colorScheme: "dark" });
+test("uses the owner-approved dark palette by default and under system dark mode", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light" });
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "This Week" })).toBeVisible();
-  const background = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-  // color-ink (#0e1620) — see src/ui/styles/tokens.css's dark-mode --color-bg override.
-  expect(background).toBe("rgb(14, 22, 32)");
+  await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
+  const defaultBackground = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  expect(defaultBackground).toBe("rgb(13, 20, 27)");
+
+  await page.emulateMedia({ colorScheme: "dark" });
+  const darkSystemBackground = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  expect(darkSystemBackground).toBe("rgb(13, 20, 27)");
 });

@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 export const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ownerLocalPaths = new Set(["main"]);
 
 const bannedNames = new Set([
   "courses.json",
@@ -52,11 +53,18 @@ export function scanContent(contents) {
   const tokenName = ["CANVAS", "API", "TOKEN"].join("_");
   const assignment = new RegExp(`${tokenName}\\s*=\\s*[^\\s<]+`, "i");
   const privateDataMarkers = [
-    /(?:access|refresh)[_-]?token\\s*[:=]\\s*[A-Za-z0-9._~-]{12,}/i,
-    /(?:student|learner)[_-](?:name|email|id)\\s*[:=]\\s*[^<>{}\s][^\n]*/i,
-    /(?:coursework|student)[_-]?(?:export|record|feed)[_-]?(?:url|path)\\s*[:=]\\s*[^<>{}\s][^\n]*/i,
+    /(?:student|learner)[_-](?:name|email|id)\s*[:=]\s*[^<>{}\s][^\n]*/i,
+    /(?:coursework|student)[_-]?(?:export|record|feed)[_-]?(?:url|path)\s*[:=]\s*[^<>{}\s][^\n]*/i,
   ];
-  if (text.includes(privateKeyMarker) || assignment.test(text) || privateDataMarkers.some((marker) => marker.test(text))) {
+  const tokenMarker = /(?:access|refresh)[_-]token\s*[:=]\s*(?:"([A-Za-z0-9._~-]+)"|'([A-Za-z0-9._~-]+)'|([A-Za-z0-9._~-]+))/gi;
+  const placeholderTokenWords = new Set(["access", "canvas", "new", "refreshed", "refresh", "stored", "token"]);
+  const tokenFinding = Array.from(text.matchAll(tokenMarker)).some((match) => {
+    const value = match[1] ?? match[2] ?? match[3] ?? "";
+    const isPlaceholder = value.includes("-") && value.split("-").every((word) => placeholderTokenWords.has(word.toLowerCase()));
+    const minimumLength = match[1] !== undefined || match[2] !== undefined ? 12 : 24;
+    return value.length >= minimumLength && !isPlaceholder;
+  });
+  if (text.includes(privateKeyMarker) || assignment.test(text) || tokenFinding || privateDataMarkers.some((marker) => marker.test(text))) {
     return "explicit secret marker";
   }
   return null;
@@ -70,7 +78,7 @@ export function publicPaths() {
   if (result.status !== 0) {
     throw new Error("Unable to enumerate the public candidate tree.");
   }
-  return result.stdout.toString("utf8").split("\0").filter(Boolean).sort();
+  return result.stdout.toString("utf8").split("\0").filter((relativePath) => relativePath && !ownerLocalPaths.has(relativePath)).sort();
 }
 
 async function main() {

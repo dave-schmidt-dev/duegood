@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Due Good — Timeline with assignment list</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: #09121b;
+      --nav: #071b2b;
+      --surface: #101d28;
+      --surface-2: #142431;
+      --surface-3: #1a2d3b;
+      --line: #2a414f;
+      --ink: #edf3f6;
+      --muted: #99aab5;
+      --faint: #708591;
+      --sky: #95bdd9;
+      --sand: #d3ae68;
+      --today: #df8d78;
+      --it530: #4d86bc;
+      --it540: #af9144;
+      --it570: #55906c;
+      --display: Charter, "Iowan Old Style", Georgia, serif;
+      --body: "Avenir Next", Avenir, Inter, system-ui, sans-serif;
+      --utility: "SFMono-Regular", Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; color: var(--ink); background: var(--canvas); font: 14px/1.4 var(--body); }
+    button, input { font: inherit; }
+    button:focus-visible, input:focus-visible { outline: 3px solid var(--sky); outline-offset: 3px; }
+    .app { min-height: 100vh; display: grid; grid-template-columns: 216px minmax(0,1fr); }
+    aside { position: sticky; top: 0; height: 100vh; padding: 24px 18px; background: var(--nav); border-right: 1px solid #132c3e; }
+    .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; }
+    .mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 11px; color: #18222a; background: var(--sand); font: 700 20px var(--display); }
+    .brand strong { display: block; font-size: 16px; }
+    .brand span { color: #c6d2d9; }
+    nav { display: grid; gap: 7px; }
+    nav button { min-height: 44px; padding: 0 14px; border: 0; border-radius: 11px; color: #bdcad1; background: transparent; text-align: left; cursor: pointer; }
+    nav button.active { color: white; background: #263b4d; box-shadow: inset 2px 0 var(--sand); }
+    .legend { position: absolute; inset: auto 18px 24px; padding-top: 17px; border-top: 1px solid #203746; }
+    .label { margin: 0 0 11px; color: #94a7b2; font: 700 10px var(--utility); letter-spacing: .12em; text-transform: uppercase; }
+    .legend-row { display: flex; gap: 9px; align-items: center; margin: 9px 0; color: #c6d2d9; font-size: 12px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--course); box-shadow: 0 0 0 3px color-mix(in srgb, var(--course) 18%, transparent); }
+    .workspace { min-width: 0; }
+    .topbar { min-height: 64px; display: flex; align-items: center; justify-content: space-between; padding: 0 30px; border-bottom: 1px solid var(--line); background: #0d1721; }
+    .topbar span { color: var(--muted); }
+    .topbar strong { color: var(--ink); }
+    .top-actions { display: flex; align-items: center; gap: 14px; }
+    .refresh { min-height: 40px; padding: 0 15px; border: 1px solid #385365; border-radius: 10px; color: var(--sky); background: var(--surface-2); cursor: pointer; font-weight: 700; }
+    main { width: min(1540px,100%); margin: 0 auto; padding: 28px 30px 64px; }
+    .hero { display: flex; justify-content: space-between; align-items: end; gap: 24px; margin-bottom: 20px; }
+    .eyebrow { margin: 0 0 5px; color: var(--today); font: 700 10px var(--utility); letter-spacing: .13em; text-transform: uppercase; }
+    h1 { margin: 0; color: var(--sky); font: 700 36px/1 var(--display); }
+    .hero p { margin: 7px 0 0; color: var(--muted); }
+    .summary { text-align: right; }
+    .summary span { display: block; color: var(--muted); font: 700 10px var(--utility); letter-spacing: .1em; text-transform: uppercase; }
+    .summary strong { display: block; margin-top: 3px; color: var(--sky); font: 700 24px var(--display); }
+    .layout { display: grid; grid-template-columns: minmax(680px,1fr) 330px; gap: 18px; align-items: start; }
+    .timeline-panel, .upcoming { border: 1px solid var(--line); border-radius: 18px; background: var(--surface); overflow: hidden; }
+    .controls { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px; border-bottom: 1px solid var(--line); }
+    .segments { display: flex; gap: 4px; }
+    .segments button { min-height: 36px; padding: 0 12px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; cursor: pointer; font-weight: 700; }
+    .segments button.active { color: white; background: #071b2b; }
+    .lane-head, .day { display: grid; grid-template-columns: 112px repeat(3,minmax(0,1fr)); }
+    .lane-head { min-height: 58px; background: #13222d; border-bottom: 1px solid var(--line); }
+    .lane-head > div { display: flex; align-items: center; justify-content: center; gap: 7px; padding: 9px; border-left: 1px solid var(--line); font: 700 10px var(--utility); letter-spacing: .06em; text-transform: uppercase; }
+    .lane-head > div:first-child { justify-content: flex-start; border-left: 0; padding-left: 17px; color: var(--muted); }
+    .day { min-height: 126px; border-bottom: 1px solid var(--line); }
+    .day:last-child { border-bottom: 0; }
+    .day.today { background: linear-gradient(90deg,rgba(223,141,120,.14),transparent 26%); }
+    .date { padding: 18px 12px; text-align: right; border-right: 1px solid var(--line); }
+    .date strong { display: block; color: var(--sky); font: 700 18px var(--display); }
+    .date span { color: var(--muted); font: 10px var(--utility); }
+    .today-tag { display: inline-block; margin-top: 8px; padding: 2px 6px; border-radius: 999px; color: #161c20; background: var(--today); font: 700 8px var(--utility); }
+    .lane { min-width: 0; display: grid; align-content: center; gap: 7px; padding: 10px; border-right: 1px solid var(--line); }
+    .lane:last-child { border-right: 0; }
+    .lane[data-course="IT530"] { background: rgba(77,134,188,.045); }
+    .lane[data-course="IT540"] { background: rgba(175,145,68,.045); }
+    .lane[data-course="IT570"] { background: rgba(85,144,108,.045); }
+    .card { min-width: 0; padding: 10px 12px; border: 1px solid #36505f; border-left: 4px solid var(--course); border-radius: 11px; background: color-mix(in srgb,var(--course) 11%,var(--surface-2)); }
+    .card small { display: block; color: #bbcad2; font: 700 9px var(--utility); letter-spacing: .06em; text-transform: uppercase; }
+    .card strong { display: block; margin-top: 4px; overflow-wrap: anywhere; font-size: 13px; }
+    .open { align-self: center; color: var(--faint); font: 10px var(--utility); letter-spacing: .08em; text-transform: uppercase; }
+    .upcoming { position: sticky; top: 82px; max-height: calc(100vh - 106px); }
+    .upcoming-head { padding: 18px 18px 15px; border-bottom: 1px solid var(--line); background: #13222d; }
+    .upcoming-head h2 { margin: 0; font: 700 21px var(--display); }
+    .upcoming-head p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+    .rail-scroll { max-height: calc(100vh - 190px); overflow: auto; }
+    .rail-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 14px 9px; color: var(--muted); background: #0e1b25; border-bottom: 1px solid var(--line); font: 700 9px var(--utility); letter-spacing: .1em; text-transform: uppercase; }
+    .rail-section-head strong { color: var(--ink); font-size: 10px; }
+    .rail-section-head button { padding: 0; border: 0; color: var(--sky); background: transparent; cursor: pointer; font: inherit; }
+    .assignment { position: relative; display: grid; grid-template-columns: 44px minmax(0,1fr) 24px; gap: 10px; padding: 15px 14px; border-bottom: 1px solid var(--line); background: var(--surface); }
+    .assignment:last-child { border-bottom: 0; }
+    .assignment:hover { background: var(--surface-2); }
+    .assignment.done { opacity: .52; }
+    .assignment.done .assignment-title { text-decoration: line-through; }
+    .date-block { text-align: center; }
+    .date-block strong { display: block; color: var(--sky); font: 700 17px var(--display); }
+    .date-block span { color: var(--muted); font: 9px var(--utility); text-transform: uppercase; }
+    .course { display: flex; align-items: center; gap: 6px; color: var(--course); font: 700 9px var(--utility); letter-spacing: .07em; text-transform: uppercase; }
+    .course::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--course); }
+    .assignment-title { display: block; margin: 4px 0 5px; color: var(--ink); font-size: 12px; line-height: 1.3; }
+    .meta { display: flex; flex-wrap: wrap; gap: 4px 9px; color: var(--muted); font-size: 10px; }
+    .countdown { color: var(--today); font-weight: 700; }
+    .done-toggle { appearance: none; width: 19px; height: 19px; margin: 2px 0 0; border: 1px solid #58707e; border-radius: 5px; background: #0b1620; cursor: pointer; }
+    .done-toggle:checked { border-color: var(--it570); background: var(--it570); }
+    .done-toggle:checked::after { content: "✓"; display: grid; place-items: center; color: white; font-size: 13px; }
+    .message-list { display: grid; }
+    .message { position: relative; display: grid; grid-template-columns: 8px minmax(0,1fr); gap: 10px; width: 100%; padding: 14px; border: 0; border-bottom: 1px solid var(--line); color: inherit; background: var(--surface); text-align: left; cursor: pointer; }
+    .message:last-child { border-bottom: 0; }
+    .message:hover { background: var(--surface-2); }
+    .message.read { opacity: .55; }
+    .message-dot { width: 8px; height: 8px; margin-top: 4px; border-radius: 50%; background: var(--course); box-shadow: 0 0 0 3px color-mix(in srgb,var(--course) 16%,transparent); }
+    .message strong { display: block; font-size: 12px; line-height: 1.3; }
+    .message span { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
+    .message small { display: -webkit-box; margin-top: 5px; overflow: hidden; color: #bdc9d0; font-size: 10px; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .hot-count { min-width: 20px; padding: 2px 6px; border-radius: 99px; color: #13191d; background: var(--today); text-align: center; }
+    .empty { padding: 34px 18px; color: var(--muted); text-align: center; }
+    .toast { position: fixed; right: 22px; bottom: 22px; padding: 11px 15px; border: 1px solid #496575; border-radius: 10px; background: #19303e; opacity: 0; transform: translateY(10px); transition: .18s; pointer-events: none; }
+    .toast.show { opacity: 1; transform: none; }
+    @media (max-width: 1120px) { .layout { grid-template-columns: 1fr; } .upcoming { position: static; max-height: none; } .rail-scroll { max-height: 520px; } }
+    @media (max-width: 760px) { .app { grid-template-columns: 1fr; } aside { position: fixed; z-index: 10; inset: auto 0 0; width: auto; height: 66px; padding: 8px; border: 0; border-top: 1px solid var(--line); } .brand,.legend { display: none; } nav { grid-template-columns: repeat(4,1fr); gap: 4px; } nav button:nth-child(n+5) { display: none; } nav button { min-height: 49px; padding: 0 4px; text-align: center; font-size: 11px; } .topbar { padding: 0 14px; } main { padding: 20px 12px 88px; } .hero { align-items: start; } .summary { display: none; } .timeline-panel { overflow-x: auto; } .controls,.lane-head,.day { min-width: 720px; } }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <div class="brand"><div class="mark">D</div><div><strong>Due Good</strong><span>Marymount</span></div></div>
+      <nav aria-label="Primary"><button class="active">Timeline</button><button>Grades</button><button>Inbox</button><button>Done</button><button>Courses</button><button>Library</button><button>Activity</button><button>More</button></nav>
+      <div class="legend"><p class="label">Course colors</p><div class="legend-row" style="--course:var(--it530)"><i class="dot"></i>IT 530</div><div class="legend-row" style="--course:var(--it540)"><i class="dot"></i>IT 540</div><div class="legend-row" style="--course:var(--it570)"><i class="dot"></i>IT 570</div></div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar"><span><strong>Current term</strong> · 3 courses</span><div class="top-actions"><span id="sync">Updated Sep 21 at 8:27 AM</span><button class="refresh" id="refresh">Refresh</button></div></header>
+      <main>
+        <header class="hero"><div><p class="eyebrow">Sep 21 – Dec 3</p><h1>Timeline</h1><p>Calendar spacing stays visual. The list keeps every unfinished assignment easy to scan.</p></div><div class="summary"><span>Next deadline</span><strong>6d 15h</strong></div></header>
+        <div class="layout">
+          <section class="timeline-panel" aria-label="Calendar timeline">
+            <div class="controls"><div class="segments"><button class="active">All events</button><button>Deadlines only</button></div><div class="segments"><button class="active">All courses</button><button>IT 530</button><button>IT 540</button><button>IT 570</button></div></div>
+            <div class="lane-head"><div>74 days</div><div style="--course:var(--it530)"><i class="dot"></i>IT 530</div><div style="--course:var(--it540)"><i class="dot"></i>IT 540</div><div style="--course:var(--it570)"><i class="dot"></i>IT 570</div></div>
+            <div class="day today"><div class="date"><strong>Sep 21</strong><span>Mon</span><b class="today-tag">Today</b></div><div class="lane" data-course="IT530"></div><div class="lane" data-course="IT540"></div><div class="lane" data-course="IT570"><article class="card" style="--course:var(--it570)"><small>IT 570 · Class · 6:45 PM</small><strong>Privacy and sector compliance application</strong></article></div></div>
+            <div class="day"><div class="date"><strong>Sep 22</strong><span>Tue</span></div><div class="lane" data-course="IT530"><article class="card" style="--course:var(--it530)"><small>IT 530 · Class · 6:45 PM</small><strong>Week 5 class</strong></article></div><div class="lane" data-course="IT540"></div><div class="lane" data-course="IT570"></div></div>
+            <div class="day"><div class="date"><strong>Sep 23</strong><span>Wed</span></div><div class="lane" data-course="IT530"><span class="open">Open day</span></div><div class="lane" data-course="IT540"></div><div class="lane" data-course="IT570"></div></div>
+            <div class="day"><div class="date"><strong>Sep 24</strong><span>Thu</span></div><div class="lane" data-course="IT530"></div><div class="lane" data-course="IT540"><article class="card" style="--course:var(--it540)"><small>IT 540 · Class · 6:45 PM</small><strong>Module 5</strong></article></div><div class="lane" data-course="IT570"></div></div>
+            <div class="day"><div class="date"><strong>Sep 25</strong><span>Fri</span></div><div class="lane" data-course="IT530"><span class="open">Open day</span></div><div class="lane" data-course="IT540"></div><div class="lane" data-course="IT570"></div></div>
+          </section>
+          <aside class="upcoming" aria-label="Due soon and unread Canvas messages">
+            <div class="upcoming-head"><p class="label">Right now</p><h2>At a glance</h2><p>Upcoming work and messages needing attention</p></div>
+            <div class="rail-scroll">
+              <div class="rail-section-head"><strong>Due soon · <span id="remaining">6</span></strong><button type="button" id="show-all">All assignments</button></div>
+              <div class="assignment-list" id="assignment-list"></div>
+              <div class="rail-section-head"><strong>Hot inbox</strong><span class="hot-count" id="unread-count">2</span></div>
+              <div class="message-list" id="message-list"></div>
+            </div>
+          </aside>
+        </div>
+      </main>
+    </div>
+  </div>
+  <div class="toast" id="toast" role="status"></div>
+  <script>
+    const assignments = [
+      { id:'a1', course:'IT570', day:'28', month:'Sep', title:'Lab 2: Privacy Impact & Regulatory Compliance Readiness Assessment', due:'Sun · 11:59 PM', countdown:'6d 15h', grade:'100 pts' },
+      { id:'a2', course:'IT530', day:'29', month:'Sep', title:'Lab 30 Report', due:'Mon · 11:59 PM', countdown:'7d 15h', grade:'10 pts' },
+      { id:'a3', course:'IT540', day:'01', month:'Oct', title:'Module 3 · Discussion #3', due:'Thu · 11:59 PM', countdown:'10d 15h', grade:'100 pts' },
+      { id:'a4', course:'IT570', day:'04', month:'Oct', title:'Discussion 1 · Legal Does Not Always Mean Ethical', due:'Sun · 11:59 PM', countdown:'13d 15h', grade:'10 pts' },
+      { id:'a5', course:'IT530', day:'06', month:'Oct', title:'Assignment 4', due:'Tue · 11:59 PM', countdown:'15d 15h', grade:'10 pts' },
+      { id:'a6', course:'IT540', day:'08', month:'Oct', title:'Module 4 · Discussion 4', due:'Thu · 11:59 PM', countdown:'17d 15h', grade:'100 pts' }
+    ];
+    const messages = [
+      { id:'m1', course:'IT570', sender:'Course instructor · Today, 10:18 AM', subject:'Reading list updated', preview:'One case was replaced for the next seminar. Review the new reading before class.', unread:true },
+      { id:'m2', course:'IT530', sender:'Course instructor · Yesterday, 4:06 PM', subject:'Lab feedback available', preview:'Feedback for the latest lab is now available in Canvas.', unread:true },
+      { id:'m3', course:'IT540', sender:'Canvas · Sep 18, 8:00 AM', subject:'Module 5 published', preview:'New module content and supporting files are available.', unread:false }
+    ];
+    let showAll = false;
+    const colors = { IT530:'var(--it530)', IT540:'var(--it540)', IT570:'var(--it570)' };
+    const esc = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    function renderAssignments(){
+      const visible = (showAll ? assignments : assignments.slice(0,4));
+      document.getElementById('assignment-list').innerHTML = visible.map(item => `<article class="assignment ${item.done?'done':''}" style="--course:${colors[item.course]}"><div class="date-block"><strong>${esc(item.day)}</strong><span>${esc(item.month)}</span></div><div><span class="course">${esc(item.course)}</span><strong class="assignment-title">${esc(item.title)}</strong><div class="meta"><span>${esc(item.due)}</span><span>${esc(item.grade)}</span><span class="countdown">${esc(item.countdown)}</span></div></div><input class="done-toggle" type="checkbox" aria-label="Mark ${esc(item.title)} done" data-id="${esc(item.id)}" ${item.done?'checked':''}></article>`).join('') || '<div class="empty">Everything is done.</div>';
+      document.getElementById('remaining').textContent = assignments.filter(item => !item.done).length;
+      document.getElementById('show-all').textContent = showAll ? 'Show less' : 'All assignments';
+    }
+    function renderMessages(){
+      document.getElementById('message-list').innerHTML = messages.map(item => `<button class="message ${item.unread?'':'read'}" type="button" data-message="${esc(item.id)}" style="--course:${colors[item.course]}"><i class="message-dot"></i><span><strong>${esc(item.subject)}</strong><span>${esc(item.course)} · ${esc(item.sender)}</span><small>${esc(item.preview)}</small></span></button>`).join('');
+      document.getElementById('unread-count').textContent = messages.filter(item => item.unread).length;
+    }
+    function showToast(text){ const toast=document.getElementById('toast'); toast.textContent=text; toast.classList.add('show'); clearTimeout(showToast.timer); showToast.timer=setTimeout(()=>toast.classList.remove('show'),1400); }
+    document.addEventListener('change', event => { if(!event.target.matches('[data-id]')) return; const item=assignments.find(candidate=>candidate.id===event.target.dataset.id); item.done=event.target.checked; renderAssignments(); showToast(item.done?'Marked done':'Moved back to upcoming'); });
+    document.addEventListener('click', event => { const row=event.target.closest('[data-message]'); if(!row) return; const item=messages.find(candidate=>candidate.id===row.dataset.message); item.unread=false; renderMessages(); showToast(`Opened: ${item.subject}`); });
+    document.getElementById('show-all').addEventListener('click', () => { showAll=!showAll; renderAssignments(); });
+    document.getElementById('refresh').addEventListener('click', event => { event.currentTarget.disabled=true; event.currentTarget.textContent='Refreshing…'; document.getElementById('sync').textContent='Checking Canvas'; setTimeout(()=>{ event.currentTarget.disabled=false; event.currentTarget.textContent='Refresh'; document.getElementById('sync').textContent='Updated just now'; showToast('Coursework refreshed'); },850); });
+    renderAssignments(); renderMessages();
+  </script>
+</body>
+</html>

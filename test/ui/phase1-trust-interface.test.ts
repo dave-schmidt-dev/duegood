@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AssignmentListItem } from "../../src/db/types";
+import { readCsrfToken, readLocalCsrfToken } from "../../src/ui/csrf";
 import { assignmentDetail, submissionStateText } from "../../src/ui/components/assignment-detail";
 import { assignmentRow, formatDueAt } from "../../src/ui/components/assignment-row";
 import { completionToggle } from "../../src/ui/components/completion-toggle";
@@ -42,6 +43,38 @@ const BASE_ITEM: AssignmentListItem = {
 };
 
 const NOOP_HANDLERS = { onToggleDetail: () => undefined, onToggleCompletion: () => undefined };
+
+function readCsrfTokenWithCookie(cookie: string): string | undefined {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "document");
+  Object.defineProperty(globalThis, "document", { configurable: true, value: { cookie } });
+  try {
+    return readCsrfToken();
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "document", previous);
+    else Reflect.deleteProperty(globalThis, "document");
+  }
+}
+
+describe("csrf.ts — local and cloud browser cookie contract", () => {
+  it("reads the non-Secure local cookie used by plain HTTP launches", () => {
+    expect(readCsrfTokenWithCookie("duegood_local_csrf=local-token")).toBe("local-token");
+  });
+
+  it("keeps the cloud __Host cookie as the preferred token when both are present", () => {
+    expect(readCsrfTokenWithCookie("__Host-duegood_csrf=cloud-token; duegood_local_csrf=local-token")).toBe("cloud-token");
+  });
+
+  it("can explicitly read the renewed local token when both cookie names are present", () => {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "document");
+    Object.defineProperty(globalThis, "document", { configurable: true, value: { cookie: "__Host-duegood_csrf=cloud-token; duegood_local_csrf=local-token" } });
+    try {
+      expect(readLocalCsrfToken()).toBe("local-token");
+    } finally {
+      if (previous) Object.defineProperty(globalThis, "document", previous);
+      else Reflect.deleteProperty(globalThis, "document");
+    }
+  });
+});
 
 describe("routes.ts — phase-1 navigation inventory", () => {
   it("contains only This Week — every other destination is deferred", () => {
@@ -247,14 +280,22 @@ describe("pages/this-week.ts — page composition", () => {
     assignments: [BASE_ITEM],
     assignmentUi: new Map(),
     tokenConnect: EMPTY_TOKEN_CONNECT,
+    localRefresh: "hidden",
   };
-  const handlers: ThisWeekPageHandlers = { ...NOOP_HANDLERS, ...NOOP_TOKEN_HANDLERS };
+  const handlers: ThisWeekPageHandlers = { ...NOOP_HANDLERS, ...NOOP_TOKEN_HANDLERS, onRefresh: () => undefined };
 
   it("renders the This Week heading and nav", () => {
     const page = renderThisWeekPage(baseState, handlers);
     const heading = findAll(page, (d) => d.tag === "h1")[0];
     expect(heading?.text).toBe("This Week");
     expect(findAll(page, (d) => d.tag === "nav")).toHaveLength(1);
+  });
+
+  it("shows the local refresh control only when the local source enables it", () => {
+    const local = renderThisWeekPage({ ...baseState, localRefresh: "idle" }, handlers);
+    expect(findAll(local, (d) => d.tag === "button" && d.text === "Refresh coursework")).toHaveLength(1);
+    const cloud = renderThisWeekPage(baseState, handlers);
+    expect(findAll(cloud, (d) => d.tag === "button" && d.text === "Refresh coursework")).toHaveLength(0);
   });
 
   it("shows a loading skeleton with no assignment content while loading", () => {

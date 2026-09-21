@@ -19,37 +19,34 @@ async function signInAs(context: BrowserContext, token: string): Promise<void> {
   await context.addCookies([{ name: "__Host-duegood_session", value: token, url: AUTH_TEST_ORIGIN, secure: true, httpOnly: true, sameSite: "Lax" }]);
 }
 
-test("the populated This Week route, including an expanded assignment detail, has no automated accessibility violations", async ({ page, context }) => {
+test("the populated Timeline route, including an expanded assignment detail, has no automated accessibility violations", async ({ page, context }) => {
   const fixture = await loadFixture();
   await signInAs(context, fixture.sessionToken);
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "This Week" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
 
   // Expand a detail panel before scanning — axe should still find zero violations with the
   // dl/dt/dd detail content and the aria-expanded chevron in their "open" state.
-  await page.locator(".assignment-row", { hasText: "Reading response" }).getByRole("button").click();
+  await page.locator(".event-card", { hasText: "Group project proposal" }).getByRole("button", { name: "Details" }).click();
   expect(await automaticAccessibilityViolations(page)).toEqual([]);
 });
 
-test("the disconnected recovery state emits an accessible status message with no automated accessibility violations", async ({ page, context }) => {
+test("the disconnected fallback remains truthful and accessible", async ({ page, context }) => {
   const fixture = await loadFixture();
   await signInAs(context, fixture.disconnectedSessionToken);
   await page.goto("/");
 
-  const status = page.getByRole("status");
-  await expect(status).toContainText("No Canvas connection");
-  await expect(status.getByRole("link", { name: "Connect to Canvas" })).toHaveAttribute("href", "/auth/canvas/start");
+  await page.getByRole("link", { name: "More" }).click();
+  await expect(page.getByText("No active Canvas connection.")).toBeVisible();
   expect(await automaticAccessibilityViolations(page)).toEqual([]);
 });
 
-test("the no-course-selected recovery state emits a distinct accessible status message", async ({ page, context }) => {
+test("the no-course fallback emits a distinct accessible source state", async ({ page, context }) => {
   const fixture = await loadFixture();
   await signInAs(context, fixture.noCourseSessionToken);
   await page.goto("/");
 
-  const status = page.getByRole("status");
-  await expect(status).toContainText("No course connected yet");
-  // Only the disconnected state offers the Canvas connect action (recovery-panel.ts).
-  await expect(status.getByRole("link")).toHaveCount(0);
+  await page.getByRole("link", { name: "More" }).click();
+  await expect(page.getByText("No course has been selected.")).toBeVisible();
   expect(await automaticAccessibilityViolations(page)).toEqual([]);
 });

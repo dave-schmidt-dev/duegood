@@ -6,7 +6,7 @@ import { syncStatus, type SyncStatusState } from "../components/sync-status";
 import type { ElementDescriptor } from "../dom";
 import { primaryNav } from "../routes";
 
-export interface AssignmentUiState {
+interface AssignmentUiState {
   readonly expanded: boolean;
   readonly pending: boolean;
   readonly failed: boolean;
@@ -32,6 +32,7 @@ export interface ThisWeekPageState {
   /** Only rendered when `recovery.kind === "disconnected"` and OAuth isn't configured; otherwise
    * carried but unused, same as `assignmentUi` entries for rows not currently expanded. */
   readonly tokenConnect: TokenConnectState;
+  readonly localRefresh: "hidden" | "idle" | "running" | "complete" | "failed";
 }
 
 export interface ThisWeekPageHandlers {
@@ -39,6 +40,7 @@ export interface ThisWeekPageHandlers {
   readonly onToggleCompletion: (sourceItemId: string) => void;
   readonly onTokenInput: (value: string) => void;
   readonly onTokenSubmit: () => void;
+  readonly onRefresh: () => void;
 }
 
 function skeleton(): ElementDescriptor {
@@ -95,6 +97,20 @@ export function renderThisWeekPage(state: ThisWeekPageState, handlers: ThisWeekP
         children: [
           { tag: "h1", text: "This Week" },
           statusRegion,
+          ...(state.localRefresh === "hidden" ? [] : [{
+            tag: "section",
+            attrs: { class: "local-refresh", "aria-label": "Coursework refresh" },
+            children: [
+              {
+                tag: "button",
+                attrs: { type: "button", class: "local-refresh__button", ...(state.localRefresh === "running" ? { disabled: "" } : {}) },
+                text: state.localRefresh === "running" ? "Refreshing…" : "Refresh coursework",
+                on: { click: handlers.onRefresh },
+              },
+              ...(state.localRefresh === "complete" ? [{ tag: "span", attrs: { role: "status", "aria-live": "polite" }, text: "Coursework refreshed." }] : []),
+              ...(state.localRefresh === "failed" ? [{ tag: "span", attrs: { role: "status", "aria-live": "polite", class: "local-refresh__error" }, text: "Refresh failed. Existing coursework was kept." }] : []),
+            ],
+          }]),
           {
             tag: "section",
             attrs: { "aria-label": "This week's assignments" },

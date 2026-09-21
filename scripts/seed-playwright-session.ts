@@ -33,6 +33,13 @@ function syntheticFetch(page: readonly CanvasAssignmentRaw[]): typeof fetch {
  * fixture stands in for a title an institution's Canvas instance could plausibly return. */
 export const INJECTED_MARKUP_TITLE = '<img src=x onerror="window.__xss=true">Assignment with markup in its title';
 
+function dueInDays(days: number): string {
+  const date = new Date();
+  date.setUTCHours(22, 0, 0, 0);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString();
+}
+
 /**
  * Covers the phase-1 content-model states `docs/DESIGN-SYSTEM.md` requires the This Week page to
  * render: a dated, submitted item; an explicitly-no-deadline, unsubmitted item; an item Canvas
@@ -40,10 +47,10 @@ export const INJECTED_MARKUP_TITLE = '<img src=x onerror="window.__xss=true">Ass
  * a title containing executable-looking markup, to prove it never becomes real DOM.
  */
 const FIXTURE_PAGE: CanvasAssignmentRaw[] = [
-  { id: 50001, name: "Reading response", due_at: "2026-09-20T22:00:00Z", points_possible: 10, submission: { workflow_state: "submitted" } },
+  { id: 50001, name: "Reading response", due_at: dueInDays(2), points_possible: 10, submission: { workflow_state: "submitted" } },
   { id: 50002, name: "Discussion post (no deadline)", due_at: null, points_possible: 5, submission: { workflow_state: "unsubmitted" } },
-  { id: 50003, name: "Group project proposal", due_at: "2026-09-27T22:00:00Z", points_possible: 20 },
-  { id: 50004, name: INJECTED_MARKUP_TITLE, due_at: "2026-09-25T22:00:00Z", points_possible: 10, submission: { workflow_state: "unsubmitted" } },
+  { id: 50003, name: "Group project proposal", due_at: dueInDays(6), points_possible: 20 },
+  { id: 50004, name: INJECTED_MARKUP_TITLE, due_at: dueInDays(4), points_possible: 10, submission: { workflow_state: "unsubmitted" } },
 ];
 
 async function main(): Promise<void> {

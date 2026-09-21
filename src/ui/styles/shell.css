@@ -1,123 +1,63 @@
-/* Responsive shell per docs/DESIGN-SYSTEM.md's Responsive shell section: desktop >=1024px gets a
-   persistent sidebar, mobile <768px gets a fixed bottom tab bar, tablet keeps the sidebar. Same
-   nav markup at every breakpoint (`src/ui/routes.ts`'s `primaryNav`) — only this stylesheet
-   repositions it. */
-* {
-  box-sizing: border-box;
-}
-
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
 body {
   margin: 0;
   min-height: 100vh;
-  background: var(--color-bg);
-  color: var(--color-text);
-  font-family: var(--font-body);
+  color: var(--ink);
+  background: linear-gradient(90deg, transparent 0 31px, rgba(210,173,114,.09) 32px, transparent 33px), var(--paper);
+  font: 15px/1.45 var(--body);
 }
-
-h1,
-h2,
-h3 {
-  font-family: var(--font-heading);
-  color: var(--color-primary);
+button, input { color: inherit; font: inherit; }
+button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
+h1, h2, h3 { color: var(--navy); font-family: var(--display); }
+.skip-link { position: absolute; left: -999px; top: 0; }
+.skip-link:focus { left: 1rem; top: 1rem; z-index: 30; padding: .75rem; color: var(--navy); background: var(--surface); }
+.app { min-height: 100vh; display: grid; grid-template-columns: 88px minmax(0, 1fr); }
+.sidebar { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; padding: 16px 8px; color: var(--ink); background: var(--navy-deep); }
+.brand { display: flex; justify-content: center; margin: 0 0 20px; }
+.brand-mark { position: relative; display: grid; place-items: center; width: 38px; height: 38px; overflow: hidden; border: 1px solid rgba(255,255,255,.28); border-radius: 12px; color: #1c2834; background: var(--gold); font: 700 19px var(--display); }
+.brand-initials { display: grid; place-items: center; width: 100%; height: 100%; }
+.brand-avatar { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.brand-avatar[hidden] { display: none; }
+.brand-name, .brand-note { display: none; }
+.nav { display: grid; gap: 6px; }
+.nav a { width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: 56px; padding: 5px 2px; border-radius: 10px; color: #c3d0da; text-decoration: none; font-size: 10px; text-align: center; }
+.nav a.active { color: #fff; background: rgba(255,255,255,.105); }
+.nav-icon { width: 19px; color: var(--gold); font: 15px var(--utility); text-align: center; }
+.course-legend { display: none; margin-top: auto; padding: 18px 8px 4px; border-top: 1px solid rgba(255,255,255,.14); }
+.course-legend h2 { margin: 0 0 12px; color: #a9bac7; font: 10px var(--utility); letter-spacing: .12em; text-transform: uppercase; }
+.legend-row { display: flex; gap: 9px; align-items: center; margin: 9px 0; color: #dce6ec; font-size: 12px; }
+.legend-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--dot); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dot) 20%, transparent); }
+.workspace { min-width: 0; }
+.topbar { min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 0 clamp(24px, 4.5vw, 68px); border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--paper) 88%, transparent); backdrop-filter: blur(12px); }
+.term-label { color: var(--muted); font-size: 13px; }
+.term-label strong { color: var(--ink); }
+.top-actions { display: flex; align-items: center; gap: 10px; }
+.sync-note { color: var(--muted); font-size: 12px; }
+main { width: 100%; margin: 0; padding: 24px clamp(20px, 3.5vw, 48px) 72px; }
+.shell { min-height: 100vh; display: grid; place-items: center; }
+.panel { width: min(700px, calc(100% - 2rem)); padding: 2rem; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); }
+.primary-nav { display: none; }
+@media (max-width: 860px) {
+  body { background: var(--paper); }
+  .app { display: flex; flex-direction: column; }
+  .sidebar { position: fixed; z-index: 20; top: auto; bottom: 0; left: 0; right: 0; order: 2; height: auto; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
+  .brand, .course-legend { display: none; }
+  .nav { width: 100%; grid-template-columns: repeat(8, minmax(48px, 1fr)); overflow-x: auto; overscroll-behavior-x: contain; }
+  .nav a { min-height: 48px; padding: 4px; font-size: 10px; }
+  .topbar { padding: 0 18px; }
+  .sync-note { display: none; }
+  main { padding: 20px 12px 86px; }
 }
-
-.skip-link {
-  position: absolute;
-  left: -999px;
-  top: 0;
+@media (min-width: 1180px) {
+  .app { grid-template-columns: 236px minmax(0, 1fr); }
+  .sidebar { padding: 24px 18px; }
+  main { padding-right: 30px; padding-left: 30px; }
+  .brand { justify-content: flex-start; align-items: center; gap: 11px; }
+  .brand-name, .brand-note, .course-legend { display: block; }
+  .nav a { flex-direction: row; justify-content: flex-start; gap: 12px; min-height: 44px; padding: 0 12px; font-size: 13px; text-align: left; }
 }
-
-.skip-link:focus {
-  left: 1rem;
-  top: 1rem;
-  background: var(--color-surface);
-  color: var(--color-primary);
-  padding: 0.75rem;
-  outline: 3px solid var(--color-classic-gold);
-  z-index: 10;
-}
-
-.shell {
-  min-height: 100vh;
-  display: grid;
-  grid-template-columns: 1fr;
-}
-
-.panel {
-  padding: clamp(1rem, 4vw, 2rem);
-  padding-bottom: 5rem; /* clears the fixed bottom tab bar on mobile */
-}
-
-/* Used only by the pre-auth disabled shell (src/ui/app.ts's renderDisabledShell). */
-.eyebrow {
-  color: var(--color-sage);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.primary-nav ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  gap: 0.5rem;
-}
-
-.primary-nav a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 0 1rem;
-  color: var(--color-text-muted);
-  text-decoration: none;
-  font-weight: 600;
-}
-
-.primary-nav a[aria-current="page"] {
-  color: var(--color-primary);
-}
-
-.primary-nav a:focus-visible {
-  outline: 3px solid var(--color-classic-gold);
-  outline-offset: 2px;
-}
-
-/* Mobile (<768px): fixed bottom tab bar, 5-slot max (phase 1 has a single tab). */
-@media (max-width: 767px) {
-  .primary-nav {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: var(--color-surface);
-    border-top: 1px solid var(--color-border);
-  }
-
-  .primary-nav ul {
-    justify-content: space-around;
-  }
-}
-
-/* Tablet/desktop (>=768px): sidebar. */
-@media (min-width: 768px) {
-  .shell {
-    grid-template-columns: 16rem 1fr;
-  }
-
-  .primary-nav {
-    border-right: 1px solid var(--color-border);
-    padding: 1.5rem 1rem;
-  }
-
-  .primary-nav ul {
-    flex-direction: column;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  * {
-    animation-duration: 0.001ms !important;
-    transition-duration: 0.001ms !important;
-  }
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }

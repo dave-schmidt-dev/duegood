@@ -35,18 +35,16 @@ test.beforeEach(async ({ context }) => {
  */
 test("persists a completion toggle across reload, and recovers honestly from an injected mutation failure", async ({ page }) => {
   await page.goto("/");
-  const row = page.locator(".assignment-row", { hasText: "Group project proposal" });
-  const checkbox = row.getByRole("checkbox");
-  await expect(checkbox).toBeVisible();
-
-  const before = await checkbox.isChecked();
-  await checkbox.click();
-  await expect(checkbox).toBeChecked({ checked: !before });
+  const row = page.locator(".event-card", { hasText: "Group project proposal" });
+  await row.getByRole("button", { name: "Details" }).click();
+  await row.getByRole("button", { name: "Mark complete" }).click();
+  await page.getByRole("link", { name: "Done" }).click();
+  await expect(page.locator(".completed-row", { hasText: "Group project proposal" })).toBeVisible();
 
   await page.reload();
-  const reloadedRow = page.locator(".assignment-row", { hasText: "Group project proposal" });
-  const reloadedCheckbox = reloadedRow.getByRole("checkbox");
-  await expect(reloadedCheckbox).toBeChecked({ checked: !before });
+  await page.getByRole("link", { name: "Done" }).click();
+  const reloadedRow = page.locator(".completed-row", { hasText: "Group project proposal" });
+  await expect(reloadedRow).toBeVisible();
 
   let interceptedOnce = false;
   await page.route("**/api/source-items/*/completion", async (route) => {
@@ -58,13 +56,9 @@ test("persists a completion toggle across reload, and recovers honestly from an 
     await route.continue();
   });
 
-  const persisted = !before;
-  await reloadedCheckbox.click();
-  await expect(reloadedRow.getByRole("status")).toContainText(/retry/i);
-  // Reverted to the last known-good (persisted) value — never left "stuck" on the optimistic one.
-  await expect(reloadedCheckbox).toBeChecked({ checked: persisted });
-
-  await reloadedRow.getByRole("button", { name: "Retry" }).click();
-  await expect(reloadedCheckbox).toBeChecked({ checked: !persisted });
-  await expect(reloadedRow.getByRole("status")).toHaveCount(0);
+  await reloadedRow.getByRole("button", { name: "Mark not done" }).click();
+  await expect(reloadedRow.getByRole("status")).toContainText(/Could not save/i);
+  await expect(reloadedRow).toBeVisible();
+  await reloadedRow.getByRole("button", { name: "Mark not done" }).click();
+  await expect(reloadedRow).toHaveCount(0);
 });

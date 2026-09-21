@@ -1,0 +1,172 @@
+{
+  "schema": 1,
+  "generated": "2030-01-08T12:00:00Z",
+  "source": "synthetic-contract",
+  "timezone": "Etc/UTC",
+  "term": "Synthetic Term",
+  "sync": {
+    "status": "complete",
+    "startedAt": "2030-01-08T11:59:00Z",
+    "completedAt": "2030-01-08T12:00:00Z",
+    "syntheticExtension": {
+      "preserve": true
+    }
+  },
+  "courses": [
+    {
+      "key": "course-a",
+      "code": "SYN-101",
+      "title": "Synthetic Foundations",
+      "color": "#3b6f8f",
+      "folder": "synthetic-course-a",
+      "instructor": "Example Instructor",
+      "meets": "Invented schedule",
+      "canvas": true,
+      "canvasCourseId": 900001,
+      "weights": {
+        "assignments": 1
+      },
+      "flags": [
+        "synthetic"
+      ],
+      "ignoredCanvasAssignmentIds": [
+        990001
+      ],
+      "syntheticCourseExtension": "preserve-course-a"
+    },
+    {
+      "key": "course-b",
+      "code": "SYN-202",
+      "title": "Synthetic Practice",
+      "color": "#805f33",
+      "folder": "synthetic-course-b",
+      "instructor": "Example Instructor",
+      "meets": "Invented schedule",
+      "canvas": false,
+      "canvasCourseId": null,
+      "weights": {},
+      "flags": [
+        "synthetic"
+      ],
+      "ignoredCanvasAssignmentIds": [],
+      "syntheticCourseExtension": "preserve-course-b"
+    }
+  ],
+  "items": [
+    {
+      "id": "course-a-canvas-910001",
+      "course": "course-a",
+      "kind": "assignment",
+      "title": "Synthetic Submitted Work",
+      "at": "2030-01-10T23:59",
+      "points": 20,
+      "source": "canvas",
+      "confidence": "confirmed",
+      "flags": [
+        "synthetic"
+      ],
+      "detail": "Invented assignment detail.",
+      "url": "https://canvas.example.invalid/courses/900001/assignments/910001",
+      "canvasId": 910001,
+      "submissionStatus": "graded",
+      "grade": "18",
+      "score": 18,
+      "submittedAt": "2030-01-09T15:00:00Z",
+      "gradedAt": "2030-01-09T18:00:00Z",
+      "done": true,
+      "doneAt": "2030-01-09T15:05:00Z",
+      "keepTitle": false,
+      "syntheticItemExtension": {
+        "preserve": "graded-item"
+      }
+    },
+    {
+      "id": "course-a-canvas-910002",
+      "course": "course-a",
+      "kind": "assignment",
+      "title": "Synthetic Pending Work",
+      "at": "2030-01-17T23:59",
+      "points": 10,
+      "source": "canvas",
+      "confidence": "confirmed",
+      "flags": [],
+      "detail": "Invented pending detail.",
+      "url": "https://canvas.example.invalid/courses/900001/assignments/910002",
+      "canvasId": 910002,
+      "submissionStatus": "pending",
+      "grade": null,
+      "score": null,
+      "submittedAt": "2030-01-16T15:00:00Z",
+      "gradedAt": null,
+      "done": false,
+      "doneAt": null,
+      "keepTitle": true,
+      "syntheticItemExtension": {
+        "preserve": "pending-item"
+      }
+    },
+    {
+      "id": "course-b-manual-1",
+      "course": "course-b",
+      "kind": "milestone",
+      "title": "Synthetic Undated Milestone",
+      "at": null,
+      "points": null,
+      "source": "manual",
+      "confidence": "planned",
+      "flags": [
+        "synthetic"
+      ],
+      "detail": "Invented undated context.",
+      "url": null,
+      "canvasId": null,
+      "submissionStatus": null,
+      "grade": null,
+      "score": null,
+      "submittedAt": null,
+      "gradedAt": null,
+      "done": false,
+      "doneAt": null,
+      "keepTitle": false,
+      "syntheticItemExtension": {
+        "preserve": "manual-item"
+      }
+    }
+  ],
+  "archivedForecastItems": [
+    {
+      "id": "course-a-canvas-919999",
+      "course": "course-a",
+      "kind": "assignment",
+      "title": "Synthetic Archived Work",
+      "at": "2030-01-03T23:59",
+      "points": 5,
+      "source": "canvas",
+      "confidence": "confirmed",
+      "flags": [
+        "synthetic",
+        "archived"
+      ],
+      "detail": "Invented archived detail.",
+      "url": "https://canvas.example.invalid/courses/900001/assignments/919999",
+      "canvasId": 919999,
+      "submissionStatus": null,
+      "grade": null,
+      "score": null,
+      "submittedAt": null,
+      "gradedAt": null,
+      "done": false,
+      "doneAt": null,
+      "keepTitle": false,
+      "syntheticItemExtension": {
+        "preserve": "archived-item"
+      }
+    }
+  ],
+  "syntheticTopLevelExtension": {
+    "preserve": [
+      "first",
+      "second"
+    ]
+  }
+}

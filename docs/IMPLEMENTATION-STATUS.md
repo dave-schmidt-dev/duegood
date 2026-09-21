@@ -43,8 +43,8 @@ lists — so this document cannot go stale next to the suite without the check c
       populated route and two real recovery states.
 
 Test counts as of this section (verified by `check:implementation-status` against
-`test/test-membership.json`'s array lengths, not hand-maintained): **35** worker test files
-(`npm run test:worker`), **1** UI contract test file (`npm run test:ui`), **9** browser test files
+`test/test-membership.json`'s array lengths, not hand-maintained): **37** worker test files
+(`npm run test:worker`), **2** UI contract test files (`npm run test:ui`), **10** browser test files
 (`npm run test:browser`, run once as part of `npm run test:all`).
 
 ### Post-phase-1: Canvas Personal Access Token connect path
@@ -65,12 +65,8 @@ single-owner path rather than general onboarding.
 
 - [ ] Cloudflare account creation, resource provisioning, and a live deployment. (Deliberately left
       unchecked — `check:implementation-status` hard-fails if this box is ever checked, since none
-      of these four gates may be claimed done by an agent. As a factual note, not a completed-gate
-      claim: David personally authenticated `wrangler` on 2026-09-16 and, with the repository's
-      help executing his own account's commands, provisioned a production D1 database, deployed
-      the Worker to `https://duegood.zerodelta.workers.dev` with `AUTH_MODE=disabled`, and set the
-      `TOKEN_ENCRYPTION_ACTIVE_KEY_B64` secret. `AUTH_MODE` stays `disabled` in production until
-      David decides to enable the owner-only PAT connect path.)
+      of these four gates may be claimed done by an agent. This local replacement candidate has no
+      current deployment evidence and leaves the cloud Worker offline.)
 - [ ] Marymount Canvas OAuth developer-key submission and approval.
 - [ ] Any live call to a real Canvas instance (every import in this repository's tests uses a
       synthetic `fetchImpl`).
@@ -82,3 +78,72 @@ These four remain exactly as scoped in `docs/IMPLEMENTATION-PLAN.md`'s evidence-
 every phase — none of them is a phase-1-specific gap, and none is authorized to be marked done by
 an agent. Cloudflare account setup and Marymount OAuth approval are the repository owner's own
 actions.
+
+## Local Marymount replacement
+
+### Implemented and verified
+
+- [x] Attended read-only inspection captured stable IDs, completion fields,
+      writer inventory, refresh consumer, server boundary, rollback disposition,
+      and the complete public field vocabulary without retaining private values.
+- [x] `fixtures/local-coursework-contract.json` provides a wholly invented
+      contract fixture with completion, submission, archive, null, ordering, and
+      unknown-field preservation cases.
+- [x] `CourseworkStore` reads the legacy document, validates unique identities,
+      projects local assignments, checks the exact-byte SHA-256 before mutation,
+      preserves unknown fields, and atomically replaces the document after file
+      and parent-directory synchronization.
+- [x] The required-port loopback server serves the existing Due Good interface,
+      rejects hostile Host/Origin/fetch-site requests, uses a launch-scoped CSRF
+      token, bounds request bodies/static paths, and supports read-only launches.
+- [x] The local UI renders assignments and personal completion, plus the fixed
+      `canvas-course-refresh` control only when explicitly enabled. The control
+      was rendered but not invoked against Canvas.
+- [x] **38** worker test files, **2** UI contract test files, **10** browser test
+      files, 37 local Node tests, a built-server smoke, the public-tree scan, and
+      private-document read-only compatibility pass.
+
+### Daily dashboard expansion
+
+- [x] The approved eight-page interface is implemented: Timeline, Grades, Inbox,
+      Done, Courses, Library, Activity, and More.
+- [x] Timeline days use consecutive visible slots, stable color-coded course lanes,
+      and one continuous page scroll; multiple same-day items expand their day
+      without nested lane scrolling.
+- [x] Dark mode is the default regardless of operating-system preference. Every
+      deadline card exposes a direct `Done` checkbox; discussion cards visibly split
+      independently persisted `Main post` and `Replies` requirements from overall
+      completion.
+- [x] Grades projects Canvas-reported score, points, grade, grading time, assignment
+      groups, and group weights from the private source. It is read-only and shows
+      separate weighted indicators for graded work and whole-course progress while
+      explicitly declining to label either indicator an official final grade.
+- [x] The dashboard projects 100 dated items across three active courses, 187
+      Canvas resources, and 17 refresh-history entries from the existing private
+      local export without copying private content into this repository.
+- [x] Canvas conversation normalization and bounded read-only synchronization are
+      implemented and tested with synthetic fixtures. After explicit owner approval,
+      the protected live sync completed with 10 threads, zero rejected records, an
+      owner-only local snapshot, and no Canvas message mutation.
+- [x] The private Inbox snapshot now retains all 21 messages across those 10 threads.
+      No thread or message reached its explicit safety limit, ordinary URLs remain
+      visible as inert text, and the mode-`600` file remains outside Git.
+- [x] The owner-approved Canvas profile picture is imported read-only through the
+      fixed broker, stored outside Git with mode `600`, and served to the sidebar
+      only through a validated loopback path with initials fallback.
+- [x] The candidate-current walkthrough in
+      `docs/2026-09-21-DASHBOARD-WALKTHROUGH.md` covers every route, control,
+      recovery state, mobile layout, and system-owned file handoff.
+
+### Remaining cutover gates
+
+- [x] Rehearse refresh supervision success, failure, progress bounding, and
+      process-group timeout without invoking the real Canvas consumer.
+- [x] Prove single-port exclusion, the exact candidate full suite, a persistent
+      local service, an intact separate funding service, and a one-command dated
+      rollback launcher.
+- [x] Replace the private coursework launcher and open Due Good against the
+      private document. The launch itself performed no authoritative write.
+- [x] Owner acceptance followed use of the live page, persisted local progress,
+      and real Canvas refresh history. This authorizes the attended repository
+      publication checkpoint; it does not authorize cloud deployment.

@@ -13,7 +13,7 @@ async function loadFixture(): Promise<SessionFixture> {
   return JSON.parse(raw) as SessionFixture;
 }
 
-test.describe("This Week — populated route", () => {
+test.describe("coursework dashboard — populated legacy API fallback", () => {
   test.beforeEach(async ({ context }) => {
     const fixture = await loadFixture();
     await context.addCookies([
@@ -21,25 +21,23 @@ test.describe("This Week — populated route", () => {
     ]);
   });
 
-  test("renders the heading, single-item nav, truthful sync status, and every seeded assignment", async ({ page }) => {
+  test("renders the approved navigation, timeline lanes, and every dated seeded assignment", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByRole("heading", { level: 1, name: "This Week" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
 
     const nav = page.getByRole("navigation", { name: "Primary" });
-    await expect(nav.getByRole("link")).toHaveCount(1);
-    await expect(nav.getByRole("link", { name: "This Week" })).toHaveAttribute("aria-current", "page");
+    await expect(nav.getByRole("link")).toHaveCount(8);
+    await expect(nav.getByRole("link", { name: "Timeline" })).toHaveAttribute("aria-current", "page");
 
-    await expect(page.getByRole("status").first()).toContainText(/Connected & synced/);
-
-    await expect(page.getByText("Reading response")).toBeVisible();
-    await expect(page.getByText("Discussion post (no deadline)")).toBeVisible();
-    await expect(page.getByText("Group project proposal")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Reading response" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Group project proposal" })).toBeVisible();
+    await expect(page.locator(".day-slot").first()).toBeVisible();
   });
 
   test("renders an injected-markup title as literal text, never as executable markup", async ({ page }) => {
     await page.goto("/");
     const injectedTitle = INJECTED_MARKUP_TITLE;
-    const row = page.locator(".assignment-row", { hasText: injectedTitle });
+    const row = page.locator(".event-card", { hasText: injectedTitle });
     await expect(row).toBeVisible();
 
     // The whole raw string — including the literal "<img..." characters — must appear as text
@@ -50,18 +48,14 @@ test.describe("This Week — populated route", () => {
     expect(xssFlag).toBeUndefined();
   });
 
-  test("expands an assignment's detail to show its due date and submission state distinctly", async ({ page }) => {
+  test("expands an assignment detail without exposing mutation controls until requested", async ({ page }) => {
     await page.goto("/");
-    const row = page.locator(".assignment-row", { hasText: "Reading response" });
-    const chevron = row.getByRole("button");
+    const row = page.locator(".event-card", { hasText: "Reading response" });
+    const chevron = row.getByRole("button", { name: "Details" });
     await expect(chevron).toHaveAttribute("aria-expanded", "false");
 
     await chevron.click();
     await expect(chevron).toHaveAttribute("aria-expanded", "true");
-    await expect(row).toContainText("Submitted");
-
-    const unknownRow = page.locator(".assignment-row", { hasText: "Group project proposal" });
-    await unknownRow.getByRole("button").click();
-    await expect(unknownRow).toContainText("Submission status unknown");
+    await expect(row.getByRole("button", { name: /Mark/ })).toBeVisible();
   });
 });
