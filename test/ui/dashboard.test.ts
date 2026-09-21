@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { dashboardEventKind, parseDashboard, postMutation } from "../../src/ui/app";
 import type { ElementDescriptor } from "../../src/ui/dom";
-import { countdownText, gradeProgress, renderDashboard, type DashboardData, type DashboardEvent, type DashboardHandlers, type DashboardState } from "../../src/ui/pages/dashboard";
+import { copyTextToClipboard, countdownText, formatAssignmentCopyText, gradeProgress, renderDashboard, type DashboardData, type DashboardEvent, type DashboardHandlers, type DashboardState } from "../../src/ui/pages/dashboard";
 import { DASHBOARD_ROUTES } from "../../src/ui/routes";
 
 function findAll(descriptor: ElementDescriptor, predicate: (item: ElementDescriptor) => boolean): ElementDescriptor[] {
@@ -36,7 +36,7 @@ const DATA: DashboardData = {
 };
 
 const handlers: DashboardHandlers = {
-  onNavigate: vi.fn(), onEventMode: vi.fn(), onCourseFilter: vi.fn(), onGradeCourseFilter: vi.fn(), onGradeMode: vi.fn(), onResourceFilter: vi.fn(), onToggleEvent: vi.fn(), onToggleCompletion: vi.fn(), onToggleDiscussion: vi.fn(), onSelectConversation: vi.fn(), onSelectRefresh: vi.fn(), onRefresh: vi.fn(),
+  onNavigate: vi.fn(), onEventMode: vi.fn(), onCourseFilter: vi.fn(), onGradeCourseFilter: vi.fn(), onGradeMode: vi.fn(), onResourceFilter: vi.fn(), onToggleEvent: vi.fn(), onToggleCompletion: vi.fn(), onToggleDiscussion: vi.fn(), onSelectConversation: vi.fn(), onSelectRefresh: vi.fn(), onRefresh: vi.fn(), onCopyAssignment: vi.fn(),
 };
 function state(page: DashboardState["page"]): DashboardState {
   return { page, loading: false, data: DATA, now: NOW, eventMode: "all", courseFilter: "all", gradeCourseFilter: "all", gradeMode: "all", resourceFilter: "all", expandedEventIds: new Set(), pendingCompletionIds: new Set(), failedCompletionIds: new Set(), pendingDiscussionIds: new Set(), failedDiscussionIds: new Set(), selectedConversationId: "message", selectedRefreshId: "refresh", refreshState: "idle" };
@@ -191,6 +191,8 @@ describe("dashboard production UI contract", () => {
     expect(findAll(dashboard, (item) => item.attrs?.class === "grade-summary-groups")).toHaveLength(3);
     expect(findAll(dashboard, (item) => item.attrs?.class === "grade-summary-card__grade").map((item) => words(item).trim())).toEqual(["90% Graded work", "Unknown No numeric score", "Unknown No numeric score"]);
     expect(words(dashboard)).not.toContain("Unknown 0%");
+    const gradeCards = findAll(dashboard, (item) => item.attrs?.class === "grade-summary-card");
+    expect(gradeCards.every((card) => card.children?.at(-1)?.attrs?.class === "grade-summary-groups")).toBe(true);
     expect(findAll(dashboard, (item) => item.attrs?.["aria-pressed"] === "true")).toHaveLength(2);
     expect(findAll(dashboard, (item) => item.tag === "table")).toHaveLength(1);
     const gradedOnly = renderDashboard({ ...state("grades"), gradeMode: "graded" }, handlers);
@@ -259,5 +261,154 @@ describe("dashboard production UI contract", () => {
     const dashboard = renderDashboard({ ...state("inbox"), data: emptyData }, handlers);
     expect(words(dashboard)).toContain("Canvas conversations have not been synced yet.");
     expect(words(dashboard)).not.toContain("Instructor");
+  });
+
+  it("formats assignment copy text with clear labels, omitting unknown points or submission states", () => {
+    const textA = formatAssignmentCopyText({
+      ...DATA.events[0]!,
+      submissionState: "known_submitted",
+      detail: "Write a summary of network protocols.",
+    });
+    expect(textA).toBe([
+      "Course code: IT 530",
+      "Assignment title: Lab report",
+      "Due date/time: Sep 20, 8:00 PM",
+      "Points: 20",
+      "Canvas submission status: Submitted",
+      "Due Good completion status: Not completed",
+      "Assignment details: Write a summary of network protocols.",
+    ].join("\n"));
+
+    const textB = formatAssignmentCopyText({
+      id: "no-pts",
+      courseId: "530",
+      courseCode: "IT 530",
+      kind: "deadline",
+      title: "Reading",
+      startsAt: "2026-09-20T23:59:00-04:00",
+      completed: false,
+      points: null,
+      submissionState: "unknown",
+      detail: "",
+    });
+    expect(textB).toBe([
+      "Course code: IT 530",
+      "Assignment title: Reading",
+      "Due date/time: Sep 20, 11:59 PM",
+      "Due Good completion status: Not completed",
+      "Assignment details: No additional details were supplied.",
+    ].join("\n"));
+
+    const textDiscussion = formatAssignmentCopyText(DATA.events[3]!);
+    expect(textDiscussion).toBe([
+      "Course code: IT 570",
+      "Assignment title: Discussion board",
+      "Due date/time: Sep 25, 6:00 PM",
+      "Due Good completion status: Not completed",
+      "Main post: Completed",
+      "Replies to classmates: Not completed",
+      "Assignment details: No additional details were supplied.",
+    ].join("\n"));
+  });
+
+  it("copies via navigator.clipboard.writeText when available and falls back to textarea execCommand", async () => {
+    const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: { clipboard: { writeText: writeTextMock } },
+    });
+
+    const success = await copyTextToClipboard("Test copy text");
+    expect(success).toBe(true);
+    expect(writeTextMock).toHaveBeenCalledWith("Test copy text");
+
+    writeTextMock.mockRejectedValue(new Error("permission denied"));
+    expect(await copyTextToClipboard("Rejected text")).toBe(false);
+
+    Reflect.deleteProperty(globalThis, "navigator");
+    const appendChild = vi.fn();
+    const removeChild = vi.fn();
+    const execCommand = vi.fn().mockReturnValue(true);
+    const fakeTextarea = {
+      value: "",
+      setAttribute: vi.fn(),
+      style: {},
+      focus: vi.fn(),
+      select: vi.fn(),
+      setSelectionRange: vi.fn(),
+      parentNode: { removeChild },
+    };
+    const mockDoc = {
+      body: { appendChild, removeChild },
+      createElement: vi.fn().mockReturnValue(fakeTextarea),
+      execCommand,
+    };
+    Object.defineProperty(globalThis, "document", { configurable: true, value: mockDoc });
+
+    try {
+      const fallbackSuccess = await copyTextToClipboard("Fallback text");
+      expect(fallbackSuccess).toBe(true);
+      expect(mockDoc.createElement).toHaveBeenCalledWith("textarea");
+      expect(fakeTextarea.value).toBe("Fallback text");
+      expect(execCommand).toHaveBeenCalledWith("copy");
+      expect(appendChild).toHaveBeenCalledWith(fakeTextarea);
+      expect(removeChild).toHaveBeenCalledWith(fakeTextarea);
+
+      execCommand.mockReturnValueOnce(false);
+      const failed = await copyTextToClipboard("Failing text");
+      expect(failed).toBe(false);
+    } finally {
+      if (originalDocument === undefined) Reflect.deleteProperty(globalThis, "document");
+      else Object.defineProperty(globalThis, "document", originalDocument);
+      if (originalNavigator === undefined) Reflect.deleteProperty(globalThis, "navigator");
+      else Object.defineProperty(globalThis, "navigator", originalNavigator);
+    }
+  });
+
+  it("renders the Copy assignment action on deadline and discussion cards and rail items, excluding class meetings", () => {
+    vi.clearAllMocks();
+    const dashboard = renderDashboard(state("timeline"), handlers);
+    const timelineCards = findAll(dashboard, (item) => item.attrs?.class?.includes("event-card") === true);
+    expect(timelineCards).toHaveLength(4);
+    const copyButtonsOnCards = timelineCards.flatMap((card) => findAll(card, (item) => item.tag === "button" && item.attrs?.class?.includes("copy-button") === true));
+    expect(copyButtonsOnCards).toHaveLength(3);
+
+    const classCard = timelineCards.find((card) => card.attrs?.class?.includes("class-meeting") === true);
+    expect(classCard).toBeDefined();
+    expect(findAll(classCard!, (item) => item.tag === "button" && item.attrs?.class?.includes("copy-button") === true)).toHaveLength(0);
+
+    const rail = findAll(dashboard, (item) => item.attrs?.class === "timeline-rail")[0];
+    expect(rail).toBeDefined();
+    const railCopyButtons = findAll(rail!, (item) => item.tag === "button" && item.attrs?.class?.includes("copy-button") === true);
+    expect(railCopyButtons).toHaveLength(3);
+
+    copyButtonsOnCards[0]?.on?.click?.(new Event("click"));
+    expect(handlers.onCopyAssignment).toHaveBeenCalledWith("a");
+
+    railCopyButtons[0]?.on?.click?.(new Event("click"));
+    expect(handlers.onCopyAssignment).toHaveBeenCalledWith("a");
+  });
+
+  it("renders accessible feedback on copied or failed buttons without duplicate live content", () => {
+    const copiedState: DashboardState = {
+      ...state("timeline"),
+      copyFeedback: { a: "copied", b: "failed" },
+    };
+    const dashboard = renderDashboard(copiedState, handlers);
+    const cardA = findAll(dashboard, (item) => item.attrs?.class?.includes("event-card") === true && words(item).includes("Lab report"))[0];
+    const buttonA = findAll(cardA!, (item) => item.attrs?.class?.includes("copy-button") === true)[0];
+    expect(buttonA?.attrs?.class).toContain("copied");
+    expect(buttonA?.text).toBe("Copied");
+    expect(buttonA?.attrs?.["aria-live"]).toBe("polite");
+    expect(findAll(buttonA!, (item) => item.attrs?.role === "status")).toHaveLength(0);
+
+    const cardB = findAll(dashboard, (item) => item.attrs?.class?.includes("event-card") === true && words(item).includes("Reading"))[0];
+    const buttonB = findAll(cardB!, (item) => item.attrs?.class?.includes("copy-button") === true)[0];
+    expect(buttonB?.attrs?.class).toContain("failed");
+    expect(buttonB?.text).toBe("Could not copy");
+    expect(buttonB?.attrs?.["aria-live"]).toBe("polite");
+    expect(findAll(buttonB!, (item) => item.attrs?.role === "status")).toHaveLength(0);
   });
 });

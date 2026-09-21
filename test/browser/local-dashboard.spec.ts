@@ -67,6 +67,39 @@ test.describe("local Marymount dashboard", () => {
     await expect(page.getByText(/Submission: Not submitted.*Submitted/)).toBeVisible();
   });
 
+  test("aligns grade group disclosures across differently wrapped course cards", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.route("**/api/dashboard", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          version: 1,
+          courses: [
+            { id: "grade-530", courseCode: "IT530", title: "Computer Security", gradeGroups: [{ id: "g530", name: "Labs and papers", weight: 100 }] },
+            { id: "grade-540", courseCode: "IT540", title: "Enterprise Data Management and Analysis with Applied Exercises", gradeGroups: [{ id: "g540", name: "Weekly labs and applied exercises", weight: 100 }] },
+            { id: "grade-570", courseCode: "IT570", title: "Cybersecurity Law, Policy, Ethics, and Compliance", gradeGroups: [{ id: "g570", name: "Discussions and case analyses", weight: 100 }] },
+          ],
+          events: [
+            { id: "grade-event-530", courseId: "grade-530", courseCode: "IT530", kind: "deadline", title: "Security lab", startsAt: "2026-09-28T23:59:00Z", completed: false, points: 100, score: 92, assignmentGroupId: "g530", assignmentGroupName: "Labs and papers", assignmentGroupWeight: 100 },
+            { id: "grade-event-540", courseId: "grade-540", courseCode: "IT540", kind: "deadline", title: "Applied data management exercise", startsAt: "2026-09-29T23:59:00Z", completed: false, points: 100, score: 87, assignmentGroupId: "g540", assignmentGroupName: "Weekly labs and applied exercises", assignmentGroupWeight: 100 },
+            { id: "grade-event-570", courseId: "grade-570", courseCode: "IT570", kind: "deadline", title: "Policy discussion", startsAt: "2026-09-30T23:59:00Z", completed: false, points: 100, assignmentGroupId: "g570", assignmentGroupName: "Discussions and case analyses", assignmentGroupWeight: 100 },
+          ],
+          resources: [], conversations: [], refreshes: [], refreshAvailable: false, sourceStatus: { state: "ready" },
+        }),
+      });
+    });
+    await openTimeline(page);
+    await page.getByRole("link", { name: "Grades", exact: true }).click();
+    const cards = page.locator(".grade-summary-card");
+    await expect(cards).toHaveCount(3);
+    const disclosureTops = await page.locator(".grade-summary-groups").evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().top));
+    expect(disclosureTops).toHaveLength(3);
+    const spread = Math.max(...disclosureTops) - Math.min(...disclosureTops);
+    expect(spread).toBeLessThanOrEqual(1);
+    await page.unroute("**/api/dashboard");
+  });
+
   test("persists discussion main post and classmate replies independently", async ({ page }) => {
     await openTimeline(page);
     const card = page.locator(".event-card", { hasText: "Synthetic Discussion Board" });
@@ -146,5 +179,70 @@ test.describe("local Marymount dashboard", () => {
     await expect(page.locator(".sidebar")).toHaveCSS("position", "fixed");
     await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("link")).toHaveCount(8);
     await expect(page.getByRole("link", { name: "Inbox", exact: true })).toBeVisible();
+  });
+
+  test("copies assignment plain text with polite feedback on timeline card and rail item, and handles copy failure", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await openTimeline(page);
+
+    // 1. Timeline non-class assignment card copy
+    const card = page.locator(".event-card", { hasText: "Synthetic Pending Work" });
+    await expect(card).toBeVisible();
+    const copyButton = card.getByRole("button", { name: "Copy assignment" });
+    await expect(copyButton).toBeVisible();
+    await copyButton.click();
+
+    // Verify "Copied" feedback appears on the polite live control
+    await expect(card.getByRole("button", { name: "Copied" })).toBeVisible();
+    await expect(card.getByRole("button", { name: "Copied" })).toHaveAttribute("aria-live", "polite");
+
+    // Verify clipboard content from card
+    const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clipboardText).toContain("Course code: SYN-101");
+    expect(clipboardText).toContain("Assignment title: Synthetic Pending Work");
+    expect(clipboardText).toContain("Due date/time:");
+    expect(clipboardText).toContain("Points: 10");
+    expect(clipboardText).toContain("Due Good completion status: Not completed");
+    expect(clipboardText).toContain("Assignment details: Invented pending detail.");
+
+    // 2. Due Soon rail item copy shares the identical formatter
+    const railRow = page.locator(".rail-due-row", { hasText: "Synthetic Pending Work" });
+    await expect(railRow).toBeVisible();
+    const railCopyButton = railRow.getByRole("button", { name: "Copy assignment" });
+    await expect(railCopyButton).toBeVisible();
+    await railCopyButton.click();
+    await expect(railRow.getByRole("button", { name: "Copied" })).toBeVisible();
+
+    const railClipboardText = await page.evaluate(() => navigator.clipboard.readText());
+    expect(railClipboardText).toBe(clipboardText);
+
+    // 3. Discussion assignment copy includes Main post and Replies to classmates
+    const discussionCard = page.locator(".event-card", { hasText: "Synthetic Discussion Board" });
+    await expect(discussionCard).toBeVisible();
+    await discussionCard.getByRole("button", { name: "Copy assignment" }).click();
+    await expect(discussionCard.getByRole("button", { name: "Copied" })).toBeVisible();
+
+    const discussionClipboardText = await page.evaluate(() => navigator.clipboard.readText());
+    expect(discussionClipboardText).toContain("Course code: SYN-101");
+    expect(discussionClipboardText).toContain("Assignment title: Synthetic Discussion Board");
+    expect(discussionClipboardText).toContain("Main post: Completed");
+    expect(discussionClipboardText).toContain("Replies to classmates: Completed");
+    expect(discussionClipboardText).toContain("Assignment details: Complete the main post and reply to two classmates.");
+
+    // 4. Accessible failure state: "Could not copy" when clipboard write fails
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: () => Promise.reject(new Error("clipboard rejected")),
+        },
+      });
+      document.execCommand = () => false;
+    });
+
+    await card.locator(".copy-button").click();
+    await expect(card.getByRole("button", { name: "Could not copy" })).toBeVisible();
+    await expect(card.getByRole("button", { name: "Could not copy" })).toHaveAttribute("aria-live", "polite");
+    await expect(card.getByRole("button", { name: "Copy assignment" })).toBeVisible({ timeout: 3_500 });
   });
 });

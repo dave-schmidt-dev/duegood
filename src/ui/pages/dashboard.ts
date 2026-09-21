@@ -34,6 +34,7 @@ export interface DashboardState {
   readonly selectedConversationId?: string;
   readonly selectedRefreshId?: string;
   readonly refreshState: "idle" | "running" | "complete" | "partial" | "failed";
+  readonly copyFeedback?: Readonly<Record<string, "copied" | "failed">>;
 }
 
 export interface DashboardHandlers {
@@ -49,6 +50,7 @@ export interface DashboardHandlers {
   readonly onSelectConversation: (id: string) => void;
   readonly onSelectRefresh: (id: string) => void;
   readonly onRefresh: () => void;
+  readonly onCopyAssignment: (id: string) => void;
 }
 
 const COLORS = ["#365e8d", "#8b7840", "#4e785f", "#8a5d72", "#67717f"] as const;
@@ -103,6 +105,98 @@ function failureMessage(state: DashboardState, id: string, fallback: string): st
   return state.mutationError?.id === id ? state.mutationError.message : fallback;
 }
 
+function formatSubmissionState(value: string | undefined): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return undefined;
+  const normalized = trimmed.toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "unknown" || normalized === "unsupported") return undefined;
+  if (normalized === "known_not_submitted" || normalized === "not_submitted" || normalized === "unsubmitted") return "Not submitted";
+  if (normalized === "known_submitted" || normalized === "submitted" || normalized === "pending" || normalized === "pending_review" || normalized === "late") return "Submitted";
+  if (normalized === "known_graded" || normalized === "graded") return "Graded";
+  const readable = trimmed.replace(/[_-]+/g, " ");
+  return readable.charAt(0).toUpperCase() + readable.slice(1);
+}
+
+export function formatAssignmentCopyText(event: DashboardEvent): string {
+  const lines: string[] = [
+    `Course code: ${code(event.courseCode)}`,
+    `Assignment title: ${event.title}`,
+    `Due date/time: ${formatted(event.startsAt, true)}`,
+  ];
+  if (typeof event.points === "number" && Number.isFinite(event.points)) {
+    lines.push(`Points: ${String(event.points)}`);
+  }
+  const submissionStatus = formatSubmissionState(event.submissionState);
+  if (submissionStatus !== undefined) {
+    lines.push(`Canvas submission status: ${submissionStatus}`);
+  }
+  lines.push(`Due Good completion status: ${event.completed ? "Completed" : "Not completed"}`);
+  if (event.kind === "discussion") {
+    lines.push(`Main post: ${event.discussionPostDone === true ? "Completed" : "Not completed"}`);
+    lines.push(`Replies to classmates: ${event.discussionRepliesDone === true ? "Completed" : "Not completed"}`);
+  }
+  const detail = typeof event.detail === "string" && event.detail.trim().length > 0 ? event.detail.trim() : "No additional details were supplied.";
+  lines.push(`Assignment details: ${detail}`);
+  return lines.join("\n");
+}
+
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (typeof navigator !== "undefined" && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // User activation may expire across the awaited rejection, so a legacy
+      // fallback cannot be attempted reliably after this point.
+      return false;
+    }
+  }
+
+  if (typeof document === "undefined" || !document.body) return false;
+  let textarea: HTMLTextAreaElement | null = null;
+  try {
+    textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.top = "-9999px";
+    textarea.style.left = "-9999px";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    const success = document.execCommand("copy");
+    return success;
+  } catch {
+    return false;
+  } finally {
+    if (textarea && textarea.parentNode) {
+      textarea.parentNode.removeChild(textarea);
+    }
+  }
+}
+
+function copyButton(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
+  const feedback = state.copyFeedback?.[event.id];
+  const label = feedback === "copied" ? "Copied" : feedback === "failed" ? "Could not copy" : "Copy assignment";
+  const statusClass = feedback === "copied" ? "copied" : feedback === "failed" ? "failed" : "";
+  return {
+    tag: "button",
+    attrs: {
+      type: "button",
+      class: `copy-button copy-assignment-button ${statusClass}`.trim(),
+      "data-copy-id": event.id,
+      ...(feedback !== undefined ? { "aria-live": "polite" } : {}),
+    },
+    text: label,
+    on: {
+      click: () => handlers.onCopyAssignment(event.id),
+    },
+  };
+}
+
 function eventCard(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   const expanded = state.expandedEventIds.has(event.id);
   const detailsId = `event-detail-${event.id.replace(/[^A-Za-z0-9_-]/g, "-")}`;
@@ -115,7 +209,10 @@ function eventCard(event: DashboardEvent, state: DashboardState, handlers: Dashb
     ] : [completionCheckbox(event, state, handlers)]),
     ...(state.failedCompletionIds.has(event.id) ? [el("span", failureMessage(state, event.id, "Could not save. Existing completion state was restored."), { class: "inline-error event-failure", role: "status", "aria-live": "polite" })] : []),
     ...(state.failedDiscussionIds.has(event.id) ? [el("span", failureMessage(state, event.id, "Could not save discussion progress. Existing marks were restored."), { class: "inline-error event-failure", role: "status", "aria-live": "polite" })] : []),
-    { tag: "button", attrs: { type: "button", class: "event-expand", "aria-expanded": String(expanded), "aria-controls": detailsId }, text: expanded ? "Hide details" : "Details", on: { click: () => handlers.onToggleEvent(event.id) } },
+    el("div", undefined, { class: "event-actions" }, [
+      ...(event.kind !== "class" ? [copyButton(event, state, handlers)] : []),
+      { tag: "button", attrs: { type: "button", class: "event-expand", "aria-expanded": String(expanded), "aria-controls": detailsId }, text: expanded ? "Hide details" : "Details", on: { click: () => handlers.onToggleEvent(event.id) } },
+    ]),
     el("div", undefined, { id: detailsId, class: "event-detail", ...(expanded ? {} : { hidden: "" }) }, [el("span", event.detail ?? "No additional details were supplied."), ...(event.kind !== "class" ? [completionButton(event, state, handlers)] : []), ...(state.failedCompletionIds.has(event.id) ? [el("span", failureMessage(state, event.id, "Could not save. Existing completion state was restored."), { class: "inline-error", role: "status", "aria-live": "polite" })] : []), ...(state.failedDiscussionIds.has(event.id) ? [el("span", failureMessage(state, event.id, "Could not save discussion progress. Existing marks were restored."), { class: "inline-error", role: "status", "aria-live": "polite" })] : [])]),
   ]);
 }
@@ -147,7 +244,15 @@ function dueRailItem(event: DashboardEvent, state: DashboardState, handlers: Das
   const meta = [el("span", overdue ? "Overdue" : `Due ${formatted(event.startsAt, true)}`), ...(event.points === null || event.points === undefined ? [] : [el("span", `${String(event.points)} pts`)]), el("span", overdue ? "Needs attention" : countdownText(state.now, event.startsAt), { class: overdue ? "rail-countdown overdue" : "rail-countdown" })];
   return el("article", undefined, { class: "rail-due-row", "data-due-item": event.id, style: `--course-color:${color(state.data.courses, event.courseCode)}` }, [
     el("time", undefined, { class: "rail-date", datetime: event.startsAt }, [el("strong", new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(date)), el("span", new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date))]),
-    el("div", undefined, { class: "rail-due-content" }, [el("span", code(event.courseCode), { class: "rail-course" }), el("strong", event.title, { class: "rail-title" }), el("div", undefined, { class: "rail-meta" }, meta), ...(event.kind === "discussion" ? [railDiscussionCheckboxes(event, state, handlers)] : []), ...(state.failedCompletionIds.has(event.id) ? [el("span", failureMessage(state, event.id, "Could not save; existing completion state was restored."), { class: "inline-error rail-failure", role: "status", "aria-live": "polite" })] : []), ...(state.failedDiscussionIds.has(event.id) ? [el("span", failureMessage(state, event.id, "Could not save discussion progress; existing marks were restored."), { class: "inline-error rail-failure", role: "status", "aria-live": "polite" })] : [])]),
+    el("div", undefined, { class: "rail-due-content" }, [
+      el("span", code(event.courseCode), { class: "rail-course" }),
+      el("strong", event.title, { class: "rail-title" }),
+      el("div", undefined, { class: "rail-meta" }, meta),
+      ...(event.kind === "discussion" ? [railDiscussionCheckboxes(event, state, handlers)] : []),
+      el("div", undefined, { class: "rail-actions" }, [copyButton(event, state, handlers)]),
+      ...(state.failedCompletionIds.has(event.id) ? [el("span", failureMessage(state, event.id, "Could not save; existing completion state was restored."), { class: "inline-error rail-failure", role: "status", "aria-live": "polite" })] : []),
+      ...(state.failedDiscussionIds.has(event.id) ? [el("span", failureMessage(state, event.id, "Could not save discussion progress; existing marks were restored."), { class: "inline-error rail-failure", role: "status", "aria-live": "polite" })] : []),
+    ]),
     railCompletionCheckbox(event, state, handlers),
   ]);
 }

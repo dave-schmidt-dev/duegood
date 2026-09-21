@@ -2,6 +2,8 @@ import { CSRF_HEADER_NAME, readCsrfToken, readLocalCsrfToken } from "./csrf";
 import { render, type ElementDescriptor } from "./dom";
 import {
   renderDashboard,
+  copyTextToClipboard,
+  formatAssignmentCopyText,
   type DashboardConversation,
   type DashboardMessage,
   type DashboardAttachment,
@@ -305,6 +307,42 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean): void
     draw();
   }
 
+  const copyTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
+  async function copyAssignment(id: string): Promise<void> {
+    const item = state.data.events.find((event) => event.id === id);
+    if (item === undefined || item.kind === "class") return;
+    const copyText = formatAssignmentCopyText(item);
+    const success = await copyTextToClipboard(copyText);
+    const status: "copied" | "failed" = success ? "copied" : "failed";
+
+    const prev = copyTimeouts.get(id);
+    if (prev !== undefined) clearTimeout(prev);
+
+    state = {
+      ...state,
+      copyFeedback: {
+        ...state.copyFeedback,
+        [id]: status,
+      },
+    };
+    draw();
+
+    const timer = setTimeout(() => {
+      copyTimeouts.delete(id);
+      if (state.copyFeedback?.[id] === status) {
+        const nextFeedback = { ...state.copyFeedback };
+        delete nextFeedback[id];
+        state = {
+          ...state,
+          copyFeedback: Object.keys(nextFeedback).length > 0 ? nextFeedback : undefined,
+        };
+        draw();
+      }
+    }, 2500);
+    copyTimeouts.set(id, timer);
+  }
+
   const handlers: DashboardHandlers = {
     onNavigate(page) { state = { ...state, page }; window.history.replaceState(null, "", `#${page}`); draw(); window.scrollTo({ top: 0, behavior: "instant" }); },
     onEventMode(eventMode) { state = { ...state, eventMode }; draw(); },
@@ -318,6 +356,7 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean): void
     onSelectConversation(selectedConversationId) { state = { ...state, selectedConversationId }; draw(); },
     onSelectRefresh(selectedRefreshId) { state = { ...state, selectedRefreshId }; draw(); },
     onRefresh() { void refresh(); },
+    onCopyAssignment(id) { void copyAssignment(id); },
   };
 
   window.addEventListener("hashchange", () => { state = { ...state, page: pageFromHash() }; draw(); });
