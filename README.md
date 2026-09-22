@@ -35,6 +35,7 @@ OAuth and Cloudflare work are deferred. Security, data separation, honest persis
 | --- | --- |
 | [`SPEC.md`](SPEC.md) | Product specification, boundaries, success criteria, decisions |
 | [`AGENTS.md`](AGENTS.md) | Persistent implementation-agent guardrails |
+| [`INVARIANTS.md`](INVARIANTS.md) | Enforceable local-app privacy, durability, sync, and deployment contract |
 | [`AGENT_HANDOFF.md`](AGENT_HANDOFF.md) | Copy-ready first work order |
 | [`docs/01-SETUP.md`](docs/01-SETUP.md) | OAuth + Cloudflare first milestone and operator checklist |
 | [`docs/02-SYNC-AND-BUDGET.md`](docs/02-SYNC-AND-BUDGET.md) | Safe imports, capacity assumptions, request/write accounting |

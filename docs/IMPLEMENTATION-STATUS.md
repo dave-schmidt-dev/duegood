@@ -42,8 +42,8 @@ lists — so this document cannot go stale next to the suite without the check c
       failure and its accessible retry state), and automated accessibility rules against both the
       populated route and two real recovery states.
 
-Test counts as of this section (verified by `check:implementation-status` against
-`test/test-membership.json`'s array lengths, not hand-maintained): **37** worker test files
+Test counts as of this section (each hand-written figure is validated by
+`check:implementation-status` against `test/test-membership.json`'s array lengths): **38** worker test files
 (`npm run test:worker`), **2** UI contract test files (`npm run test:ui`), **10** browser test files
 (`npm run test:browser`, run once as part of `npm run test:all`).
 
@@ -61,23 +61,26 @@ removed. A Personal Access Token is **not** scope-limited the way `CANVAS_REQUIR
 `src/auth/personal-token.ts`'s doc comment — which is the documented reason this stays a
 single-owner path rather than general onboarding.
 
-### External gates (not evidenced by this repository, and never claimed here)
+### Verified historical external evidence
 
-- [ ] Cloudflare account creation, resource provisioning, and a live deployment. (Deliberately left
-      unchecked — `check:implementation-status` hard-fails if this box is ever checked, since none
-      of these four gates may be claimed done by an agent. This local replacement candidate has no
-      current deployment evidence and leaves the cloud Worker offline.)
-- [ ] Marymount Canvas OAuth developer-key submission and approval.
-- [ ] Any live call to a real Canvas instance (every import in this repository's tests uses a
-      synthetic `fetchImpl`).
-- [ ] Human screen-reader review and a nontechnical-student pilot (the Playwright accessibility
-      batch runs automated axe rules and accessibility-tree/keyboard checks only, per
-      `docs/IMPLEMENTATION-PLAN.md`'s own distinction between those evidence classes).
+| Evidence class | Verified state |
+| --- | --- |
+| Repository Canvas tests | Synthetic only; mocked `fetchImpl` calls do not establish live Canvas access. |
+| Owner-local Canvas integration | Local read-only operation is documented in `README.md`; Inbox and profile approval and activation are recorded there, while live outcomes remain private external evidence that this repository cannot independently verify. |
+| Production D1 configuration | A production database binding is present in `wrangler.jsonc`; the repository does not independently prove live provisioning or deployment. |
+| Public Worker deployment | Not established; the public Worker remains offline. |
+| Public Canvas OAuth | Not established; institution approval remains outstanding. |
 
-These four remain exactly as scoped in `docs/IMPLEMENTATION-PLAN.md`'s evidence-boundary lines for
-every phase — none of them is a phase-1-specific gap, and none is authorized to be marked done by
-an agent. Cloudflare account setup and Marymount OAuth approval are the repository owner's own
-actions.
+### Remaining external gates
+
+- [ ] Public Worker activation/deployment plus attended production acceptance remains outstanding.
+- [ ] Marymount Canvas OAuth developer-key approval remains outstanding.
+- [ ] Human screen-reader review and nontechnical-student pilot remain outstanding.
+
+The production D1 database remains configured in `wrangler.jsonc`; the public Worker is offline
+because `workers_dev` is false. Repository suites remain synthetic, and completed attended local
+reads do not establish public OAuth onboarding or public cloud readiness. These three open items
+remain owner/admin or human-review boundaries.
 
 ## Local Marymount replacement
 
@@ -100,7 +103,7 @@ actions.
       `canvas-course-refresh` control only when explicitly enabled. The control
       was rendered but not invoked against Canvas.
 - [x] **38** worker test files, **2** UI contract test files, **10** browser test
-      files, 37 local Node tests, a built-server smoke, the public-tree scan, and
+      files, 38 local Node tests, a built-server smoke, the public-tree scan, and
       private-document read-only compatibility pass.
 
 ### Daily dashboard expansion

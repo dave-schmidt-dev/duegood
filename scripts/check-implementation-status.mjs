@@ -25,7 +25,11 @@ function extractSection(doc, heading, nextHeadingPattern) {
 }
 
 function checkboxLines(section) {
-  return [...section.matchAll(/^- \[([ x])\]/gmu)].map((match) => match[1] === "x");
+  return section.split("\n").filter((line) => line.startsWith("- [")).map((line) => {
+    const match = /^- \[([ x])\](?: (.*))?$/u.exec(line);
+    if (match === null) throw new Error(`Malformed checklist line: ${line}`);
+    return { checked: match[1] === "x", label: match[2] ?? "" };
+  });
 }
 
 const phase = parsePhaseArg(process.argv.slice(2));
@@ -47,24 +51,56 @@ const evidenceChecks = checkboxLines(evidenceSection);
 if (evidenceChecks.length === 0) {
   throw new Error(`Phase ${phase}'s Evidence subsection lists no checklist items.`);
 }
-const uncheckedEvidence = evidenceChecks.filter((checked) => !checked).length;
+const uncheckedEvidence = evidenceChecks.filter(({ checked }) => !checked).length;
 if (uncheckedEvidence > 0) {
   throw new Error(`Phase ${phase}'s Evidence subsection has ${uncheckedEvidence} unfinished item(s) — not done yet.`);
 }
 
-const gatesSection = extractSection(phaseSection, "### External gates", /^### /mu);
+const historicalSection = extractSection(phaseSection, "### Verified historical external evidence", /^### /mu);
+if (historicalSection === undefined) {
+  throw new Error(`Phase ${phase}'s section has no "### Verified historical external evidence" subsection.`);
+}
+const expectedEvidenceRows = [
+  "| Repository Canvas tests | Synthetic only; mocked `fetchImpl` calls do not establish live Canvas access. |",
+  "| Owner-local Canvas integration | Local read-only operation is documented in `README.md`; Inbox and profile approval and activation are recorded there, while live outcomes remain private external evidence that this repository cannot independently verify. |",
+  "| Production D1 configuration | A production database binding is present in `wrangler.jsonc`; the repository does not independently prove live provisioning or deployment. |",
+  "| Public Worker deployment | Not established; the public Worker remains offline. |",
+  "| Public Canvas OAuth | Not established; institution approval remains outstanding. |",
+];
+for (const evidenceRow of expectedEvidenceRows) {
+  if (!historicalSection.includes(evidenceRow)) {
+    throw new Error(
+      `Phase ${phase}'s historical evidence table is missing or has changed a required evidence state.`,
+    );
+  }
+}
+
+const gatesSection = extractSection(phaseSection, "### Remaining external gates", /^### /mu);
 if (gatesSection === undefined) {
-  throw new Error(`Phase ${phase}'s section has no "### External gates" subsection.`);
+  throw new Error(`Phase ${phase}'s section has no "### Remaining external gates" subsection.`);
 }
 const gateChecks = checkboxLines(gatesSection);
-if (gateChecks.length === 0) {
-  throw new Error(`Phase ${phase}'s External gates subsection lists no checklist items.`);
-}
-const falselyClaimedGates = gateChecks.filter((checked) => checked).length;
-if (falselyClaimedGates > 0) {
+const expectedGates = [
+  { label: "Public Worker activation/deployment", pattern: /Public Worker activation\/deployment/u },
+  { label: "Marymount Canvas OAuth developer-key approval", pattern: /Marymount Canvas OAuth developer-key approval/u },
+  { label: "Human screen-reader review and nontechnical-student pilot", pattern: /Human screen-reader review and nontechnical-student pilot/u },
+];
+if (gateChecks.length !== expectedGates.length) {
   throw new Error(
-    `Phase ${phase}'s External gates subsection marks ${falselyClaimedGates} item(s) done — Cloudflare deployment, ` +
-      "Marymount OAuth, live Canvas calls, and human review must never be claimed by this repository.",
+    `Phase ${phase}'s remaining-gates checklist has ${gateChecks.length} item(s); expected ${expectedGates.length}.`,
+  );
+}
+for (const expectedGate of expectedGates) {
+  const matches = gateChecks.filter(({ label }) => expectedGate.pattern.test(label));
+  if (matches.length !== 1 || matches[0]?.checked) {
+    throw new Error(
+      `Phase ${phase}'s remaining gates must contain exactly one unchecked ${expectedGate.label} item.`,
+    );
+  }
+}
+if (!gatesSection.includes("Repository suites remain synthetic")) {
+  throw new Error(
+    `Phase ${phase}'s remaining external gates must state that repository suites remain synthetic.`,
   );
 }
 
@@ -83,4 +119,4 @@ for (const { label, count } of expectedCounts) {
   }
 }
 
-console.log(`Phase ${phase}: all Evidence items checked, all External gates honestly unchecked, test counts match test-membership.json.`);
+console.log(`Phase ${phase}: Evidence items checked, historical evidence is linked, external gates remain open, and test counts match test-membership.json.`);
