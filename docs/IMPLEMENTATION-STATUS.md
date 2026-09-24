@@ -84,6 +84,69 @@ remain owner/admin or human-review boundaries.
 
 ## Local Marymount replacement
 
+### Canvas iCal fallback — Task 1.1
+
+- [x] The local source contract now records scoped Canvas/iCal references and per-field source
+      ownership without changing immutable local IDs or legacy `canvasId` values.
+- [x] Legacy Canvas records are deterministically backfilled, duplicate scoped references are
+      refused, and possible cross-source matches become bounded pending links instead of an
+      automatic merge.
+- [x] The source merge preserves completion, notes extensions, discussion state, and arbitrary
+      unknown fields. No-op imports retain the exact local bytes, and Activity ignores provenance
+      bookkeeping.
+- Evidence is synthetic only: `test/local/acquisition.test.ts`,
+      `test/local/coursework-store.test.ts`, `test/local/refresh-history.test.ts`, and
+      `test/fixtures/ical-acquisition-contract.json`. This neither parses a feed nor establishes
+      Canvas identity, live source compatibility, OAuth, or native cutover acceptance.
+
+### Canvas iCal fallback — Task 1.2
+
+- [x] A bounded local parser normalizes complete RFC 5545 calendar text into typed assignment
+      parents, explicitly verified discussion checkpoints, and other calendar events. It maps
+      courses through validated numeric Canvas course IDs or a bounded owner-supplied UID-to-course
+      and stable-identity mapping. Unmapped changed UIDs stay held. Exact-origin resource links give
+      stable identity across changed feed UIDs. It never assigns `canvasId` or fetches a URL.
+- [x] Unknown or duplicate course identities, uncertain events, floating times, cancellations,
+      and recurrence overrides are held. The result explicitly authorizes zero deletions;
+      missing feed entries never imply removed coursework. Invalid timezones and incomplete or
+      oversized calendars fail with content-free errors. Only synthetic fixture data was tested.
+- [ ] `owner:ical-feed-shape` remains an acceptance gate. A content-free local shape check or an
+      explicit owner mapping must verify actual link and checkpoint forms before live use.
+      The private feed and any credential-bearing URL stay outside this repository and its logs.
+
+### Canvas iCal fallback — Task 2.1 (synthetic staged validation)
+
+- Native Canvas reconciliation adopts only an exact legacy/scoped Canvas identity or an
+      iCal `assignment:<Canvas-ID>` alias, retaining the existing immutable local ID, personal
+      fields, extensions, and both scoped source facts. Conflicting candidates fail closed.
+- A complete Canvas capture continues to archive missing Canvas work and respect ignored IDs;
+      rolling iCal omissions remain active. Fresh API due facts include capture-time provenance,
+      repeat captures are byte-stable, and native publish rebases only declared local-owned edits.
+- Activity now keys source changes by local ID and exposes only visible source fields.
+      Evidence is synthetic Rust coverage in `reconcile.rs`, `refresh.rs`, and `history.rs`; it
+      does not establish a live feed, Canvas access, installed app, or cutover acceptance.
+- A later disposable stage restored the pinned dependency cache and passed UI, type, integrity,
+      membership, and Rust checks. This is local synthetic validation, not live cutover acceptance.
+
+### Canvas iCal fallback — Task 3.2
+
+- [x] The loopback Grades page accepts only an explicitly selected local PDF, bounds bytes before parsing and pages, text, rows, and processing time during parsing, and never stores the PDF, filename, or raw extracted text.
+- [x] The pinned local PDF parser accepts only the deliberately narrow synthetic grade-report layout. Exact course-and-item matches are selectable preview proposals; unmatched or ambiguous rows require manual entry. Each confirmation saves one versioned local observation with PDF provenance while Canvas facts remain visible.
+- Evidence is synthetic only: `test/local/grades.test.ts`, `test/ui/dashboard.test.ts`, and `test/browser/local-dashboard.spec.ts`. This does not parse a real Canvas report, establish Canvas grade compatibility, or alter a Canvas grade.
+
+### Canvas iCal fallback — Task 4.2 (synthetic rehearsal; native cutover gated)
+
+- The synthetic transition fixture covers override UID continuity, separate discussion
+      checkpoints, a new course, an ambiguous held link, partial-feed retention, local manual/PDF
+      grade observations, API adoption, repeat-byte idempotence, Activity, and the separate
+      complete-API-capture archival rule.
+- An enriched native layout now refuses the refreshable legacy export before it creates an output
+      folder. A disposable native rehearsal instead demotes, creates a write-frozen exact export,
+      restores that export into a separate disposable copy, and compares actual written bytes.
+- This does not clear `owner:legacy-reconciler-compatibility`, `owner:ical-feed-shape`, a real
+      PDF-layout acceptance, or the owner-attended native cutover. No live feed, PDF, credential,
+      legacy Python code, or live coursework was used.
+
 ### Implemented and verified
 
 - [x] Attended read-only inspection captured stable IDs, completion fields,
@@ -203,6 +266,18 @@ entries, and copied and persisted no coursework. No live Canvas request or
 refresh was performed for Desktop Phase 1.
 
 ## Desktop Phase 2 — Native local interactions
+
+### Task 4.1 — Native source-link and local-grade parity
+
+- [x] Native commands now resolve an explicitly selected pending source link or keep it distinct,
+      only under the exact coursework-document digest the student reviewed. Confirmation retains
+      the existing immutable local ID, Done state, notes, manual/PDF observations, and unknown
+      fields; stale or invalid decisions leave the document unchanged.
+- [x] Native local-grade edits write only a versioned `manualGradeObservation`; Canvas `grade` and
+      `score` stay source facts. Canvas refresh preserves manual and future PDF observations.
+- [x] The generated Tauri permission manifest, Rust handler list, typed transport, and dashboard
+      controls expose the same explicit candidate selection and keep-distinct path in native mode.
+      Evidence is synthetic Rust/UI coverage only; no live iCal feed or PDF was accepted.
 
 ### Task 2.1 — Local implementation
 

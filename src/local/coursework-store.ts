@@ -2,6 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AssignmentListItem } from "../db/types";
+import { applySourceObservations, pendingSourceLinks, resolvePendingSourceLink, validateSourceReferences, type AcquisitionResult, type PendingLinkDecision, type PendingSourceLink, type SourceObservation } from "./acquisition";
+import type { IcalNormalization } from "./ical";
+import { captureCanvasSnapshot, readIcalFeedStatus, recordIcalFeedStatus, recordIcalImport, type IcalFeedStatus } from "./refresh-history";
 
 type JsonObject = Record<string, unknown>;
 
@@ -31,6 +34,11 @@ interface LocalGradeRecord extends AssignmentListItem {
   readonly score: number | null;
   /** Canvas grade/letter value, when supplied. */
   readonly grade: string | null;
+  /** Deliberate local observation, stored apart from all Canvas grade facts. */
+  readonly manualGrade: string | null;
+  /** Schema version of the local observation; null means no observation exists. */
+  readonly manualGradeVersion: 1 | null;
+  readonly manualGradeSource: "manual" | "pdf" | null;
   /** Canvas grading timestamp, when supplied. */
   readonly gradedAt: string | null;
   /** Canvas assignment-group identity and weight, when supplied. */
@@ -45,6 +53,8 @@ interface LocalTimelineEvent extends LocalGradeRecord {
   readonly kind: string | null;
   readonly detail: string | null;
   readonly place: string | null;
+  /** Local planning note; never source-writable. */
+  readonly notes: string | null;
   /** Local discussion workflow state, independent from Canvas submission and completion. */
   readonly discussionPostDone: boolean;
   readonly discussionRepliesDone: boolean;
@@ -55,6 +65,7 @@ export interface LocalSnapshot {
   readonly courses: readonly LocalCourse[];
   readonly assignments: readonly LocalGradeRecord[];
   readonly events: readonly LocalTimelineEvent[];
+  readonly pendingSourceLinks: readonly PendingSourceLink[];
 }
 
 function object(value: unknown, label: string): JsonObject {
@@ -73,6 +84,23 @@ function stringOrNull(value: unknown): string | null {
 
 function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+interface ManualGradeObservation {
+  readonly version: 1;
+  readonly value: string;
+  readonly source: "manual" | "pdf";
+}
+
+/** Validate the intentionally small local grade record without accepting source-owned facts. */
+function manualGradeObservation(value: unknown, label: string): ManualGradeObservation | null {
+  if (value === undefined) return null;
+  const observation = object(value, label);
+  if (observation.version !== 1 || typeof observation.value !== "string" || observation.value.trim().length === 0 || observation.value.trim().length > 80) {
+    throw new Error(`${label} must contain version 1 and a nonempty value up to 80 characters`);
+  }
+  if (observation.source !== undefined && observation.source !== "manual" && observation.source !== "pdf") throw new Error(`${label} has an invalid source`);
+  return { version: 1, value: observation.value.trim(), source: observation.source === "pdf" ? "pdf" : "manual" };
 }
 
 function gradeGroups(value: unknown): readonly LocalGradeGroup[] {
@@ -189,6 +217,7 @@ function validateAndProject(document: JsonObject): Omit<LocalSnapshot, "version"
     if (typeof item.course !== "string" || !coursesByKey.has(item.course)) throw new Error(`item ${item.id} references an unknown course`);
     const course = coursesByKey.get(item.course) as LocalCourse;
     if (item.kind === "milestone") continue;
+    const localGrade = manualGradeObservation(item.manualGradeObservation, `item ${item.id}.manualGradeObservation`);
     const projected: LocalGradeRecord = {
       sourceItemId: item.id,
       courseId: course.id,
@@ -203,6 +232,9 @@ function validateAndProject(document: JsonObject): Omit<LocalSnapshot, "version"
       points: numberOrNull(item.points),
       score: numberOrNull(item.score),
       grade: stringOrNull(item.grade),
+      manualGrade: localGrade?.value ?? null,
+      manualGradeVersion: localGrade?.version ?? null,
+      manualGradeSource: localGrade?.source ?? null,
       gradedAt: stringOrNull(item.gradedAt),
       assignmentGroupId: stringOrNull(item.assignmentGroupId),
       assignmentGroupName: stringOrNull(item.assignmentGroupName),
@@ -214,15 +246,17 @@ function validateAndProject(document: JsonObject): Omit<LocalSnapshot, "version"
       kind: typeof item.kind === "string" ? item.kind : null,
       detail: stringOrNull(item.detail),
       place: null,
+      notes: stringOrNull(item.notes),
       discussionPostDone: item.discussionPostDone === true,
       discussionRepliesDone: item.discussionRepliesDone === true,
     };
     events.push(event);
     if (event.type === "deadline") assignments.push(projected);
   }
+  validateSourceReferences(document);
   assignments.sort((left, right) => (left.dueAt ?? "9999").localeCompare(right.dueAt ?? "9999"));
   events.sort((left, right) => (left.dueAt ?? "9999").localeCompare(right.dueAt ?? "9999"));
-  return { courses: [...coursesByKey.values()], assignments, events };
+  return { courses: [...coursesByKey.values()], assignments, events, pendingSourceLinks: pendingSourceLinks(document) };
 }
 
 async function acquireLock(lockDirectory: string, timeoutMs = 5_000): Promise<() => Promise<void>> {
@@ -256,6 +290,30 @@ async function acquireLock(lockDirectory: string, timeoutMs = 5_000): Promise<()
   }
 }
 
+/** Link a verified assignment deep link to one legacy Canvas item in the same course. */
+function linkIcalAssignments(document: JsonObject, normalized: IcalNormalization): readonly SourceObservation[] {
+  const courses = array(document.courses, "courses").map((value, index) => object(value, `courses[${index}]`));
+  const items = [...array(document.items, "items"), ...(Array.isArray(document.archivedForecastItems) ? document.archivedForecastItems : [])]
+    .map((value, index) => object(value, `source item ${index}`));
+  const links = new Map(normalized.events.filter((event) => event.kind === "assignment-parent")
+    .map((event) => [event.observation.localId, event] as const));
+  return normalized.observations.map((observation) => {
+    const event = links.get(observation.localId);
+    const match = /^assignment:([1-9]\d*)$/u.exec(observation.reference.id);
+    if (!event || !match || !event.canvasCourseId || typeof observation.fields.url !== "string") return observation;
+    const deepLink = new URL(observation.fields.url);
+    if (deepLink.protocol !== "https:" || deepLink.username || deepLink.password || deepLink.search || deepLink.hash
+        || deepLink.pathname !== `/courses/${event.canvasCourseId}/assignments/${match[1]}`) return observation;
+    const knownCourse = courses.filter((course) => course.key === observation.course && String(course.canvasCourseId) === event.canvasCourseId);
+    if (knownCourse.length !== 1) return observation;
+    const candidates = items.filter((item) => item.course === observation.course && item.canvasId != null
+      && String(item.canvasId) === match[1]);
+    if (candidates.length === 1) return { ...observation, localId: String(candidates[0]!.id) };
+    if (candidates.length > 1) return { ...observation, possibleLocalIds: candidates.map((item) => String(item.id)).sort() };
+    return observation;
+  });
+}
+
 /** Exact-byte, lossless local coursework access with optimistic conflict detection. */
 export class CourseworkStore {
   readonly #file: string;
@@ -279,6 +337,86 @@ export class CourseworkStore {
     } finally {
       await release();
     }
+  }
+
+  async #writeDocument(document: JsonObject): Promise<string> {
+    const output = Buffer.from(`${JSON.stringify(document, null, 2)}\n`);
+    const temporary = path.join(path.dirname(this.#file), `.${path.basename(this.#file)}.${randomUUID()}.tmp`);
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      handle = await open(temporary, "wx", 0o600);
+      await handle.writeFile(output);
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+      await rename(temporary, this.#file);
+      const directory = await open(path.dirname(this.#file), "r");
+      try { await directory.sync(); } finally { await directory.close(); }
+    } finally {
+      if (handle !== undefined) await handle.close();
+      await rm(temporary, { force: true });
+    }
+    return hash(output);
+  }
+
+  /** Applies source facts under the shared lock; a no-op leaves the exact source bytes untouched. */
+  async applySourceObservations(institution: string, observations: readonly SourceObservation[]): Promise<AcquisitionResult & { readonly version: string }> {
+    return this.withExclusive(async () => {
+      const bytes = await readFile(this.#file);
+      const document = object(JSON.parse(Buffer.from(bytes).toString("utf8")), "coursework document");
+      validateAndProject(document);
+      const result = applySourceObservations(document, institution, observations);
+      validateAndProject(document);
+      const version = result.changed ? await this.#writeDocument(document) : hash(bytes);
+      return { ...result, version };
+    });
+  }
+
+  /** Resolves a manually reviewed source candidate behind the exact-byte version fence. */
+  async resolvePendingSourceLink(institution: string, pendingId: string, localItemId: string, decision: PendingLinkDecision, expectedVersion: string): Promise<AcquisitionResult & { readonly version: string }> {
+    return this.withExclusive(async () => {
+      const bytes = await readFile(this.#file);
+      if (hash(bytes) !== expectedVersion) throw new Error("coursework document changed; reload and retry");
+      const document = object(JSON.parse(Buffer.from(bytes).toString("utf8")), "coursework document");
+      validateAndProject(document);
+      const result = resolvePendingSourceLink(document, institution, pendingId, localItemId, decision);
+      validateAndProject(document);
+      const version = await this.#writeDocument(document);
+      return { ...result, version };
+    });
+  }
+
+  /** Imports one parsed calendar window through the existing exclusive coursework writer. */
+  async importIcalFeed(institution: string, normalized: IcalNormalization, startedAt: string, finishedAt: string): Promise<AcquisitionResult & { readonly version: string; readonly feedStatus: IcalFeedStatus }> {
+    return this.withExclusive(async () => {
+      const before = await captureCanvasSnapshot(this.#file);
+      const bytes = await readFile(this.#file);
+      const document = object(JSON.parse(Buffer.from(bytes).toString("utf8")), "coursework document");
+      validateAndProject(document);
+      const observations = linkIcalAssignments(document, normalized).map((observation) => ({ ...observation, observedAt: finishedAt }));
+      const result = applySourceObservations(document, institution, observations);
+      validateAndProject(document);
+      const version = result.changed ? await this.#writeDocument(document) : hash(bytes);
+      const after = await captureCanvasSnapshot(this.#file);
+      await recordIcalImport(path.dirname(this.#file), before, after, startedAt, finishedAt);
+      const feedStatus: IcalFeedStatus = { schema: 1, acquisition: "succeeded", coverage: "rolling_window",
+        attemptedAt: finishedAt, lastSuccessAt: finishedAt, accepted: observations.length - result.held.length,
+        held: normalized.held.length + result.held.length };
+      await recordIcalFeedStatus(path.dirname(this.#file), feedStatus);
+      return { ...result, version, feedStatus };
+    });
+  }
+
+  /** Records only a content-free failed acquisition; it does not change coursework bytes. */
+  async recordIcalFailure(attemptedAt: string): Promise<IcalFeedStatus> {
+    return this.withExclusive(async () => {
+      const root = path.dirname(this.#file);
+      const prior = await readIcalFeedStatus(root);
+      const status: IcalFeedStatus = { schema: 1, acquisition: "failed", coverage: "rolling_window",
+        attemptedAt, lastSuccessAt: prior?.lastSuccessAt ?? null, accepted: 0, held: 0 };
+      await recordIcalFeedStatus(root, status);
+      return status;
+    });
   }
 
   async setCompletion(itemId: string, completed: boolean, expectedVersion: string): Promise<{ completed: boolean; completedAt: number | null; version: string }> {
@@ -309,6 +447,25 @@ export class CourseworkStore {
         await rm(temporary, { force: true });
       }
       return { completed, completedAt: doneAt === null ? null : Date.parse(doneAt), version: hash(output) };
+    });
+  }
+
+  /** Writes or clears one schema-versioned local grade without changing Canvas grade or score. */
+  async setManualGrade(itemId: string, value: string | null, expectedVersion: string, source: "manual" | "pdf" = "manual"): Promise<{ manualGrade: string | null; manualGradeVersion: 1 | null; manualGradeSource: "manual" | "pdf" | null; version: string }> {
+    return this.withExclusive(async () => {
+      const bytes = await readFile(this.#file);
+      if (hash(bytes) !== expectedVersion) throw new Error("coursework document changed; reload and retry");
+      const document = object(JSON.parse(Buffer.from(bytes).toString("utf8")), "coursework document");
+      validateAndProject(document);
+      const item = array(document.items, "items").map((candidate, index) => object(candidate, `items[${index}]`)).find((candidate) => candidate.id === itemId);
+      if (item === undefined) throw new Error("coursework item not found");
+      const normalized = value === null ? null : value.trim();
+      if (normalized !== null && (normalized.length === 0 || normalized.length > 80)) throw new Error("manual grade must be a nonempty string up to 80 characters");
+      if (normalized === null) delete item.manualGradeObservation;
+      else item.manualGradeObservation = { version: 1, value: normalized, source };
+      validateAndProject(document);
+      const version = await this.#writeDocument(document);
+      return { manualGrade: normalized, manualGradeVersion: normalized === null ? null : 1, manualGradeSource: normalized === null ? null : source, version };
     });
   }
 

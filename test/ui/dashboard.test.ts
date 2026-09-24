@@ -1,7 +1,12 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { dashboardEventKind, parseDashboard, postMutation, renderDesktopSetup, resolveNativeMutationConflict, type DesktopSetupHandlers, type DesktopSetupState } from "../../src/ui/app";
+import { CourseworkStore } from "../../src/local/coursework-store";
+import type { SourceObservation } from "../../src/local/acquisition";
 import type { ElementDescriptor } from "../../src/ui/dom";
 import { copyTextToClipboard, countdownText, formatAssignmentCopyText, gradeProgress, renderDashboard, type DashboardData, type DashboardEvent, type DashboardHandlers, type DashboardState } from "../../src/ui/pages/dashboard";
 import { DASHBOARD_ROUTES } from "../../src/ui/routes";
@@ -16,7 +21,7 @@ function words(descriptor: ElementDescriptor): string { return [descriptor.text 
 
 const NOW = Date.parse("2026-09-20T12:00:00-04:00");
 const DATA: DashboardData = {
-  version: "1",
+  version: "a".repeat(64),
   courses: [
     { id: "570", courseCode: "IT570", title: "Policy", gradeGroups: [{ id: "570-projects", name: "Projects", weight: 70 }, { id: "570-exams", name: "Exams", weight: 30 }] },
     { id: "530", courseCode: "IT 530", title: "Security", gradeGroups: [{ id: "530-projects", name: "Projects", weight: 60 }, { id: "530-exams", name: "Exams", weight: 40 }] },
@@ -29,6 +34,7 @@ const DATA: DashboardData = {
     { id: "discussion", sourceItemId: "discussion", courseId: "570", courseCode: "IT570", kind: "discussion", title: "Discussion board", startsAt: "2026-09-25T18:00:00-04:00", completed: false, discussionPostDone: true, discussionRepliesDone: false },
     { id: "d", sourceItemId: "d", courseId: "570", courseCode: "IT570", kind: "deadline", title: "Memo", startsAt: "2026-09-26T12:00:00-04:00", completed: true, completedAt: NOW },
   ],
+  pendingSourceLinks: [],
   resources: [
     { id: "safe", courseId: "530", courseCode: "IT530", type: "File", title: "Guide", localUrl: "/api/local/resources/safe" },
     { id: "unsafe", courseId: "540", courseCode: "IT540", type: "Link", title: "Remote", localUrl: "https://example.invalid/" },
@@ -41,10 +47,10 @@ const DATA: DashboardData = {
 };
 
 const handlers: DashboardHandlers = {
-  onNavigate: vi.fn(), onEventMode: vi.fn(), onCourseFilter: vi.fn(), onGradeCourseFilter: vi.fn(), onGradeMode: vi.fn(), onResourceFilter: vi.fn(), onToggleEvent: vi.fn(), onToggleCompletion: vi.fn(), onToggleDiscussion: vi.fn(), onSelectConversation: vi.fn(), onSelectRefresh: vi.fn(), onRefresh: vi.fn(), onCopyAssignment: vi.fn(),
+  onNavigate: vi.fn(), onEventMode: vi.fn(), onCourseFilter: vi.fn(), onGradeCourseFilter: vi.fn(), onGradeMode: vi.fn(), onResourceFilter: vi.fn(), onToggleEvent: vi.fn(), onToggleCompletion: vi.fn(), onToggleDiscussion: vi.fn(), onEditManualGrade: vi.fn(), onManualGradeDraft: vi.fn(), onSaveManualGrade: vi.fn(), onCancelManualGrade: vi.fn(), onSelectConversation: vi.fn(), onSelectRefresh: vi.fn(), onRefresh: vi.fn(), onCopyAssignment: vi.fn(),
 };
 function state(page: DashboardState["page"]): DashboardState {
-  return { page, loading: false, data: DATA, now: NOW, eventMode: "all", courseFilter: "all", gradeCourseFilter: "all", gradeMode: "all", resourceFilter: "all", expandedEventIds: new Set(), pendingCompletionIds: new Set(), failedCompletionIds: new Set(), pendingDiscussionIds: new Set(), failedDiscussionIds: new Set(), selectedConversationId: "message", selectedRefreshId: "refresh", refreshState: "idle" };
+  return { page, loading: false, data: DATA, now: NOW, eventMode: "all", courseFilter: "all", gradeCourseFilter: "all", gradeMode: "all", resourceFilter: "all", expandedEventIds: new Set(), pendingCompletionIds: new Set(), failedCompletionIds: new Set(), pendingDiscussionIds: new Set(), failedDiscussionIds: new Set(), pendingManualGradeIds: new Set(), failedManualGradeIds: new Set(), selectedConversationId: "message", selectedRefreshId: "refresh", refreshState: "idle" };
 }
 
 describe("dashboard production UI contract", () => {
@@ -95,6 +101,119 @@ describe("dashboard production UI contract", () => {
     }
     const dashboard = renderDashboard(state("timeline"), handlers);
     expect(findAll(dashboard, (item) => item.attrs?.["aria-current"] === "page")[0]?.attrs?.href).toBe("#timeline");
+  });
+
+  it("renders a bounded pending-link comparison and requires an explicit decision", () => {
+    const link = {
+      id: JSON.stringify(["marymount", "530", "canvas", "8421", null]), localId: "canvas-8421", courseId: "530",
+      reference: { source: "canvas", id: "8421", institution: "marymount", course: "530" },
+      fields: { title: '"Threat Modeling Brief"', at: '"2026-10-09T08:00:00Z"', points: "25" },
+      observedAt: "2026-10-01T12:00:00Z", candidateIds: ["a"], reason: "ambiguous-match" as const,
+    };
+    const pendingHandlers: DashboardHandlers = { ...handlers, onSelectPendingLink: vi.fn(), onOpenPendingLinkDecision: vi.fn(), onCancelPendingLinkDecision: vi.fn(), onResolvePendingLink: vi.fn() };
+    const review = renderDashboard({ ...state("more"), data: { ...DATA, pendingSourceLinks: [link] } }, pendingHandlers);
+    expect(words(review)).toContain("Canvas and iCal records remain separate until you decide.");
+    expect(words(review)).toContain("Due Good ID a");
+    expect(words(review)).toContain("Source reference 8421");
+    expect(words(review)).toContain('"Threat Modeling Brief"');
+    const confirm = findAll(review, (item) => item.tag === "button" && item.text === "Confirm link")[0];
+    confirm?.on?.click?.(new Event("click"));
+    expect(pendingHandlers.onOpenPendingLinkDecision).toHaveBeenCalledWith("confirm");
+
+    const decision = renderDashboard({ ...state("more"), data: { ...DATA, pendingSourceLinks: [link] }, pendingLinkDecision: "confirm" }, pendingHandlers);
+    expect(findAll(decision, (item) => item.attrs?.role === "dialog")).toHaveLength(1);
+    expect(words(decision)).toContain("The existing Due Good item keeps its immutable ID, Done state, notes, grades, and unknown fields.");
+    const cancel = findAll(decision, (item) => item.tag === "button" && item.text === "Cancel")[0];
+    cancel?.on?.click?.(new Event("click"));
+    expect(pendingHandlers.onCancelPendingLinkDecision).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows older source holds while disabling decisions until a fresh observation", () => {
+    const link = {
+      id: JSON.stringify(["marymount", "530", "ical", "old-uid", null]), localId: "", courseId: "530",
+      reference: { source: "ical", id: "old-uid", institution: "marymount", course: "530" },
+      fields: {}, candidateIds: ["a"], reason: "ambiguous-match" as const, needsRefresh: true as const,
+    };
+    expect(parseDashboard({ pendingSourceLinks: [{ ...link, course: link.courseId }] }).pendingSourceLinks).toMatchObject([{ needsRefresh: true }]);
+    const review = renderDashboard({ ...state("more"), data: { ...DATA, pendingSourceLinks: [link] } }, handlers);
+    expect(words(review)).toContain("needs a fresh coursework import before it can be reviewed");
+    expect(findAll(review, (item) => item.tag === "button" && (item.text === "Confirm link" || item.text === "Keep distinct")).every((item) => item.attrs?.disabled === "")).toBe(true);
+  });
+
+  it("requires an explicit local choice for a multi-candidate link while keeping a distinct decision available", () => {
+    const link = {
+      id: JSON.stringify(["marymount", "530", "canvas", "8422", null]), localId: "canvas-8422", courseId: "530",
+      reference: { source: "canvas", id: "8422", institution: "marymount", course: "530" }, fields: { title: '"Source observation"' },
+      candidateIds: ["a", "b"], reason: "ambiguous-match" as const,
+    };
+    const pendingHandlers: DashboardHandlers = { ...handlers, onSelectPendingLinkCandidate: vi.fn(), onOpenPendingLinkDecision: vi.fn() };
+    const unselected = renderDashboard({ ...state("more"), data: { ...DATA, pendingSourceLinks: [link] } }, pendingHandlers);
+    expect(words(unselected)).toContain("Choose the Due Good item to compare before confirming");
+    expect(findAll(unselected, (item) => item.text === "Confirm link")[0]?.attrs?.disabled).toBe("");
+    findAll(unselected, (item) => item.tag === "button" && item.text === "Keep distinct")[0]?.on?.click?.(new Event("click"));
+    expect(pendingHandlers.onOpenPendingLinkDecision).toHaveBeenCalledWith("reject");
+    findAll(unselected, (item) => item.tag === "input" && item.attrs?.value === "b")[0]?.on?.change?.(new Event("change"));
+    expect(pendingHandlers.onSelectPendingLinkCandidate).toHaveBeenCalledWith("b");
+
+    const selected = renderDashboard({ ...state("more"), selectedPendingLinkCandidateId: "b", data: { ...DATA, pendingSourceLinks: [link] } }, pendingHandlers);
+    expect(words(selected)).toContain("Reading");
+    expect(findAll(selected, (item) => item.text === "Confirm link")[0]?.attrs?.disabled).toBeUndefined();
+    findAll(selected, (item) => item.tag === "button" && item.text === "Confirm link")[0]?.on?.click?.(new Event("click"));
+    expect(pendingHandlers.onOpenPendingLinkDecision).toHaveBeenCalledWith("confirm");
+
+    expect(parseDashboard({ pendingSourceLinks: [{ ...link, course: link.courseId, candidateIds: [] }] }).pendingSourceLinks).toHaveLength(1);
+  });
+
+  it("refreshes a pending observation, fences stale decisions, and keeps a distinct source item separate", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "duegood-pending-link-"));
+    try {
+      const file = path.join(directory, "coursework.json");
+      await writeFile(file, await readFile(path.resolve("fixtures/local-coursework-contract.json")));
+      const store = new CourseworkStore(file);
+      const initial: SourceObservation = {
+        localId: "canvas-api-8421", course: "course-a",
+        reference: { institution: "synthetic.institution.invalid", course: "course-a", source: "canvas", id: "8421" },
+        fields: { title: "Initial API title", at: "2030-02-01T12:00:00Z" }, observedAt: "2030-01-01T00:00:00Z",
+        possibleLocalIds: ["course-a-canvas-910001", "course-a-canvas-910002"],
+      };
+      const first = await store.applySourceObservations("synthetic.institution.invalid", [initial]);
+      const refreshed = await store.applySourceObservations("synthetic.institution.invalid", [{
+        ...initial, fields: { title: "Refreshed API title", at: "2030-02-02T12:00:00Z" }, observedAt: "2030-01-02T00:00:00Z", possibleLocalIds: [],
+      }]);
+      expect(refreshed.changed).toBe(true);
+      expect(refreshed.version).not.toBe(first.version);
+      const afterRefresh = await readFile(file, "utf8");
+      const document = JSON.parse(afterRefresh) as { items: Array<{ id: string }>; pendingSourceLinks: Array<{ fields: { title: string }; observedAt: string; candidateIds: string[] }> };
+      expect(document.items.some((item) => item.id === initial.localId)).toBe(false);
+      expect(document.pendingSourceLinks[0]).toMatchObject({ fields: { title: "Refreshed API title" }, observedAt: "2030-01-02T00:00:00Z", candidateIds: [] });
+      await expect(store.resolvePendingSourceLink("synthetic.institution.invalid", JSON.stringify(["synthetic.institution.invalid", "course-a", "canvas", "8421", null]), "course-a-canvas-910001", "confirm", first.version)).rejects.toThrow("changed");
+      expect(await readFile(file, "utf8")).toBe(afterRefresh);
+
+      const rejected = await store.resolvePendingSourceLink("synthetic.institution.invalid", JSON.stringify(["synthetic.institution.invalid", "course-a", "canvas", "8421", null]), "", "reject", refreshed.version);
+      expect(rejected.added).toBe(1);
+      const afterReject = JSON.parse(await readFile(file, "utf8")) as { items: Array<{ id: string; sourceReferences?: unknown[] }>; pendingSourceLinks: unknown[] };
+      expect(afterReject.pendingSourceLinks).toHaveLength(0);
+      expect(afterReject.items.find((item) => item.id === "course-a-canvas-910001")?.sourceReferences).not.toContainEqual(initial.reference);
+      expect(afterReject.items.find((item) => item.id === initial.localId)).toBeDefined();
+
+      const confirmFile = path.join(directory, "confirm-coursework.json");
+      await writeFile(confirmFile, await readFile(path.resolve("fixtures/local-coursework-contract.json")));
+      const confirmStore = new CourseworkStore(confirmFile);
+      const confirmation: SourceObservation = {
+        ...initial, localId: "canvas-api-8423", reference: { ...initial.reference, id: "8423" },
+        possibleLocalIds: ["course-a-canvas-910001"],
+      };
+      const held = await confirmStore.applySourceObservations("synthetic.institution.invalid", [confirmation]);
+      await confirmStore.resolvePendingSourceLink("synthetic.institution.invalid", JSON.stringify(["synthetic.institution.invalid", "course-a", "canvas", "8423", null]), "course-a-canvas-910001", "confirm", held.version);
+      const afterConfirm = JSON.parse(await readFile(confirmFile, "utf8")) as { items: Array<{ id: string; done: boolean; syntheticItemExtension?: unknown; sourceReferences?: unknown[] }> };
+      expect(afterConfirm.items.find((item) => item.id === "course-a-canvas-910001")).toMatchObject({
+        id: "course-a-canvas-910001", done: true, syntheticItemExtension: { preserve: "graded-item" },
+      });
+      expect(afterConfirm.items.find((item) => item.id === "course-a-canvas-910001")?.sourceReferences).toContainEqual(confirmation.reference);
+      expect(afterConfirm.items.some((item) => item.id === confirmation.localId)).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("renews the local CSRF token once and retries refresh through the mutation helper", async () => {
@@ -182,7 +301,7 @@ describe("dashboard production UI contract", () => {
     const dashboard = renderDashboard(state("grades"), handlers);
     expect(words(dashboard)).toContain("Graded points are not a final course grade.");
     expect(words(dashboard)).toContain("18 / 20");
-    expect(words(dashboard)).toContain("canvas");
+    expect(words(dashboard)).toContain("Canvas grade");
     expect(words(dashboard)).toContain("1 of 2 listed items graded · 1 awaiting");
     expect(words(dashboard)).toContain("Projects");
     expect(words(dashboard)).toContain("60%");
@@ -206,6 +325,54 @@ describe("dashboard production UI contract", () => {
     const withLetterGrade = renderDashboard({ ...state("grades"), gradeMode: "graded", data: { ...DATA, events: [DATA.events[0]!, letterGrade] } }, handlers);
     expect(words(withLetterGrade)).toContain("Reading");
     expect(words(withLetterGrade)).toContain("Pass");
+  });
+
+  it("renders local grade editing with selected-value provenance and cancelable keyboard controls", () => {
+    vi.clearAllMocks();
+    const local = { ...DATA.events[0]!, manualGrade: "A-", manualGradeVersion: 1 as const };
+    const dashboard = renderDashboard({ ...state("grades"), data: { ...DATA, events: [local, ...DATA.events.slice(1)] } }, handlers);
+    expect(words(dashboard)).toContain("Canvas score");
+    expect(words(dashboard)).toContain("Canvas grade");
+    expect(words(dashboard)).toContain("Selected value");
+    expect(words(dashboard)).toContain("Local observation · v1");
+    const pdfDashboard = renderDashboard({ ...state("grades"), data: { ...DATA, events: [{ ...local, manualGradeSource: "pdf" }, ...DATA.events.slice(1)] } }, handlers);
+    expect(words(pdfDashboard)).toContain("User-confirmed PDF · v1");
+    const edit = findAll(dashboard, (item) => item.tag === "button" && item.attrs?.["aria-label"] === "Edit local grade for Lab report")[0];
+    edit?.on?.click?.(new Event("click"));
+    expect(handlers.onEditManualGrade).toHaveBeenCalledWith("a");
+
+    const editing = renderDashboard({ ...state("grades"), editingManualGrade: { id: "a", draft: "A-" } }, handlers);
+    const input = findAll(editing, (item) => item.tag === "input" && item.attrs?.["aria-label"] === "Local grade for Lab report")[0];
+    input?.on?.input?.({ currentTarget: { value: "A" } } as unknown as Event);
+    expect(handlers.onManualGradeDraft).toHaveBeenCalledWith("A");
+    input?.on?.keydown?.({ key: "Escape", preventDefault: vi.fn() } as unknown as Event);
+    expect(handlers.onCancelManualGrade).toHaveBeenCalledOnce();
+    const form = findAll(editing, (item) => item.tag === "form" && item.attrs?.class === "grade-editor")[0];
+    form?.on?.submit?.({ preventDefault: vi.fn() } as unknown as Event);
+    expect(handlers.onSaveManualGrade).toHaveBeenCalledWith("a");
+    expect(findAll(renderDashboard({ ...state("grades"), readOnly: true }, handlers), (item) => item.attrs?.["aria-label"]?.startsWith("Edit local grade") === true)).toHaveLength(0);
+  });
+
+  it("keeps PDF grade proposals local, selectable, and manual-only when unmatched", () => {
+    const previewHandlers: DashboardHandlers = { ...handlers, onGradePreviewFile: vi.fn(), onToggleGradePreviewProposal: vi.fn(), onConfirmGradePreview: vi.fn(), onCancelGradePreview: vi.fn() };
+    const chooser = renderDashboard(state("grades"), previewHandlers);
+    expect(words(chooser)).toContain("The PDF stays on this device and is not stored.");
+    expect(findAll(chooser, (item) => item.attrs?.["aria-label"] === "Choose local PDF grade report")).toHaveLength(1);
+    const dialog = renderDashboard({ ...state("grades"), gradePreview: {
+      phase: "ready", selectedIds: new Set(["pdf-1"]), proposals: [
+        { id: "pdf-1", course: "IT530", item: "Lab report", grade: "A-", source: "User-confirmed PDF", sourceItemId: "a", status: "ready" },
+        { id: "pdf-2", course: "IT530", item: "Unmatched row", grade: "B", source: "User-confirmed PDF", sourceItemId: null, status: "manual" },
+      ],
+    } }, previewHandlers);
+    expect(findAll(dialog, (item) => item.attrs?.role === "dialog")).toHaveLength(1);
+    expect(words(dialog)).toContain("Manual entry required");
+    expect(findAll(dialog, (item) => item.attrs?.["aria-label"] === "Confirm PDF grade for Lab report")).toHaveLength(1);
+    expect(findAll(dialog, (item) => item.attrs?.["aria-label"] === "Confirm PDF grade for Unmatched row")).toHaveLength(0);
+    expect(findAll(dialog, (item) => item.attrs?.["aria-label"] === "Confirm PDF grade for Lab report")[0]?.attrs?.type).toBe("radio");
+    findAll(dialog, (item) => item.text === "Confirm grade")[0]?.on?.click?.(new Event("click"));
+    expect(previewHandlers.onConfirmGradePreview).toHaveBeenCalledOnce();
+    findAll(dialog, (item) => item.text === "Cancel").at(-1)?.on?.click?.(new Event("click"));
+    expect(previewHandlers.onCancelGradePreview).toHaveBeenCalledOnce();
   });
 
   it("shows direct completion and discussion checklist controls on timeline cards", () => {
@@ -870,6 +1037,8 @@ describe("desktop transport and first-run screen", () => {
       calls.push([command, args]);
       if (command === "set_item_completion") return { completed: true, completedAt: NOW, discussionPostDone: false, discussionRepliesDone: false, version: DIGEST };
       if (command === "set_discussion_field") throw { code: "item-conflict", message: "Changed elsewhere", currentValue: true };
+      if (command === "resolve_pending_source_link") return { version: DIGEST };
+      if (command === "set_manual_grade") return { manualGrade: "A-", manualGradeVersion: 1, version: DIGEST };
       if (command === "read_avatar_bytes") return { contentType: "image/png", bytes: [137, 80, 78, 71] };
       if (command === "open_library_resource") return args?.id === "syn:file:2" ? "downloaded" : "opened";
       if (command === "copy_assignment_text" || command === "restore_snapshot") return null;
@@ -878,6 +1047,8 @@ describe("desktop transport and first-run screen", () => {
     }, () => ({}));
     await expect(transport.setCompletion("item-1", false, true)).resolves.toMatchObject({ completed: true });
     await expect(transport.setDiscussionField("item-1", "post", false, true)).rejects.toMatchObject({ code: "item-conflict", currentValue: true });
+    await expect(transport.resolvePendingSourceLink("pending-1", "item-1", "confirm", DIGEST)).resolves.toEqual({ version: DIGEST });
+    await expect(transport.setManualGrade("item-1", "A-", DIGEST)).resolves.toEqual({ manualGrade: "A-", manualGradeVersion: 1, version: DIGEST });
     await expect(transport.readAvatar()).resolves.toEqual({ contentType: "image/png", bytes: Uint8Array.from([137, 80, 78, 71]) });
     await expect(transport.openResource("syn:file:1")).resolves.toBe("opened");
     await expect(transport.openResource("syn:file:2")).resolves.toBe("downloaded");
@@ -887,6 +1058,8 @@ describe("desktop transport and first-run screen", () => {
     expect(calls).toEqual([
       ["set_item_completion", { itemId: "item-1", expected: false, value: true }],
       ["set_discussion_field", { itemId: "item-1", field: "post", expected: false, value: true }],
+      ["resolve_pending_source_link", { pendingId: "pending-1", localItemId: "item-1", decision: "confirm", expectedVersion: DIGEST }],
+      ["set_manual_grade", { itemId: "item-1", value: "A-", expectedVersion: DIGEST }],
       ["read_avatar_bytes", undefined],
       ["open_library_resource", { id: "syn:file:1" }],
       ["open_library_resource", { id: "syn:file:2" }],

@@ -29,14 +29,14 @@ use crate::import::{
     self, DryRunReport, ImportError, ImportOptions, ImportProgress, ImportSummary,
 };
 use crate::locking::LockError;
-use crate::store::MutationResult;
 use crate::store::{atomic_write, node_json_bytes, read_capped, Store, StoreCondition, StoreError};
+use crate::store::{ManualGradeResult, MutationResult, PendingLinkResult};
 use crate::{clipboard, export, resources, snapshots};
 
 /// Every command the webview may invoke; `capabilities/default.json` grants exactly these and
 /// `build.rs` generates one permission per name (tests assert all three agree).
 #[cfg(test)]
-pub const COMMAND_NAMES: [&str; 19] = [
+pub const COMMAND_NAMES: [&str; 21] = [
     "store_status",
     "choose_legacy_root",
     "dry_run_import",
@@ -44,6 +44,8 @@ pub const COMMAND_NAMES: [&str; 19] = [
     "read_dashboard_documents",
     "set_item_completion",
     "set_discussion_field",
+    "resolve_pending_source_link",
+    "set_manual_grade",
     "read_avatar_bytes",
     "open_library_resource",
     "copy_assignment_text",
@@ -226,6 +228,10 @@ impl From<StoreError> for CommandError {
             StoreError::Lock(LockError::Busy) => {
                 CommandError::new("store-busy", "The store is busy; try again.")
             }
+            StoreError::Conflict => CommandError::new(
+                "document-conflict",
+                "This comparison changed elsewhere. Latest state reloaded; review it again.",
+            ),
             other => CommandError::new("store-error", other.to_string()),
         }
     }
@@ -1382,6 +1388,12 @@ impl Inner {
             .picker
             .pick_export_folder()
             .ok_or_else(|| CommandError::new("cancelled", "No export folder was selected."))?;
+        export::ensure_legacy_refreshable_export_compatible(store).map_err(|_| {
+            CommandError::new(
+                "legacy-compatibility-gated",
+                "Legacy refresh compatibility is unconfirmed; use the frozen rollback export.",
+            )
+        })?;
         Ok(export::export_legacy(store, &parent, progress)?)
     }
 
@@ -1769,6 +1781,40 @@ async fn set_discussion_field(
 }
 
 #[tauri::command]
+async fn resolve_pending_source_link(
+    state: State<'_, AppState>,
+    pending_id: String,
+    local_item_id: String,
+    decision: String,
+    expected_version: String,
+) -> Result<PendingLinkResult, CommandError> {
+    blocking(state.inner(), move |inner| {
+        let store = inner.store()?;
+        Ok(store.resolve_pending_source_link(
+            &pending_id,
+            &local_item_id,
+            &decision,
+            &expected_version,
+        )?)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn set_manual_grade(
+    state: State<'_, AppState>,
+    item_id: String,
+    value: Option<String>,
+    expected_version: String,
+) -> Result<ManualGradeResult, CommandError> {
+    blocking(state.inner(), move |inner| {
+        let store = inner.store()?;
+        Ok(store.set_manual_grade(&item_id, value.as_deref(), &expected_version)?)
+    })
+    .await
+}
+
+#[tauri::command]
 async fn read_avatar_bytes(
     state: State<'_, AppState>,
 ) -> Result<Option<AvatarBytes>, CommandError> {
@@ -1905,6 +1951,8 @@ pub fn register_handlers<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Build
         read_dashboard_documents,
         set_item_completion,
         set_discussion_field,
+        resolve_pending_source_link,
+        set_manual_grade,
         read_avatar_bytes,
         open_library_resource,
         copy_assignment_text,
@@ -2592,6 +2640,68 @@ mod tests {
         assert_eq!(
             export::snapshot_layout(&store.store_dir(), false).unwrap(),
             export::snapshot_layout(&export_tree, true).unwrap()
+        );
+    }
+
+    #[test]
+    fn enriched_legacy_export_is_gated_and_frozen_restore_rehearsal_changes_a_disposable_copy() {
+        let (root, app, _backup, export_parent, _prompts, _demote_prompts) =
+            workflow_state("enriched-rollback-rehearsal", true, true);
+        let ready = app
+            .shared
+            .prepare_store_promotion(&mut |_| {})
+            .expect("exact backup match");
+        app.shared
+            .confirm_store_promotion(&ready.proof_id, &mut |_| {})
+            .expect("promotion");
+        let store = app.shared.store().unwrap();
+        let coursework = store.store_dir().join(crate::config::COURSEWORK_FILE);
+        let mut document: Value =
+            serde_json::from_slice(&std::fs::read(&coursework).unwrap()).unwrap();
+        document["items"][0]["fieldObservations"] = json!({"title":{"owner":{
+            "institution":"synthetic.invalid", "course":"course-a", "source":"ical", "id":"override"
+        },"value":"synthetic"}});
+        document["items"][0]["manualGradeObservation"] =
+            json!({"version":1,"value":"synthetic","source":"manual"});
+        atomic_write(&coursework, &node_json_bytes(&document)).unwrap();
+        let before_refusal = snapshot_tree(&export_parent);
+
+        assert_eq!(
+            app.shared
+                .export(&mut |_| {})
+                .expect_err("unconfirmed enriched export is refused")
+                .code,
+            "legacy-compatibility-gated"
+        );
+        assert_eq!(
+            snapshot_tree(&export_parent),
+            before_refusal,
+            "the rejected refreshable export creates no folder"
+        );
+
+        app.shared
+            .demote_store_for_rollback(&mut |_| {})
+            .expect("demotion keeps an exact recovery copy");
+        app.shared
+            .export_frozen_for_rollback(&mut |_| {})
+            .expect("frozen enriched export");
+        let frozen = std::fs::read_dir(&export_parent)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let restored = root.path().join("restored-legacy-layout");
+        export::copy_tree(&frozen, &restored, true, &mut |_| {}).expect("write disposable restore");
+        assert_eq!(
+            export::snapshot_layout(&frozen, true).unwrap(),
+            export::snapshot_layout(&restored, true).unwrap(),
+            "the restore operation produced the exported bytes"
+        );
+        assert_eq!(
+            std::fs::read(restored.join(crate::config::COURSEWORK_FILE)).unwrap(),
+            std::fs::read(frozen.join(crate::config::COURSEWORK_FILE)).unwrap(),
+            "the assertion observes the restore side effect, not only its reported state"
         );
     }
 

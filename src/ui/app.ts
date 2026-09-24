@@ -10,6 +10,7 @@ import {
   type DashboardAttachment,
   type DashboardCourse,
   type DashboardGradeGroup,
+  type DashboardGradePreviewProposal,
   type DashboardData,
   type DashboardEvent,
   type DashboardHandlers,
@@ -18,6 +19,7 @@ import {
   type DashboardResource,
   type DashboardSourceStatus,
   type DashboardProfile,
+  type DashboardPendingSourceLink,
   type DashboardState,
   type DesktopStoreInfo,
   safeLocalHref,
@@ -60,7 +62,7 @@ function renderDisabledShell(mount: HTMLElement): void {
   }
 }
 
-const EMPTY_DATA: DashboardData = { version: "", courses: [], events: [], resources: [], conversations: [], refreshes: [], profile: null, refreshAvailable: false, sourceStatus: {} };
+const EMPTY_DATA: DashboardData = { version: "", courses: [], events: [], pendingSourceLinks: [], resources: [], conversations: [], refreshes: [], profile: null, refreshAvailable: false, sourceStatus: {} };
 
 function record(value: unknown): Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function text(value: unknown, fallback = ""): string { return typeof value === "string" ? value : fallback; }
@@ -100,12 +102,16 @@ function parseEvent(value: unknown): DashboardEvent | undefined {
     ...(optionalText(item.endsAt ?? item.endAt) === undefined ? {} : { endsAt: optionalText(item.endsAt ?? item.endAt) }),
     ...(optionalText(item.location ?? item.place) === undefined ? {} : { location: optionalText(item.location ?? item.place) }),
     ...(optionalText(item.detail ?? item.description) === undefined ? {} : { detail: optionalText(item.detail ?? item.description) }),
+    notes: typeof item.notes === "string" ? item.notes : null,
     completed: item.completed === true, completedAt: typeof item.completedAt === "number" ? item.completedAt : null,
     ...(optionalText(item.submissionState) === undefined ? {} : { submissionState: optionalText(item.submissionState) }),
     source: typeof item.source === "string" ? item.source : null,
     points: nullableNumeric(item.points),
     score: nullableNumeric(item.score),
     grade: typeof item.grade === "string" ? item.grade : null,
+    manualGrade: typeof item.manualGrade === "string" ? item.manualGrade : null,
+    manualGradeVersion: item.manualGradeVersion === 1 ? 1 : null,
+    manualGradeSource: item.manualGradeSource === "pdf" ? "pdf" : typeof item.manualGrade === "string" ? "manual" : null,
     gradedAt: typeof item.gradedAt === "string" ? item.gradedAt : null,
     assignmentGroupId: nullableText(item.assignmentGroupId),
     assignmentGroupName: nullableText(item.assignmentGroupName),
@@ -173,6 +179,32 @@ function parseRefresh(value: unknown): DashboardRefresh | undefined {
   return { id, startedAt, status, summary, added: numeric(item.added ?? counts.added), changed: numeric(item.changed ?? counts.changed), removed: numeric(item.removed ?? counts.removed), changes: rows(item.changes).map(parseChange).filter((change): change is DashboardRefreshChange => change !== undefined) };
 }
 
+function sourceValue(value: unknown): string | undefined {
+  try {
+    const encoded = JSON.stringify(value);
+    return typeof encoded === "string" && encoded.length <= 1_000 ? encoded : undefined;
+  } catch { return undefined; }
+}
+
+function parsePendingSourceLink(value: unknown): DashboardPendingSourceLink | undefined {
+  const item = record(value); const reference = record(item.reference);
+  const id = text(item.id); const localId = text(item.localId); const courseId = text(item.course);
+  const source = text(reference.source); const referenceId = text(reference.id); const institution = text(reference.institution); const referenceCourse = text(reference.course);
+  if (id.length === 0 || id.length > 1_000 || (localId.length === 0 && item.needsRefresh !== true) || courseId.length === 0 || (source !== "canvas" && source !== "ical") || referenceId.length === 0 || institution.length === 0 || referenceCourse !== courseId) return undefined;
+  const candidates = rows(item.candidateIds).filter((candidate): candidate is string => typeof candidate === "string" && candidate.length > 0 && candidate.length <= 160);
+  if (candidates.length > 20 || new Set(candidates).size !== candidates.length) return undefined;
+  const fields: Record<string, string> = {};
+  for (const [name, fieldValue] of Object.entries(record(item.fields))) {
+    if (!/^[A-Za-z][A-Za-z0-9]{0,79}$/.test(name)) return undefined;
+    const rendered = sourceValue(fieldValue); if (rendered === undefined) return undefined;
+    fields[name] = rendered;
+  }
+  const reason = item.reason === "ambiguous-match" || item.reason === "conflicting-match" ? item.reason : undefined;
+  if (reason === undefined) return undefined;
+  const observedAt = typeof item.observedAt === "string" && Number.isFinite(Date.parse(item.observedAt)) ? item.observedAt : undefined;
+  return { id, localId, courseId, reference: { source, id: referenceId, institution, course: referenceCourse, ...(optionalText(reference.instance) === undefined ? {} : { instance: optionalText(reference.instance) }) }, fields, ...(observedAt === undefined ? {} : { observedAt }), candidateIds: candidates, reason, ...(item.needsRefresh === true ? { needsRefresh: true } : {}) };
+}
+
 export function parseDashboard(value: unknown): DashboardData {
   const body = record(value); const source = record(body.sourceStatus);
   const sourceStatus: DashboardSourceStatus = { ...(optionalText(source.state) === undefined ? {} : { state: optionalText(source.state) }), ...(optionalText(source.label) === undefined ? {} : { label: optionalText(source.label) }), ...(optionalText(source.detail) === undefined ? {} : { detail: optionalText(source.detail) }), ...(timestamp(source.lastRefreshAt) === undefined ? {} : { lastRefreshAt: timestamp(source.lastRefreshAt) }) };
@@ -180,6 +212,7 @@ export function parseDashboard(value: unknown): DashboardData {
     version: typeof body.version === "string" ? body.version : typeof body.version === "number" && Number.isFinite(body.version) ? String(body.version) : "",
     courses: rows(body.courses).map(parseCourse).filter((item): item is DashboardCourse => item !== undefined),
     events: rows(body.events).map(parseEvent).filter((item): item is DashboardEvent => item !== undefined),
+    pendingSourceLinks: rows(body.pendingSourceLinks).map(parsePendingSourceLink).filter((item): item is DashboardPendingSourceLink => item !== undefined),
     resources: rows(body.resources).map(parseResource).filter((item): item is DashboardResource => item !== undefined),
     conversations: rows(body.conversations).map(parseConversation).filter((item): item is DashboardConversation => item !== undefined),
     refreshes: rows(body.refreshes).map(parseRefresh).filter((item): item is DashboardRefresh => item !== undefined),
@@ -204,7 +237,7 @@ async function loadLegacyDashboard(refreshAvailable: boolean): Promise<Dashboard
   const courses = rows(record(await coursesResponse.json()).courses).map(parseCourse).filter((item): item is DashboardCourse => item !== undefined);
   const events = rows(record(await assignmentsResponse.json()).assignments).map(parseEvent).filter((item): item is DashboardEvent => item !== undefined);
   const lastRefreshAt = courses.map((course) => course.lastSuccessfulCheckAt ?? 0).reduce((latest, value) => Math.max(latest, value), 0) || null;
-  return { version: "", courses, events, resources: [], conversations: [], refreshes: [], profile: null, refreshAvailable, sourceStatus: { state: courses.length > 0 ? "ready" : "no_course", label: "Canvas coursework", detail: courses.length > 0 ? "Assignments are available; local Library and Inbox are not active in this environment." : "No course has been selected.", lastRefreshAt } };
+  return { version: "", courses, events, pendingSourceLinks: [], resources: [], conversations: [], refreshes: [], profile: null, refreshAvailable, sourceStatus: { state: courses.length > 0 ? "ready" : "no_course", label: "Canvas coursework", detail: courses.length > 0 ? "Assignments are available; local Library and Inbox are not active in this environment." : "No course has been selected.", lastRefreshAt } };
 }
 
 function pageFromHash(): DashboardPage {
@@ -254,7 +287,7 @@ export async function resolveNativeMutationConflict(error: unknown, reload: () =
 function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, transport: DashboardTransport, desktop?: DesktopDashboardOptions): () => void {
   const native = transport.mode === "native" ? transport as NativeTransport : undefined;
   let avatarUrl: string | undefined;
-  let state: DashboardState = { page: pageFromHash(), loading: true, data: { ...EMPTY_DATA, refreshAvailable: authRefreshAvailable }, now: Date.now(), eventMode: "all", courseFilter: "all", gradeCourseFilter: "all", gradeMode: "all", resourceFilter: "all", expandedEventIds: new Set(), pendingCompletionIds: new Set(), failedCompletionIds: new Set(), pendingDiscussionIds: new Set(), failedDiscussionIds: new Set(), refreshState: "idle", ...(desktop === undefined ? {} : { desktop: desktop.info }) };
+  let state: DashboardState = { page: pageFromHash(), loading: true, data: { ...EMPTY_DATA, refreshAvailable: authRefreshAvailable }, now: Date.now(), eventMode: "all", courseFilter: "all", gradeCourseFilter: "all", gradeMode: "all", resourceFilter: "all", expandedEventIds: new Set(), pendingCompletionIds: new Set(), failedCompletionIds: new Set(), pendingDiscussionIds: new Set(), failedDiscussionIds: new Set(), pendingManualGradeIds: new Set(), failedManualGradeIds: new Set(), refreshState: "idle", ...(desktop === undefined ? {} : { desktop: desktop.info }) };
   let disposed = false;
   let snapshotStatusTimer: ReturnType<typeof setTimeout> | undefined;
   const listeners = new AbortController();
@@ -304,6 +337,70 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
     } catch {
       return false;
     }
+  }
+
+  function selectPendingLink(id: string): void {
+    if (!state.data.pendingSourceLinks.some((link) => link.id === id)) return;
+    state = { ...state, selectedPendingLinkId: id, selectedPendingLinkCandidateId: undefined, pendingLinkDecision: undefined, pendingLinkNotice: undefined };
+    draw();
+  }
+
+  function selectPendingLinkCandidate(id: string): void {
+    const selected = state.data.pendingSourceLinks.find((link) => link.id === state.selectedPendingLinkId) ?? state.data.pendingSourceLinks[0];
+    if (selected === undefined || !selected.candidateIds.includes(id)) return;
+    state = { ...state, selectedPendingLinkId: selected.id, selectedPendingLinkCandidateId: id, pendingLinkDecision: undefined, pendingLinkNotice: undefined };
+    draw();
+  }
+
+  function openPendingLinkDecision(decision: "confirm" | "reject"): void {
+    const selected = state.data.pendingSourceLinks.find((link) => link.id === state.selectedPendingLinkId) ?? state.data.pendingSourceLinks[0];
+    if (state.readOnly === true || selected === undefined || selected.needsRefresh === true) return;
+    const candidateId = selected.candidateIds.length === 1 ? selected.candidateIds[0] : state.selectedPendingLinkCandidateId;
+    if (decision === "confirm" && (candidateId === undefined || !selected.candidateIds.includes(candidateId))) {
+      state = { ...state, pendingLinkNotice: "Choose a local candidate before confirming this link." };
+      draw();
+      return;
+    }
+    state = { ...state, selectedPendingLinkId: selected.id, ...(candidateId === undefined ? {} : { selectedPendingLinkCandidateId: candidateId }), pendingLinkDecision: decision, pendingLinkNotice: undefined };
+    draw();
+  }
+
+  function cancelPendingLinkDecision(): void {
+    if (state.pendingLinkSaving === true) return;
+    state = { ...state, pendingLinkDecision: undefined, pendingLinkNotice: "Cancelled. This suggestion is still pending; coursework did not change." };
+    draw();
+  }
+
+  async function resolvePendingLink(): Promise<void> {
+    const selected = state.data.pendingSourceLinks.find((link) => link.id === state.selectedPendingLinkId) ?? state.data.pendingSourceLinks[0];
+    const decision = state.pendingLinkDecision;
+    const candidateId = selected?.candidateIds.length === 1 ? selected.candidateIds[0] : state.selectedPendingLinkCandidateId;
+    if (selected === undefined || selected.needsRefresh === true || decision === undefined || state.data.version.length !== 64 || (decision === "confirm" && (candidateId === undefined || !selected.candidateIds.includes(candidateId)))) return;
+    state = { ...state, pendingLinkSaving: true, pendingLinkNotice: undefined }; draw();
+    try {
+      if (native !== undefined) {
+        await native.resolvePendingSourceLink(selected.id, decision === "confirm" ? candidateId! : "", decision, state.data.version);
+        const reloaded = await reloadAuthoritativeDashboard();
+        state = { ...state, pendingLinkSaving: false, pendingLinkDecision: undefined, pendingLinkNotice: reloaded ? (decision === "confirm" ? "Link confirmed. The original local item was kept." : "Records kept distinct. The Canvas item is now separate.") : "Decision saved. Reload to view current coursework." };
+        draw();
+        return;
+      }
+      const response = await postMutation(`/api/local/pending-source-links/${encodeURIComponent(selected.id)}`, {
+        expectedVersion: state.data.version, localItemId: decision === "confirm" ? candidateId : "", decision,
+      });
+      if (response.status === 409) {
+        const reloaded = await reloadAuthoritativeDashboard();
+        state = { ...state, pendingLinkSaving: false, pendingLinkDecision: undefined, pendingLinkNotice: reloaded ? "This comparison changed elsewhere. Latest state reloaded; review it again." : "This comparison changed elsewhere. Reload the page and try again." };
+      } else if (!response.ok) {
+        state = { ...state, pendingLinkSaving: false, pendingLinkNotice: response.status === 403 ? "The local session changed; reload and try again." : "The decision was not saved. Coursework was unchanged." };
+      } else {
+        const reloaded = await reloadAuthoritativeDashboard();
+        state = { ...state, pendingLinkSaving: false, pendingLinkDecision: undefined, pendingLinkNotice: reloaded ? (decision === "confirm" ? "Link confirmed. The original local item was kept." : "Records kept distinct. The Canvas item is now separate.") : "Decision saved. Reload to view current coursework." };
+      }
+    } catch {
+      state = { ...state, pendingLinkSaving: false, pendingLinkNotice: "The decision was not saved. Coursework was unchanged." };
+    }
+    draw();
   }
 
   async function toggleCompletion(id: string): Promise<void> {
@@ -366,6 +463,107 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
       if (nativeFailure !== undefined) authoritativeReloaded = nativeFailure.reloaded;
       state = { ...state, data: authoritativeReloaded ? state.data : { ...state.data, events: update(before.post, before.replies) }, pendingDiscussionIds: replaced(state.pendingDiscussionIds, id, false), failedDiscussionIds: replaced(state.failedDiscussionIds, id, true), mutationError: { id, message: nativeFailure?.message ?? (error instanceof Error ? error.message : "Could not save discussion progress. Existing marks were restored.") } };
     }
+    draw();
+  }
+
+  async function saveManualGrade(id: string, source: "manual" | "pdf" = "manual"): Promise<void> {
+    if (state.readOnly === true) return;
+    const item = state.data.events.find((event) => event.id === id);
+    const editing = state.editingManualGrade;
+    if (item === undefined || item.kind === "class" || editing?.id !== id || state.pendingManualGradeIds.has(id)) return;
+    const value = editing.draft.trim() || null;
+    const update = (manualGrade: string | null, manualGradeVersion: 1 | null, manualGradeSource: "manual" | "pdf" | null) => state.data.events.map((event) => event.id === id ? { ...event, manualGrade, manualGradeVersion, manualGradeSource } : event);
+    state = {
+      ...state,
+      data: { ...state.data, events: update(value, value === null ? null : 1, value === null ? null : source) },
+      pendingManualGradeIds: replaced(state.pendingManualGradeIds, id, true),
+      failedManualGradeIds: replaced(state.failedManualGradeIds, id, false),
+      mutationError: undefined,
+    };
+    draw();
+    let authoritativeReloaded = false;
+    try {
+      if (native !== undefined) {
+        const result = await native.setManualGrade(item.sourceItemId ?? item.id, value, state.data.version);
+        state = { ...state, data: { ...state.data, version: result.version, events: update(result.manualGrade, result.manualGradeVersion, result.manualGrade === null ? null : "manual") }, pendingManualGradeIds: replaced(state.pendingManualGradeIds, id, false), editingManualGrade: undefined };
+        draw();
+        return;
+      }
+      const response = await postMutation(`/api/source-items/${encodeURIComponent(item.sourceItemId ?? item.id)}/manual-grade`, { version: state.data.version, value, source });
+      if (response.status === 409) {
+        const reloaded = await reloadAuthoritativeDashboard();
+        authoritativeReloaded = reloaded;
+        throw new Error(reloaded ? "This local grade changed elsewhere. Latest state reloaded; try again." : "This local grade changed elsewhere. Reload the page and try again.");
+      }
+      if (!response.ok) throw new Error(response.status === 403 ? "Could not save local grade. The local session changed; reload the page and try again." : "Could not save local grade. The previous value was restored.");
+      const body = record(await response.json());
+      const manualGrade = typeof body.manualGrade === "string" ? body.manualGrade : null;
+      const manualGradeVersion = body.manualGradeVersion === 1 ? 1 : null;
+      const manualGradeSource = manualGrade === null ? null : body.manualGradeSource === "pdf" ? "pdf" : "manual";
+      state = {
+        ...state,
+        data: { ...state.data, version: typeof body.version === "string" ? body.version : state.data.version, events: update(manualGrade, manualGradeVersion, manualGradeSource) },
+        pendingManualGradeIds: replaced(state.pendingManualGradeIds, id, false),
+        editingManualGrade: undefined,
+      };
+    } catch (error) {
+      state = {
+        ...state,
+        data: authoritativeReloaded ? state.data : { ...state.data, events: update(item.manualGrade ?? null, item.manualGradeVersion ?? null, item.manualGradeSource ?? null) },
+        pendingManualGradeIds: replaced(state.pendingManualGradeIds, id, false),
+        failedManualGradeIds: replaced(state.failedManualGradeIds, id, true),
+        ...(authoritativeReloaded ? { editingManualGrade: undefined } : {}),
+        mutationError: { id, message: error instanceof Error ? error.message : "Could not save local grade. The previous value was restored." },
+      };
+    }
+    draw();
+  }
+
+  async function previewGradePdf(file: File | null): Promise<void> {
+    if (native !== undefined || state.readOnly === true || file === null) return;
+    state = { ...state, gradePreview: { phase: "parsing", proposals: [], selectedIds: new Set() } };
+    draw();
+    const token = readCsrfToken();
+    if (token === undefined) { state = { ...state, gradePreview: { phase: "failed", proposals: [], selectedIds: new Set(), error: "This report needs manual entry." } }; draw(); return; }
+    const request = (csrf: string) => fetch("/api/local/grade-preview", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/pdf", [CSRF_HEADER_NAME]: csrf }, body: file });
+    try {
+      let response = await request(token);
+      if (response.status === 403) {
+        const refreshed = await refreshLocalCsrf(token);
+        if (refreshed !== undefined) response = await request(refreshed);
+      }
+      if (!response.ok) throw new Error();
+      const value = record(await response.json());
+      const proposals: DashboardGradePreviewProposal[] = rows(value.proposals).flatMap((entry) => {
+        const proposal = record(entry);
+        const id = optionalText(proposal.id); const course = optionalText(proposal.course); const item = optionalText(proposal.item); const grade = optionalText(proposal.grade);
+        const sourceItemId = proposal.sourceItemId === null ? null : optionalText(proposal.sourceItemId) ?? null;
+        if (id === undefined || course === undefined || item === undefined || grade === undefined || (proposal.status !== "ready" && proposal.status !== "manual")) return [];
+        return [{ id, course, item, grade, source: "User-confirmed PDF", sourceItemId, status: proposal.status }];
+      });
+      state = { ...state, gradePreview: { phase: "ready", proposals, selectedIds: new Set() } };
+    } catch {
+      state = { ...state, gradePreview: { phase: "failed", proposals: [], selectedIds: new Set(), error: "This report needs manual entry." } };
+    }
+    draw();
+  }
+
+  async function confirmGradePreview(): Promise<void> {
+    const preview = state.gradePreview;
+    if (preview?.phase !== "ready" || preview.selectedIds.size !== 1) return;
+    const selected = preview.proposals.filter((proposal) => preview.selectedIds.has(proposal.id) && proposal.status === "ready" && proposal.sourceItemId !== null);
+    if (selected.length !== 1) return;
+    state = { ...state, gradePreview: { ...preview, phase: "confirming" } };
+    draw();
+    const proposal = selected[0]!;
+    state = { ...state, editingManualGrade: { id: proposal.sourceItemId!, draft: proposal.grade } };
+    await saveManualGrade(proposal.sourceItemId!, "pdf");
+    if (state.mutationError !== undefined) {
+      state = { ...state, gradePreview: { phase: "ready", proposals: preview.proposals, selectedIds: new Set(), error: "The grade was not saved. Review the latest local value." } };
+      draw();
+      return;
+    }
+    state = { ...state, gradePreview: undefined };
     draw();
   }
 
@@ -586,11 +784,37 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
     onToggleEvent(id) { state = { ...state, expandedEventIds: replaced(state.expandedEventIds, id, !state.expandedEventIds.has(id)) }; draw(); },
     onToggleCompletion(id) { void toggleCompletion(id); },
     onToggleDiscussion(id, field) { void toggleDiscussion(id, field); },
+    onEditManualGrade(id) {
+      if (state.readOnly === true || state.pendingManualGradeIds.has(id)) return;
+      const item = state.data.events.find((event) => event.id === id);
+      if (item === undefined || item.kind === "class") return;
+      state = { ...state, editingManualGrade: { id, draft: item.manualGrade ?? "" }, failedManualGradeIds: replaced(state.failedManualGradeIds, id, false), mutationError: undefined };
+      draw();
+    },
+    onManualGradeDraft(draft) {
+      if (state.editingManualGrade !== undefined) state = { ...state, editingManualGrade: { ...state.editingManualGrade, draft } };
+    },
+    onSaveManualGrade(id) { void saveManualGrade(id); },
+    onCancelManualGrade() { if (state.editingManualGrade !== undefined) { state = { ...state, editingManualGrade: undefined }; draw(); } },
+    onGradePreviewFile(file) { void previewGradePdf(file); },
+    onToggleGradePreviewProposal(id) {
+      const preview = state.gradePreview;
+      if (preview?.phase !== "ready") return;
+      state = { ...state, gradePreview: { ...preview, selectedIds: new Set([id]) } };
+      draw();
+    },
+    onConfirmGradePreview() { void confirmGradePreview(); },
+    onCancelGradePreview() { if (state.gradePreview?.phase !== "confirming") { state = { ...state, gradePreview: undefined }; draw(); } },
     onSelectConversation(selectedConversationId) { state = { ...state, selectedConversationId }; draw(); },
     onSelectRefresh(selectedRefreshId) { state = { ...state, selectedRefreshId }; draw(); },
     onRefresh() { void refresh(); },
     onToggleCanvasRefresh(enabled) { void toggleCanvasRefresh(enabled); },
     onCopyAssignment(id) { void copyAssignment(id); },
+    onSelectPendingLink(id) { selectPendingLink(id); },
+    onSelectPendingLinkCandidate(id) { selectPendingLinkCandidate(id); },
+    onOpenPendingLinkDecision(decision) { openPendingLinkDecision(decision); },
+    onCancelPendingLinkDecision() { cancelPendingLinkDecision(); },
+    onResolvePendingLink() { void resolvePendingLink(); },
     ...(native === undefined ? {} : { onOpenResource(id: string) {
       state = { ...state, resourceNotice: "Opening the saved library file…" }; draw();
       void native.openResource(id).then((action) => { state = { ...state, resourceNotice: action === "downloaded" ? "File saved." : action === "opened" ? "File opened." : "Save cancelled." }; draw(); }, () => { state = { ...state, resourceNotice: "The saved file could not be opened." }; draw(); });
@@ -608,6 +832,19 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
   };
 
   window.addEventListener("hashchange", () => { state = { ...state, page: pageFromHash() }; draw(); }, { signal: listeners.signal });
+  window.addEventListener("keydown", (event) => {
+    if (state.page !== "more" || state.pendingLinkSaving === true || state.data.pendingSourceLinks.length === 0 || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key === "Escape" && state.pendingLinkDecision !== undefined) { event.preventDefault(); cancelPendingLinkDecision(); return; }
+    if (state.pendingLinkDecision !== undefined) return;
+    const target = event.target;
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return;
+    const selectedIndex = Math.max(0, state.data.pendingSourceLinks.findIndex((link) => link.id === state.selectedPendingLinkId));
+    if (event.key.toLowerCase() === "j" || event.key.toLowerCase() === "k") {
+      event.preventDefault(); const direction = event.key.toLowerCase() === "j" ? 1 : -1;
+      selectPendingLink(state.data.pendingSourceLinks[(selectedIndex + direction + state.data.pendingSourceLinks.length) % state.data.pendingSourceLinks.length]!.id);
+    } else if (event.key.toLowerCase() === "c") { event.preventDefault(); openPendingLinkDecision("confirm"); }
+    else if (event.key.toLowerCase() === "r") { event.preventDefault(); openPendingLinkDecision("reject"); }
+  }, { signal: listeners.signal });
   draw(); void load(); void pollStartupSnapshot();
   if (transport.mode === "browser" && window.isSecureContext && "serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js").catch(() => undefined);
   return () => {

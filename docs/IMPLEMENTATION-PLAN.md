@@ -21,6 +21,13 @@ Replace the private Marymount coursework page with a local Due Good app. The imm
 - OrbStack Docker is available on Apple Silicon. OpenCode CLI `1.18.30` reports `opencode-go/deepseek-v4.1-flash` with the `high` variant. The provider does not expose an immutable backing-model digest, so each run must record and compare the CLI-reported model metadata; this detects observed drift but cannot prove provider-side immutability.
 - No reviewed reusable container kit or Due Good-specific OpenCode BWS consumer exists.
 
+## Canvas iCal fallback — Task 1.1 verified scope
+
+- **Confirmed:** `CourseworkStore` is the local JSON reader/writer; it validates immutable item IDs and preserves arbitrary document fields when it writes a personal completion or discussion mark. `captureCanvasSnapshot` currently selects `source === "canvas"` or `canvasId` records, and its Activity diff keys on local IDs. `DashboardStore` is projection-only, and the native export test round-trips the coursework JSON through `CourseworkStore`.
+- **Changed:** the reviewed fallback plan names `src/local/acquisition.ts`, but that module and its focused test do not exist in this checkout. Task 1.1 will add only a synthetic, source-neutral observation merger there; it will not parse iCal, fetch a feed, or alter the browser API.
+- **Not verifiable:** the private reconciler, live feed behavior, and private source shape remain unavailable and are not inspected. The source-reference contract therefore uses only synthetic fixture evidence.
+- **Task 1.1 implementation boundary:** add scoped references and field-owned observations without changing local IDs; deterministically backfill references for existing `canvasId` records; reject duplicate references; hold ambiguous cross-source candidates; preserve personal and unknown fields; and make repeat imports byte-identical. Provenance-only changes do not produce Activity changes.
+
 ## Architecture decisions
 
 1. **Host orchestration and source boundary.** Sol remains the host orchestrator. For each Linux-safe task, the host records the accepted tracked working tree as an immutable Git tree object using a host-controlled temporary index, excluding untracked owner files, then materializes that exact tree with `git archive` into a new disposable source directory. This requires no commit and carries accepted output between tasks. The mounted source contains no `.git` directory or file. Host-owned clean and changed trees are compared with system/global Git configuration disabled, external diff and textconv disabled, and no project-controlled executable invoked.

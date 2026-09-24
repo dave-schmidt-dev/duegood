@@ -3,7 +3,7 @@ import { dashboardNav, type DashboardPage } from "../routes";
 
 export interface DashboardGradeGroup { readonly id: string | null; readonly name: string | null; readonly weight: number | null }
 export interface DashboardCourse { readonly id: string; readonly courseCode: string; readonly title: string; readonly term?: string; readonly lastSuccessfulCheckAt?: number | null; readonly gradeGroups?: readonly DashboardGradeGroup[] }
-export interface DashboardEvent { readonly id: string; readonly sourceItemId?: string; readonly courseId: string; readonly courseCode: string; readonly kind: "deadline" | "class" | "discussion"; readonly title: string; readonly startsAt: string; readonly endsAt?: string | null; readonly location?: string | null; readonly detail?: string | null; readonly completed: boolean; readonly completedAt?: number | null; readonly submissionState?: string; readonly source?: string | null; readonly points?: number | null; readonly score?: number | null; readonly grade?: string | null; readonly gradedAt?: string | null; readonly assignmentGroupId?: string | null; readonly assignmentGroupName?: string | null; readonly assignmentGroupWeight?: number | null; readonly discussionPostDone?: boolean; readonly discussionRepliesDone?: boolean }
+export interface DashboardEvent { readonly id: string; readonly sourceItemId?: string; readonly courseId: string; readonly courseCode: string; readonly kind: "deadline" | "class" | "discussion"; readonly title: string; readonly startsAt: string; readonly endsAt?: string | null; readonly location?: string | null; readonly detail?: string | null; readonly notes?: string | null; readonly completed: boolean; readonly completedAt?: number | null; readonly submissionState?: string; readonly source?: string | null; readonly points?: number | null; readonly score?: number | null; readonly grade?: string | null; readonly manualGrade?: string | null; readonly manualGradeVersion?: 1 | null; readonly manualGradeSource?: "manual" | "pdf" | null; readonly gradedAt?: string | null; readonly assignmentGroupId?: string | null; readonly assignmentGroupName?: string | null; readonly assignmentGroupWeight?: number | null; readonly discussionPostDone?: boolean; readonly discussionRepliesDone?: boolean }
 export interface DashboardResource { readonly id: string; readonly courseId: string; readonly courseCode: string; readonly type: string; readonly title: string; readonly context?: string | null; readonly updatedAt?: string | number | null; readonly localUrl?: string | null; readonly savedLocally?: boolean }
 export interface DashboardMessage { readonly id?: string | null; readonly author: string; readonly createdAt?: string | number | null; readonly body: string; readonly bodyTruncated?: boolean; readonly attachments: readonly DashboardAttachment[] }
 export interface DashboardAttachment { readonly name: string; readonly contentType?: string | null; readonly sizeBytes?: number | null }
@@ -12,10 +12,23 @@ export interface DashboardRefreshChange { readonly kind: "added" | "changed" | "
 export interface DashboardRefresh { readonly id: string; readonly startedAt: string | number; readonly status: "complete" | "partial" | "failed"; readonly summary: string; readonly added: number; readonly changed: number; readonly removed: number; readonly changes: readonly DashboardRefreshChange[] }
 export interface DashboardSourceStatus { readonly state?: string; readonly label?: string; readonly detail?: string; readonly lastRefreshAt?: string | number | null }
 export interface DashboardProfile { readonly displayName: string | null; readonly avatarPath: string | null }
+export interface DashboardPendingSourceLink {
+  readonly id: string;
+  readonly localId: string;
+  readonly courseId: string;
+  readonly reference: { readonly source: string; readonly id: string; readonly institution: string; readonly course: string; readonly instance?: string };
+  readonly fields: Readonly<Record<string, string>>;
+  readonly observedAt?: string;
+  readonly candidateIds: readonly string[];
+  readonly reason: "ambiguous-match" | "conflicting-match";
+  readonly needsRefresh?: true;
+}
 /** Desktop mode: which app store the data came from. Absent in browser mode. */
 export interface DesktopStoreInfo { readonly storeState: "preview" | "authoritative"; readonly dataFolder: string; readonly importedAt: string | null; readonly lastRefreshAt?: string | null; readonly canvasRefreshEnabled?: boolean; readonly refreshAvailable?: boolean; readonly snapshotInProgress?: boolean; readonly snapshotProgress?: { readonly filesDone: number; readonly bytesDone: number } | null; readonly warning?: string | null }
 /** `version` is the opaque exact-byte digest of the coursework document (empty when unknown). */
-export interface DashboardData { readonly version: string; readonly courses: readonly DashboardCourse[]; readonly events: readonly DashboardEvent[]; readonly resources: readonly DashboardResource[]; readonly conversations: readonly DashboardConversation[]; readonly refreshes: readonly DashboardRefresh[]; readonly profile: DashboardProfile | null; readonly refreshAvailable: boolean; readonly sourceStatus: DashboardSourceStatus }
+export interface DashboardData { readonly version: string; readonly courses: readonly DashboardCourse[]; readonly events: readonly DashboardEvent[]; readonly pendingSourceLinks: readonly DashboardPendingSourceLink[]; readonly resources: readonly DashboardResource[]; readonly conversations: readonly DashboardConversation[]; readonly refreshes: readonly DashboardRefresh[]; readonly profile: DashboardProfile | null; readonly refreshAvailable: boolean; readonly sourceStatus: DashboardSourceStatus }
+export interface DashboardGradePreviewProposal { readonly id: string; readonly course: string; readonly item: string; readonly grade: string; readonly source: "User-confirmed PDF"; readonly sourceItemId: string | null; readonly status: "ready" | "manual" }
+interface DashboardGradePreview { readonly phase: "parsing" | "ready" | "confirming" | "failed"; readonly proposals: readonly DashboardGradePreviewProposal[]; readonly selectedIds: ReadonlySet<string>; readonly error?: string }
 
 export interface DashboardState {
   readonly page: DashboardPage;
@@ -33,6 +46,10 @@ export interface DashboardState {
   readonly failedCompletionIds: ReadonlySet<string>;
   readonly pendingDiscussionIds: ReadonlySet<string>;
   readonly failedDiscussionIds: ReadonlySet<string>;
+  readonly pendingManualGradeIds: ReadonlySet<string>;
+  readonly failedManualGradeIds: ReadonlySet<string>;
+  readonly editingManualGrade?: { readonly id: string; readonly draft: string };
+  readonly gradePreview?: DashboardGradePreview;
   readonly mutationError?: { readonly id: string; readonly message: string };
   readonly selectedConversationId?: string;
   readonly selectedRefreshId?: string;
@@ -42,6 +59,11 @@ export interface DashboardState {
   readonly refreshSettingError?: string;
   readonly refreshDetail?: string;
   readonly copyFeedback?: Readonly<Record<string, "pending" | "copied" | "failed">>;
+  readonly selectedPendingLinkId?: string;
+  readonly selectedPendingLinkCandidateId?: string;
+  readonly pendingLinkDecision?: "confirm" | "reject";
+  readonly pendingLinkSaving?: boolean;
+  readonly pendingLinkNotice?: string;
   /** Desktop mode only. */
   readonly desktop?: DesktopStoreInfo;
   /** Completion and discussion controls render disabled only when explicitly requested. */
@@ -68,11 +90,24 @@ export interface DashboardHandlers {
   readonly onToggleEvent: (id: string) => void;
   readonly onToggleCompletion: (id: string) => void;
   readonly onToggleDiscussion: (id: string, field: "post" | "replies") => void;
+  readonly onEditManualGrade: (id: string) => void;
+  readonly onManualGradeDraft: (value: string) => void;
+  readonly onSaveManualGrade: (id: string) => void;
+  readonly onCancelManualGrade: () => void;
+  readonly onGradePreviewFile?: (file: File | null) => void;
+  readonly onToggleGradePreviewProposal?: (id: string) => void;
+  readonly onConfirmGradePreview?: () => void;
+  readonly onCancelGradePreview?: () => void;
   readonly onSelectConversation: (id: string) => void;
   readonly onSelectRefresh: (id: string) => void;
   readonly onRefresh: () => void;
   readonly onToggleCanvasRefresh?: (enabled: boolean) => void;
   readonly onCopyAssignment: (id: string) => void;
+  readonly onSelectPendingLink?: (id: string) => void;
+  readonly onSelectPendingLinkCandidate?: (id: string) => void;
+  readonly onOpenPendingLinkDecision?: (decision: "confirm" | "reject") => void;
+  readonly onCancelPendingLinkDecision?: () => void;
+  readonly onResolvePendingLink?: () => void;
   /** Native-only action: Rust resolves an internal Library ID and opens or saves it. */
   readonly onOpenResource?: (id: string) => void;
   readonly onRecovery?: () => void;
@@ -353,8 +388,12 @@ function hasNumericGrade(event: DashboardEvent): boolean {
   return typeof event.score === "number" && Number.isFinite(event.score) && typeof event.points === "number" && Number.isFinite(event.points);
 }
 
-function hasReportedGrade(event: DashboardEvent): boolean {
+function hasCanvasReportedGrade(event: DashboardEvent): boolean {
   return (typeof event.score === "number" && Number.isFinite(event.score)) || (typeof event.grade === "string" && event.grade.length > 0) || asDate(event.gradedAt) !== undefined;
+}
+
+function hasReportedGrade(event: DashboardEvent): boolean {
+  return event.manualGrade !== null && event.manualGrade !== undefined || hasCanvasReportedGrade(event);
 }
 
 function pointsText(event: DashboardEvent): string {
@@ -432,6 +471,41 @@ function groupCell(event: DashboardEvent): string {
   return `${name} · ${weight}`;
 }
 
+function selectedGrade(event: DashboardEvent): string {
+  if (event.manualGrade !== null && event.manualGrade !== undefined) return event.manualGrade;
+  if (event.grade !== null && event.grade !== undefined && event.grade.length > 0) return event.grade;
+  return hasNumericGrade(event) ? pointsText(event) : "Unavailable";
+}
+
+function gradeProvenance(event: DashboardEvent): string {
+  if (event.manualGrade !== null && event.manualGrade !== undefined) return `${event.manualGradeSource === "pdf" ? "User-confirmed PDF" : "Local observation"} · v${String(event.manualGradeVersion ?? 1)}`;
+  if (event.grade !== null && event.grade !== undefined && event.grade.length > 0) return "Canvas grade";
+  if (hasNumericGrade(event)) return "Canvas score";
+  return "No grade observation";
+}
+
+function gradeEditor(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
+  const editing = state.editingManualGrade?.id === event.id ? state.editingManualGrade : undefined;
+  const pending = state.pendingManualGradeIds.has(event.id);
+  if (editing === undefined) {
+    return { tag: "button", attrs: { type: "button", class: "more-action", "aria-label": `Edit local grade for ${event.title}`, ...(pending ? { disabled: "" } : {}) }, text: event.manualGrade === null || event.manualGrade === undefined ? "Add local grade" : "Edit local grade", on: { click: () => handlers.onEditManualGrade(event.id) } };
+  }
+  return { tag: "form", attrs: { class: "grade-editor", "aria-label": `Edit local grade for ${event.title}` }, on: { submit: (input) => { input.preventDefault(); handlers.onSaveManualGrade(event.id); } }, children: [
+    { tag: "input", attrs: { type: "text", value: editing.draft, maxlength: "80", autofocus: "", "aria-label": `Local grade for ${event.title}`, ...(pending ? { disabled: "" } : {}) }, on: {
+      input: (input) => handlers.onManualGradeDraft((input.currentTarget as HTMLInputElement).value),
+      keydown: (input) => { if ((input as KeyboardEvent).key === "Escape") { input.preventDefault(); handlers.onCancelManualGrade(); } },
+    } },
+    { tag: "button", attrs: { type: "submit", class: "more-action", ...(pending ? { disabled: "" } : {}) }, text: pending ? "Saving…" : "Save" },
+    { tag: "button", attrs: { type: "button", class: "more-action", ...(pending ? { disabled: "" } : {}) }, text: "Cancel", on: { click: () => handlers.onCancelManualGrade() } },
+  ] };
+}
+
+function gradeEditorCell(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
+  if (state.readOnly === true || state.desktop !== undefined || !/^[a-f0-9]{64}$/.test(state.data.version)) return el("td", "Local editing unavailable");
+  const error = state.failedManualGradeIds.has(event.id) && state.mutationError?.id === event.id ? state.mutationError.message : undefined;
+  return el("td", undefined, undefined, [gradeEditor(event, state, handlers), ...(error === undefined ? [] : [el("span", error, { role: "status", "aria-live": "polite", class: "inline-error" })])]);
+}
+
 function gradebookPage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   const courses = orderedCourses(state.data.courses);
   const records = state.data.events.filter((event) => event.kind !== "class");
@@ -444,7 +518,7 @@ function gradebookPage(state: DashboardState, handlers: DashboardHandlers): Elem
   const summary = courses.map((course) => {
     const courseRecords = records.filter((event) => event.courseId === course.id || key(event.courseCode) === key(course.courseCode));
     const numeric = courseRecords.filter(hasNumericGrade);
-    const reported = courseRecords.filter(hasReportedGrade);
+    const reported = courseRecords.filter(hasCanvasReportedGrade);
     const earned = numeric.reduce((total, event) => total + (event.score ?? 0), 0);
     const possible = numeric.reduce((total, event) => total + (event.points ?? 0), 0);
     const progress = gradeProgress(course, courseRecords);
@@ -471,27 +545,48 @@ function gradebookPage(state: DashboardState, handlers: DashboardHandlers): Elem
   const table = visibleRecords.length === 0 ? empty(state.gradeMode === "graded" ? "No graded items match this filter." : "No grade records match this filter.") : el("div", undefined, { class: "grade-table-wrap" }, [
     { tag: "table", attrs: { class: "grade-table" }, children: [
       { tag: "caption", text: "Coursework grade records" },
-      { tag: "thead", children: [{ tag: "tr", children: [el("th", "Assignment", { scope: "col" }), el("th", "Course", { scope: "col" }), el("th", "Canvas group", { scope: "col" }), el("th", "Source", { scope: "col" }), el("th", "Score", { scope: "col" }), el("th", "Grade", { scope: "col" }), el("th", "Graded", { scope: "col" })] }] },
+      { tag: "thead", children: [{ tag: "tr", children: [el("th", "Assignment", { scope: "col" }), el("th", "Course", { scope: "col" }), el("th", "Canvas group", { scope: "col" }), el("th", "Canvas score", { scope: "col" }), el("th", "Canvas grade", { scope: "col" }), el("th", "Selected value", { scope: "col" }), el("th", "Provenance", { scope: "col" }), el("th", "Edit", { scope: "col" })] }] },
       { tag: "tbody", children: visibleRecords.map((event) => ({ tag: "tr", children: [
         el("th", event.title, { scope: "row" }),
         el("td", code(event.courseCode)),
         el("td", groupCell(event)),
-        el("td", event.source ?? "Not supplied"),
         el("td", pointsText(event), { class: hasNumericGrade(event) ? "grade-score" : "grade-score grade-score--pending" }),
-        el("td", event.grade ?? (hasReportedGrade(event) ? "Reported" : "Not graded")),
-        el("td", hasReportedGrade(event) ? (asDate(event.gradedAt) === undefined ? "Date unavailable" : formatted(event.gradedAt, true)) : "Awaiting / unavailable"),
+        el("td", event.grade ?? (hasCanvasReportedGrade(event) ? "Reported" : "Not graded")),
+        el("td", selectedGrade(event), { class: event.manualGrade === null || event.manualGrade === undefined ? "grade-score grade-score--pending" : "grade-score" }),
+        el("td", gradeProvenance(event)),
+        gradeEditorCell(event, state, handlers),
       ] })) },
     ] },
   ]);
+  const previewAvailable = state.readOnly !== true && state.desktop === undefined && /^[a-f0-9]{64}$/.test(state.data.version) && handlers.onGradePreviewFile !== undefined;
+  const preview = state.gradePreview;
+  const previewMessage = preview === undefined ? undefined : preview.phase === "parsing" ? "Reading your PDF on this device. The report is not stored." : preview.phase === "confirming" ? "Saving confirmed local grade…" : preview.phase === "failed" ? (preview.error ?? "This report needs manual entry.") : preview.error ?? "Review an exact match before saving. Canvas-reported facts stay unchanged.";
+  const previewDialog = preview === undefined ? [] : [el("dialog", undefined, { open: "", role: "dialog", "aria-label": "Local PDF grade preview" }, [
+    el("h2", "Confirm proposed grade rows"),
+    el("p", previewMessage, preview.phase === "failed" ? { role: "alert" } : { role: "status", "aria-live": "polite" }),
+    ...(preview.phase === "ready" ? [el("div", undefined, { class: "grade-preview-rows" }, preview.proposals.map((proposal) => proposal.status === "ready"
+      ? el("label", undefined, { class: "grade-preview-row" }, [{ tag: "input", attrs: { type: "radio", name: "pdf-grade-proposal", "aria-label": `Confirm PDF grade for ${proposal.item}`, ...(preview.selectedIds.has(proposal.id) ? { checked: "" } : {}) }, on: { change: () => handlers.onToggleGradePreviewProposal?.(proposal.id) } }, el("span", undefined, undefined, [el("strong", proposal.item), el("span", `${proposal.course} · ${proposal.grade} · ${proposal.source}`)])])
+      : el("div", undefined, { class: "grade-preview-row", role: "note" }, [el("strong", proposal.item), el("span", `${proposal.course} · ${proposal.grade}`), el("span", "Manual entry required")])))] : []),
+    el("div", undefined, { class: "grade-preview-actions" }, [
+      { tag: "button", attrs: { type: "button", class: "more-action", ...(preview.phase === "confirming" ? { disabled: "" } : {}) }, text: "Cancel", on: { click: () => handlers.onCancelGradePreview?.() } },
+      { tag: "button", attrs: { type: "button", class: "more-action", ...(preview.phase !== "ready" || preview.selectedIds.size !== 1 ? { disabled: "" } : {}) }, text: "Confirm grade", on: { click: () => handlers.onConfirmGradePreview?.() } },
+    ]),
+  ])];
   return el("section", undefined, { class: "page", "data-page-panel": "grades" }, [
-    heading("Coursework grade records", "Grades", "Read-only Canvas records with group metadata and bounded progress indicators. No official weighted or final course grade is inferred."),
-    el("div", undefined, { class: "grade-honesty", role: "note" }, [el("strong", "Graded points are not a final course grade."), el("span", "Progress indicators are not official final grades: graded work excludes ungraded assignments; whole-course progress treats ungraded current records as zero. Coverage and unknown group data stay visible.")]),
+    heading("Coursework grade records", "Grades", "Canvas facts stay visible beside local observations. No official weighted or final course grade is inferred."),
+    el("div", undefined, { class: "grade-honesty", role: "note" }, [el("strong", "Graded points are not a final course grade."), el("span", "A local observation is the selected value until you change or remove it; Canvas score and grade remain visible alongside it. Progress indicators use Canvas points only, and coverage and unknown group data stay visible.")]),
     el("section", undefined, { class: "grade-summary-grid", "aria-label": "Course grade summaries" }, summary.length === 0 ? [empty("No courses have been synced yet.")] : summary),
     el("section", undefined, { class: "controls grade-controls", "aria-label": "Gradebook controls" }, [
       el("div", undefined, { class: "segmented", "aria-label": "Grade filters" }, (["all", "graded"] as const).map((mode) => ({ tag: "button", attrs: { type: "button", class: state.gradeMode === mode ? "active" : "", "aria-pressed": String(state.gradeMode === mode) }, text: mode === "all" ? "All records" : "Graded only", on: { click: () => handlers.onGradeMode(mode) } }))),
       el("div", undefined, { class: "filters", "aria-label": "Grade course filters" }, [{ tag: "button", attrs: { type: "button", class: `filter ${state.gradeCourseFilter === "all" ? "active" : ""}`, "aria-pressed": String(state.gradeCourseFilter === "all") }, text: "All courses", on: { click: () => handlers.onGradeCourseFilter("all") } }, ...courses.map((course) => ({ tag: "button", attrs: { type: "button", class: `filter ${key(state.gradeCourseFilter) === key(course.courseCode) ? "active" : ""}`, "aria-pressed": String(key(state.gradeCourseFilter) === key(course.courseCode)), style: `--course-color:${color(courses, course.courseCode)}` }, text: code(course.courseCode), on: { click: () => handlers.onGradeCourseFilter(course.courseCode) } }))]),
     ]),
+    ...(previewAvailable ? [el("section", undefined, { class: "grade-pdf-preview", "aria-label": "Local PDF grade preview" }, [
+      el("strong", "Local PDF grade preview"),
+      el("span", "Choose a report from this device to review exact matches. The PDF stays on this device and is not stored."),
+      { tag: "input", attrs: { type: "file", accept: "application/pdf", "aria-label": "Choose local PDF grade report" }, on: { change: (event) => handlers.onGradePreviewFile?.((event.currentTarget as HTMLInputElement).files?.item(0) ?? null) } },
+    ])] : []),
     table,
+    ...previewDialog,
   ]);
 }
 
@@ -619,11 +714,81 @@ function desktopStoreCard(desktop: DesktopStoreInfo, state: DashboardState, hand
   ]);
 }
 
+function sourceFactRows(fields: Readonly<Record<string, string>>): readonly ElementDescriptor[] {
+  const entries = Object.entries(fields).sort(([left], [right]) => left.localeCompare(right));
+  return entries.length === 0 ? [el("span", "No source facts were supplied.")] : entries.map(([name, value]) =>
+    el("div", undefined, { class: "settings-row" }, [el("strong", name), el("span", value)]));
+}
+
+/** A bounded review surface: the API item is not rendered as coursework until a decision is persisted. */
+function pendingLinkReview(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor | undefined {
+  const links = state.data.pendingSourceLinks;
+  if (links.length === 0) return undefined;
+  const selected = links.find((link) => link.id === state.selectedPendingLinkId) ?? links[0]!;
+  const selectedCandidateId = selected.candidateIds.length === 1 ? selected.candidateIds[0] : selected.candidateIds.includes(state.selectedPendingLinkCandidateId ?? "") ? state.selectedPendingLinkCandidateId : undefined;
+  const local = selectedCandidateId === undefined ? undefined : state.data.events.find((event) => event.sourceItemId === selectedCandidateId || event.id === selectedCandidateId);
+  const localDetails = local === undefined ? [el("p", "The local candidate is unavailable. Reload before making a decision.", { class: "inline-error", role: "alert" })] : [
+    el("h3", local.title),
+    el("div", undefined, { class: "settings-row" }, [el("strong", "Due Good ID"), el("code", local.sourceItemId ?? local.id)]),
+    el("div", undefined, { class: "settings-row" }, [el("strong", "Course"), el("span", code(local.courseCode))]),
+    el("div", undefined, { class: "settings-row" }, [el("strong", "Due"), el("span", formatted(local.startsAt, true))]),
+    el("div", undefined, { class: "settings-row" }, [el("strong", "Done"), el("span", local.completed ? "Completed" : "Not completed")]),
+    el("div", undefined, { class: "settings-row" }, [el("strong", "Notes"), el("span", local.notes?.trim() || "No local note")]),
+  ];
+  const canKeepDistinct = state.readOnly !== true && state.desktop === undefined && selected.needsRefresh !== true;
+  const canConfirm = local !== undefined && selectedCandidateId !== undefined && canKeepDistinct;
+  const decision = state.pendingLinkDecision;
+  return el("section", undefined, { class: "settings-card pending-link-review", "data-pending-link-review": "true" }, [
+    el("h2", "Possible source link"),
+    el("p", "Canvas and iCal records remain separate until you decide. Similar titles or dates are never proof of identity."),
+    ...(selected.needsRefresh === true ? [el("p", "This earlier suggestion needs a fresh coursework import before it can be reviewed. It remains pending and no records will be linked automatically.", { class: "inline-error", role: "status" })] : []),
+    el("div", undefined, { class: "pending-link-queue", role: "list", style: "display:flex;flex-wrap:wrap;gap:8px" }, links.map((link) => ({
+      tag: "button", attrs: { type: "button", role: "listitem", class: "more-action", "aria-pressed": String(link.id === selected.id), ...(state.pendingLinkSaving ? { disabled: "" } : {}) },
+      text: `${link.candidateIds.length === 1 ? "Review" : "Choose candidate"} · ${link.reference.id}`,
+      on: { click: () => handlers.onSelectPendingLink?.(link.id) },
+    }))),
+    el("div", undefined, { class: "pending-link-comparison", style: "display:flex;flex-wrap:wrap;gap:16px" }, [
+      el("article", undefined, { class: "settings-card", style: "flex:1 1 260px" }, [el("h3", "Due Good item"), ...localDetails]),
+      el("article", undefined, { class: "settings-card", style: "flex:1 1 260px" }, [
+        el("h3", "Source observation"),
+        el("div", undefined, { class: "settings-row" }, [el("strong", "Source reference"), el("code", selected.reference.id)]),
+        el("div", undefined, { class: "settings-row" }, [el("strong", "Course"), el("span", selected.reference.course)]),
+        el("div", undefined, { class: "settings-row" }, [el("strong", "Observed"), el("span", selected.observedAt === undefined ? "Unknown" : formatted(selected.observedAt, true))]),
+        ...sourceFactRows(selected.fields),
+      ]),
+    ]),
+    ...(selected.candidateIds.length <= 1 ? [] : [el("fieldset", undefined, { class: "settings-card" }, [
+      el("legend", "Choose the Due Good item to compare before confirming"),
+      ...selected.candidateIds.map((candidateId) => {
+        const candidate = state.data.events.find((event) => event.sourceItemId === candidateId || event.id === candidateId);
+        return { tag: "label", attrs: { class: "settings-row" }, children: [
+          { tag: "input", attrs: { type: "radio", name: "pending-link-candidate", value: candidateId, "aria-label": `Choose Due Good item ${candidateId}`, ...(candidateId === selectedCandidateId ? { checked: "" } : {}), ...(state.pendingLinkSaving ? { disabled: "" } : {}) }, on: { change: () => handlers.onSelectPendingLinkCandidate?.(candidateId) } },
+          el("span", candidate === undefined ? `Due Good ID ${candidateId} is unavailable` : `${candidate.title} · Due Good ID ${candidate.sourceItemId ?? candidate.id}`),
+        ] };
+      }),
+    ])]),
+    ...(selected.candidateIds.length === 0 ? [el("p", "No current local candidate is available. Confirmation is unavailable; you may keep the source record distinct.", { class: "inline-error", role: "alert" })] : []),
+    ...(decision === undefined ? [el("div", undefined, { style: "display:flex;flex-wrap:wrap;gap:8px" }, [
+      { tag: "button", attrs: { type: "button", class: "setup-secondary", ...(canKeepDistinct ? {} : { disabled: "" }) }, text: "Keep distinct", on: { click: () => handlers.onOpenPendingLinkDecision?.("reject") } },
+      { tag: "button", attrs: { type: "button", class: "sync-button", ...(canConfirm ? {} : { disabled: "" }) }, text: "Confirm link", on: { click: () => handlers.onOpenPendingLinkDecision?.("confirm") } },
+    ])] : [el("section", undefined, { role: "dialog", "aria-modal": "true", "aria-label": decision === "confirm" ? "Confirm source link" : "Keep records distinct", class: "pending-link-decision" }, [
+      el("h3", decision === "confirm" ? "Link these records?" : "Keep these records distinct?"),
+      el("p", decision === "confirm" ? "The existing Due Good item keeps its immutable ID, Done state, notes, grades, and unknown fields. The verified Canvas reference and source facts are added to it; the competing API item stays suppressed." : "No source reference is attached. The Canvas observation becomes its own coursework item with its own immutable ID; no fields merge."),
+      el("p", "Cancel leaves this suggestion pending and does not change coursework."),
+      el("div", undefined, { style: "display:flex;flex-wrap:wrap;gap:8px" }, [
+        { tag: "button", attrs: { type: "button", class: "setup-secondary", ...(state.pendingLinkSaving ? { disabled: "" } : {}) }, text: "Cancel", on: { click: () => handlers.onCancelPendingLinkDecision?.() } },
+        { tag: "button", attrs: { type: "button", class: decision === "confirm" ? "sync-button" : "more-action", ...(state.pendingLinkSaving ? { disabled: "", "aria-busy": "true" } : {}) }, text: state.pendingLinkSaving ? "Saving…" : decision === "confirm" ? "Confirm link" : "Keep distinct", on: { click: () => handlers.onResolvePendingLink?.() } },
+      ]),
+    ])]),
+    el("p", "Keyboard: J/K selects a suggestion; C confirms; R keeps records distinct; Escape cancels a decision.", { class: "status" }),
+  ]);
+}
+
 function morePage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   const source = state.data.sourceStatus;
   const refreshing = state.refreshState === "running";
   const refreshButton: ElementDescriptor = { tag: "button", attrs: { type: "button", class: `more-action refresh-button${refreshing ? " refreshing" : ""}`, "aria-busy": String(refreshing), ...(refreshing ? { disabled: "" } : {}) }, text: refreshing ? "Refreshing…" : "Refresh", on: { click: handlers.onRefresh } };
-  return el("section", undefined, { class: "page" }, [heading("Due Good", "More", "Source status, refresh controls, and local app information."), el("div", undefined, { class: "more-grid" }, [state.desktop !== undefined ? desktopStoreCard(state.desktop, state, handlers) : el("section", undefined, { class: "settings-card" }, [el("h2", "Coursework source"), el("p", "The local Marymount coursework document remains the authoritative writable source."), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", source.label ?? "Local source"), el("span", source.detail ?? "Status details were not supplied")]), el("span", source.state ?? "Unknown", { class: source.state === "connected" || source.state === "ready" ? "status-ok" : "" })]), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Last refresh"), el("span", formatted(source.lastRefreshAt, true))]), ...(state.data.refreshAvailable ? [refreshButton] : [])])]), el("section", undefined, { class: "settings-card" }, [el("h2", "Import behavior"), el("p", "Incomplete refreshes never remove existing coursework."), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Canvas items"), el("span", "Assignments, class meetings, files, pages, links, modules, announcements, and read-only inbox")])]), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Privacy"), el("span", "Local app · no public coursework data")])])])])]);
+  return el("section", undefined, { class: "page" }, [heading("Due Good", "More", "Source status, refresh controls, and local app information."), ...(state.pendingLinkNotice === undefined ? [] : [el("p", state.pendingLinkNotice, { class: "status", role: "status", "aria-live": "polite" })]), ...(pendingLinkReview(state, handlers) === undefined ? [] : [pendingLinkReview(state, handlers)!]), el("div", undefined, { class: "more-grid" }, [state.desktop !== undefined ? desktopStoreCard(state.desktop, state, handlers) : el("section", undefined, { class: "settings-card" }, [el("h2", "Coursework source"), el("p", "The local Marymount coursework document remains the authoritative writable source."), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", source.label ?? "Local source"), el("span", source.detail ?? "Status details were not supplied")]), el("span", source.state ?? "Unknown", { class: source.state === "connected" || source.state === "ready" ? "status-ok" : "" })]), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Last refresh"), el("span", formatted(source.lastRefreshAt, true))]), ...(state.data.refreshAvailable ? [refreshButton] : [])])]), el("section", undefined, { class: "settings-card" }, [el("h2", "Import behavior"), el("p", "Incomplete refreshes never remove existing coursework."), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Canvas items"), el("span", "Assignments, class meetings, files, pages, links, modules, announcements, and read-only inbox")])]), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Privacy"), el("span", "Local app · no public coursework data")])])])])]);
 }
 
 function pagePanel(pageName: DashboardPage, descriptor: ElementDescriptor): ElementDescriptor {

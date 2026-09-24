@@ -12,6 +12,8 @@
     "allow-read-dashboard-documents",
     "allow-set-item-completion",
     "allow-set-discussion-field",
+    "allow-resolve-pending-source-link",
+    "allow-set-manual-grade",
     "allow-read-avatar-bytes",
     "allow-open-library-resource",
     "allow-copy-assignment-text",

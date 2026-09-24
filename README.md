@@ -14,6 +14,9 @@ These actions do not contact
 Canvas or change Canvas state. The export copies
 the coursework layout and its file bytes, including unknown fields, while
 omitting desktop-only manifest, snapshot, backup, staging, and lock data.
+An enriched layout with source provenance, pending links, or local manual/PDF grade observations
+cannot be exported as a refreshable legacy layout until the owner verifies that the private legacy
+reconciler preserves those fields; the app instead retains an exact frozen rollback export.
 If a daily snapshot fails, the app keeps coursework available and shows a warning.
 Synthetic source tests do not establish an installed app or live-coursework
 acceptance. No private coursework is stored in this repository or its fixtures.
@@ -153,6 +156,24 @@ The local verification commands use only the public synthetic contract:
 npm run test:local
 npm run test:membership
 ```
+
+## Calendar feed fallback status
+
+The local service has a separately enabled, CSRF-protected calendar-byte import
+route for trusted host use. It does not fetch a feed. The host-side fetcher and
+its service trigger are pending; do not treat the current importer as a live
+calendar sync. Calendar coverage is a rolling window, and a missing event never
+deletes existing coursework.
+
+Owner activation will require a fixed `bws-secret-exec` consumer named
+`duegood-canvas-ical`, mapped only to `DUEGOOD_CANVAS_ICAL_URL` and the reviewed
+`scripts/sync-canvas-ical.mjs` executable with its exact SHA-256 pin. That
+consumer has not been registered. The private URL must stay in BWS and the
+injected process environment, never in a browser request, command argument,
+log, or repository file. The intended URL family is the exact HTTPS Marymount
+Canvas origin and `/feeds/calendars/<opaque-code>` path, optionally ending in
+`.ics`, with no credentials, port override, fragment, or query. A different
+owner feed shape needs review before activation.
 
 ## Native desktop candidate
 

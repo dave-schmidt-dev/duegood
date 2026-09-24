@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "build:ui": "node scripts/build-ui.mjs",
@@ -75,6 +75,8 @@
     "wrangler": "4.131.2"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.11.1"
+    "@tauri-apps/api": "2.11.1",
+    "node-ical": "0.27.2",
+    "pdfjs-dist": "6.3.289"
   }
 }

@@ -55,12 +55,63 @@ describe("CourseworkStore", () => {
     await expect(store.setCompletion("course-a-canvas-910002", true, before.version)).rejects.toThrow("changed");
   });
 
+  it("keeps a versioned local grade separate from Canvas facts across source imports and conflicts", async () => {
+    const { file } = await fixture();
+    const store = new CourseworkStore(file);
+    const before = await store.read();
+    const saved = await store.setManualGrade("course-a-canvas-910001", "A-", before.version);
+    expect(saved).toMatchObject({ manualGrade: "A-", manualGradeVersion: 1 });
+    await expect(store.setManualGrade("course-a-canvas-910001", "B+", before.version)).rejects.toThrow("changed");
+
+    await store.applySourceObservations("synthetic.institution.invalid", [{
+      localId: "course-a-canvas-910001",
+      course: "course-a",
+      reference: { institution: "synthetic.institution.invalid", course: "course-a", source: "canvas", id: "910001" },
+      fields: { grade: "18", score: 18 },
+    }]);
+    const preserved = await store.read();
+    expect(preserved.assignments[0]).toMatchObject({ grade: "18", score: 18, manualGrade: "A-", manualGradeVersion: 1 });
+    const document = JSON.parse(await readFile(file, "utf8"));
+    expect(document.items[0]).toMatchObject({ manualGradeObservation: { version: 1, value: "A-" }, syntheticItemExtension: { preserve: "graded-item" } });
+
+    const cleared = await store.setManualGrade("course-a-canvas-910001", null, preserved.version);
+    expect(cleared).toMatchObject({ manualGrade: null, manualGradeVersion: null });
+    expect((await store.read()).assignments[0]).toMatchObject({ grade: "18", score: 18, manualGrade: null, manualGradeVersion: null });
+  });
+
+  it("keeps user-confirmed PDF provenance through projection and source refresh", async () => {
+    const { file } = await fixture();
+    const store = new CourseworkStore(file);
+    const before = await store.read();
+    const saved = await store.setManualGrade("course-a-canvas-910001", "A-", before.version, "pdf");
+    expect(saved).toMatchObject({ manualGradeSource: "pdf" });
+    await store.applySourceObservations("synthetic.institution.invalid", [{
+      localId: "course-a-canvas-910001", course: "course-a",
+      reference: { institution: "synthetic.institution.invalid", course: "course-a", source: "canvas", id: "910001" },
+      fields: { grade: "18", score: 18 },
+    }]);
+    const projected = await store.read();
+    expect(projected.assignments[0]).toMatchObject({ grade: "18", manualGrade: "A-", manualGradeSource: "pdf" });
+    const document = JSON.parse(await readFile(file, "utf8"));
+    expect(document.items[0].manualGradeObservation).toEqual({ version: 1, value: "A-", source: "pdf" });
+  });
+
   it("rejects duplicate stable IDs", async () => {
     const { file } = await fixture();
     const document = JSON.parse(await readFile(file, "utf8"));
     document.items.push({ ...document.items[0] });
     await writeFile(file, JSON.stringify(document));
     await expect(new CourseworkStore(file).read()).rejects.toThrow("duplicate item id");
+  });
+
+  it("rejects a scoped source reference claimed by two immutable local IDs", async () => {
+    const { file } = await fixture();
+    const document = JSON.parse(await readFile(file, "utf8"));
+    const reference = { institution: "synthetic.institution.invalid", course: "course-a", source: "canvas", id: "910001" };
+    document.items[0].sourceReferences = [reference];
+    document.items[1].sourceReferences = [reference];
+    await writeFile(file, JSON.stringify(document));
+    await expect(new CourseworkStore(file).read()).rejects.toThrow("duplicate scoped source reference");
   });
 
   it("persists discussion checklist state separately from completion", async () => {

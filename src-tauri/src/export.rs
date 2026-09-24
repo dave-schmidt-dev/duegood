@@ -9,7 +9,9 @@ use std::path::Path;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::config::{ImportLimits, LEGACY_LOCK_DIR, MANIFEST_FILE, STAGING_PREFIX};
+use crate::config::{
+    ImportLimits, COURSEWORK_FILE, LEGACY_LOCK_DIR, MANIFEST_FILE, STAGING_PREFIX,
+};
 use crate::locking::WriteLock;
 use crate::store::{
     create_private_dir, create_private_file, fsync_dir, utc_stamp, Store, StoreCondition,
@@ -357,6 +359,60 @@ pub fn copy_tree(
     Ok(totals)
 }
 
+/// Refuses a legacy-layout export that an unverified private reconciler could later rewrite.
+///
+/// The old native-compatible layout may still be exported for an owner-selected copy. Once the
+/// document contains source provenance, pending links, or local grade observations, however, a
+/// legacy refresh would have to preserve fields whose behavior has not been compatibility-tested
+/// against the private Python reconciler. That approval is intentionally not represented by a
+/// repository switch. The only available path for an enriched document is the exact frozen
+/// rollback export after demotion.
+pub fn ensure_legacy_refreshable_export_compatible(store: &Store) -> Result<(), StoreError> {
+    let document = store
+        .read_document(COURSEWORK_FILE, ImportLimits::PRODUCTION.max_json_bytes)?
+        .ok_or(StoreError::Invalid("coursework document is missing"))?;
+    let document: serde_json::Value = serde_json::from_slice(&document.bytes)
+        .map_err(|_| StoreError::Invalid("coursework document is not valid JSON"))?;
+    let root = document
+        .as_object()
+        .ok_or(StoreError::Invalid("coursework document is malformed"))?;
+    let items = root
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .ok_or(StoreError::Invalid("coursework items are malformed"))?;
+    let archived = match root.get("archivedForecastItems") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_array()
+                .ok_or(StoreError::Invalid("archived coursework items are malformed"))?,
+        ),
+    };
+    let mut enriched_item = false;
+    for value in items.iter().chain(archived.into_iter().flatten()) {
+        let item = value
+            .as_object()
+            .ok_or(StoreError::Invalid("coursework item is malformed"))?;
+        if [
+            "sourceReferences",
+            "fieldObservations",
+            "manualGradeObservation",
+        ]
+        .into_iter()
+        .any(|field| item.contains_key(field))
+        {
+            enriched_item = true;
+        }
+    }
+    let enriched_top_level = root.contains_key("pendingSourceLinks");
+    if enriched_top_level || enriched_item {
+        return Err(StoreError::Invalid(
+            "legacy refresh compatibility is unconfirmed; use the frozen rollback export",
+        ));
+    }
+    Ok(())
+}
+
 /// Exports an open store to a new timestamped subfolder of an owner-picked parent folder.
 /// The whole copy holds a shared store lock; files are always new and private.
 pub fn export_legacy(
@@ -368,6 +424,7 @@ pub fn export_legacy(
     if !matches!(store.condition()?, StoreCondition::Ready(_)) {
         return Err(StoreError::Invalid("the app store is not ready for export"));
     }
+    ensure_legacy_refreshable_export_compatible(store)?;
     let metadata = fs::symlink_metadata(parent)?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(StoreError::Invalid(
@@ -567,6 +624,77 @@ mod tests {
         );
         assert!(!folder.join(".import-staging-orphan").exists());
         crate::testutil::assert_private_tree(&folder);
+    }
+
+    #[test]
+    fn enriched_layout_refuses_refreshable_export_but_frozen_export_retains_exact_bytes() {
+        let root = TempRoot::new("export-enriched-guard");
+        let source = materialize_fixture(&root.path().join("legacy"));
+        let store = Store::open(
+            &root.path().join(TEST_BUNDLE_IDENTIFIER),
+            Duration::from_millis(200),
+        )
+        .unwrap();
+        import_legacy_root(
+            &store,
+            &source,
+            &ImportOptions {
+                limits: ImportLimits::PRODUCTION,
+                legacy_lock_timeout: Duration::from_millis(200),
+                replace_preview: false,
+            },
+            &mut |_| {},
+        )
+        .unwrap();
+        let coursework = store.store_dir().join(COURSEWORK_FILE);
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&fs::read(&coursework).unwrap()).unwrap();
+        document["items"][0]["sourceReferences"] = serde_json::json!([{
+            "institution":"synthetic.invalid", "course":"course-a", "source":"ical", "id":"override-uid"
+        }]);
+        document["items"][0]["manualGradeObservation"] =
+            serde_json::json!({"version":1,"value":"synthetic","source":"pdf"});
+        crate::store::atomic_write(&coursework, &crate::store::node_json_bytes(&document)).unwrap();
+        let output = root.path().join("output");
+        create_private_dir(&output, false).unwrap();
+        let before = snapshot_tree(&output);
+
+        let error =
+            export_legacy(&store, &output, &mut |_| {}).expect_err("enriched export is gated");
+        assert_eq!(
+            error.to_string(),
+            "legacy refresh compatibility is unconfirmed; use the frozen rollback export"
+        );
+        assert_eq!(
+            snapshot_tree(&output),
+            before,
+            "refusal creates no export side effect"
+        );
+
+        let write = store.write_lock().unwrap();
+        let frozen = export_legacy_frozen(&store, &write, &output, &mut |_| {}).unwrap();
+        assert!(frozen.files_done > 0);
+        let frozen_root = fs::read_dir(&output)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(
+            snapshot_layout(&store.store_dir(), false).unwrap(),
+            snapshot_layout(&frozen_root, true).unwrap(),
+            "the permitted frozen export retains every enriched byte"
+        );
+
+        drop(write);
+        document["items"] = serde_json::json!("malformed");
+        crate::store::atomic_write(&coursework, &crate::store::node_json_bytes(&document)).unwrap();
+        let before_malformed = snapshot_tree(&output);
+        assert!(matches!(
+            export_legacy(&store, &output, &mut |_| {}),
+            Err(StoreError::Invalid("coursework items are malformed"))
+        ));
+        assert_eq!(snapshot_tree(&output), before_malformed);
     }
 
     /// Child helper for the TypeScript parity test; explicit temporary roots only.

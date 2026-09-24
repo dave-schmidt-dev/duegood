@@ -118,7 +118,18 @@ function trackedFields(item: JsonObject): Readonly<Record<TrackedField, string |
   };
 }
 
-/** Captures only Canvas-derived fields; local completion and notes never enter the snapshot. */
+function hasSourceCoverage(item: JsonObject): boolean {
+  if (Array.isArray(item.sourceReferences)) {
+    return item.sourceReferences.some((candidate) => {
+      const reference = optionalObject(candidate);
+      return reference?.source === "canvas" || reference?.source === "ical";
+    });
+  }
+  // Legacy documents do not yet have scoped references; retain their existing Activity coverage.
+  return item.source === "canvas" || item.canvasId != null;
+}
+
+/** Captures source-covered fields; local completion, notes, and provenance bookkeeping never enter the snapshot. */
 export async function captureCanvasSnapshot(file: string): Promise<CanvasSnapshot> {
   const bytes = await readFile(file);
   const rawBytes = Buffer.from(bytes);
@@ -129,7 +140,7 @@ export async function captureCanvasSnapshot(file: string): Promise<CanvasSnapsho
     const item = object(candidate, `coursework items[${index}]`);
     const id = text(item.id, 160);
     if (id === null) continue;
-    if (item.source !== "canvas" && item.canvasId == null) continue;
+    if (!hasSourceCoverage(item)) continue;
     items.push({ id, course: text(item.course, 160), fields: trackedFields(item) });
   }
   items.sort((left, right) => left.id.localeCompare(right.id));
@@ -339,6 +350,61 @@ export async function recordRefreshFailure(root: string, startedAt: string, fini
     summary: { added: 0, updated: 0, removed: 0 },
     changes: [{ kind: "notice", title: "Canvas refresh failed", detail }],
     error: detail,
+  };
+  return appendEvent(root, event);
+}
+
+/** Content-free receipt for a rolling-window calendar acquisition, distinct from Canvas inventory. */
+export interface IcalFeedStatus {
+  readonly schema: 1;
+  readonly acquisition: "succeeded" | "failed";
+  readonly coverage: "rolling_window";
+  readonly attemptedAt: string;
+  readonly lastSuccessAt: string | null;
+  readonly accepted: number;
+  readonly held: number;
+}
+
+/** Reads only the bounded calendar acquisition receipt; a damaged receipt grants no coverage. */
+export async function readIcalFeedStatus(root: string): Promise<IcalFeedStatus | null> {
+  let raw: string;
+  try { raw = await readFile(path.join(root, "coursework-ical-feed-status.json"), "utf8"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+  if (Buffer.byteLength(raw) > 4_096) return null;
+  try {
+    const value = object(JSON.parse(raw), "calendar feed status");
+    if (value.schema !== 1 || (value.acquisition !== "succeeded" && value.acquisition !== "failed")
+        || value.coverage !== "rolling_window" || typeof value.attemptedAt !== "string"
+        || (value.lastSuccessAt !== null && typeof value.lastSuccessAt !== "string")
+        || !Number.isInteger(value.accepted) || !Number.isInteger(value.held)) return null;
+    return value as unknown as IcalFeedStatus;
+  } catch { return null; }
+}
+
+/** Atomically replaces the content-free calendar receipt under the coursework writer lock. */
+export async function recordIcalFeedStatus(root: string, status: IcalFeedStatus): Promise<void> {
+  if (status.schema !== 1 || status.coverage !== "rolling_window"
+      || !Number.isInteger(status.accepted) || status.accepted < 0
+      || !Number.isInteger(status.held) || status.held < 0) throw new Error("invalid calendar feed status");
+  await writeAtomic(path.join(root, "coursework-ical-feed-status.json"), status as unknown as JsonObject);
+}
+
+/** Records visible calendar changes in Activity without claiming full Canvas inventory coverage. */
+export async function recordIcalImport(root: string, before: CanvasSnapshot, after: CanvasSnapshot, startedAt: string, finishedAt: string): Promise<RefreshHistoryEvent | null> {
+  const diff = diffCanvasSnapshots(before, { ...after, sourceComplete: false });
+  if (diff.added === 0 && diff.updated === 0) return null;
+  const event: RefreshHistoryEvent = {
+    schema: 1,
+    id: `ical-import-${finishedAt}-${randomUUID().slice(0, 8)}`,
+    status: "incomplete",
+    sourceComplete: false,
+    startedAt,
+    finishedAt,
+    summary: { added: diff.added, updated: diff.updated, removed: 0 },
+    changes: [
+      { kind: "notice" as const, title: "Calendar feed import", detail: "A rolling-window feed updated local coursework; absence never removes an item." },
+      ...diff.changes.filter((change) => change.kind !== "removed"),
+    ].slice(0, MAX_CHANGES),
   };
   return appendEvent(root, event);
 }

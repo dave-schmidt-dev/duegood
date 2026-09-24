@@ -213,7 +213,9 @@ pub fn capture_all(
         progress,
         &mut count,
     )?;
-    // The refresh history's finished time must be recorded after the final remote request.
+    // This single post-fetch instant is both the refresh finish time and the Canvas observation
+    // time passed to reconciliation. It lets a fresh API due fact supersede a stale linked iCal
+    // fact without inventing a timestamp during a no-op repeat capture.
     let captured_at = SystemTime::now();
 
     progress(RefreshProgress::new(

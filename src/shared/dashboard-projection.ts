@@ -9,6 +9,7 @@
 import type { ConversationAttachment, ConversationMessage, NormalizedConversation } from "../canvas/conversations";
 import type { AssignmentListItem } from "../db/types";
 import type { LocalCourse, LocalSnapshot } from "../local/coursework-store";
+import { pendingSourceLinks } from "../local/acquisition";
 
 type JsonObject = Record<string, unknown>;
 type LocalGradeGroup = NonNullable<LocalCourse["gradeGroups"]>[number];
@@ -131,11 +132,14 @@ export interface DashboardBody {
   readonly version: string;
   readonly courses: readonly LocalCourse[];
   readonly events: LocalSnapshot["events"];
+  readonly pendingSourceLinks: LocalSnapshot["pendingSourceLinks"];
   readonly resources: readonly LocalResource[];
   readonly conversations: readonly NormalizedConversation[];
   readonly refreshes: readonly LocalRefresh[];
   readonly profile: LocalProfile | null;
   readonly refreshAvailable: boolean;
+  readonly icalImportAvailable: boolean;
+  readonly icalFeedStatus: null;
   readonly sourceStatus: {
     readonly state: "partial" | "not_synced" | "ready";
     readonly label: string;
@@ -252,6 +256,17 @@ function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/** Mirrors the Node store so browser and desktop projections reject the same malformed record. */
+function manualGradeObservation(value: unknown, label: string): { readonly version: 1; readonly value: string; readonly source: "manual" | "pdf" } | null {
+  if (value === undefined) return null;
+  const observation = requireObject(value, label);
+  if (observation.version !== 1 || typeof observation.value !== "string" || observation.value.trim().length === 0 || observation.value.trim().length > 80) {
+    throw new Error(`${label} must contain version 1 and a nonempty value up to 80 characters`);
+  }
+  if (observation.source !== undefined && observation.source !== "manual" && observation.source !== "pdf") throw new Error(`${label} has an invalid source`);
+  return { version: 1, value: observation.value.trim(), source: observation.source === "pdf" ? "pdf" : "manual" };
+}
+
 function gradeGroups(value: unknown): readonly LocalGradeGroup[] {
   if (!Array.isArray(value)) return [];
   return value.map((candidate) => {
@@ -310,6 +325,7 @@ function projectCoursework(value: unknown, version: string): LocalSnapshot {
     if (typeof item.course !== "string" || !coursesByKey.has(item.course)) throw new Error(`item ${item.id} references an unknown course`);
     const course = coursesByKey.get(item.course) as LocalCourse;
     if (item.kind === "milestone") continue;
+    const localGrade = manualGradeObservation(item.manualGradeObservation, `item ${item.id}.manualGradeObservation`);
     const projected: LocalGradeRecord = {
       sourceItemId: item.id,
       courseId: course.id,
@@ -324,6 +340,9 @@ function projectCoursework(value: unknown, version: string): LocalSnapshot {
       points: numberOrNull(item.points),
       score: numberOrNull(item.score),
       grade: stringOrNull(item.grade),
+      manualGrade: localGrade?.value ?? null,
+      manualGradeVersion: localGrade?.version ?? null,
+      manualGradeSource: localGrade?.source ?? null,
       gradedAt: stringOrNull(item.gradedAt),
       assignmentGroupId: stringOrNull(item.assignmentGroupId),
       assignmentGroupName: stringOrNull(item.assignmentGroupName),
@@ -335,6 +354,7 @@ function projectCoursework(value: unknown, version: string): LocalSnapshot {
       kind: typeof item.kind === "string" ? item.kind : null,
       detail: stringOrNull(item.detail),
       place: null,
+      notes: stringOrNull(item.notes),
       discussionPostDone: item.discussionPostDone === true,
       discussionRepliesDone: item.discussionRepliesDone === true,
     };
@@ -343,7 +363,7 @@ function projectCoursework(value: unknown, version: string): LocalSnapshot {
   }
   assignments.sort((left, right) => (left.dueAt ?? "9999").localeCompare(right.dueAt ?? "9999"));
   events.sort((left, right) => (left.dueAt ?? "9999").localeCompare(right.dueAt ?? "9999"));
-  return { version, courses: [...coursesByKey.values()], assignments, events };
+  return { version, courses: [...coursesByKey.values()], assignments, events, pendingSourceLinks: pendingSourceLinks(document) };
 }
 
 // --- Library resources ------------------------------------------------------------------------
@@ -540,11 +560,14 @@ export function projectDashboardDocuments(bundle: DashboardDocumentBundle, optio
     version: snapshot.version,
     courses: dashboardCourses,
     events: snapshot.events,
+    pendingSourceLinks: snapshot.pendingSourceLinks,
     resources,
     conversations: inbox.conversations,
     refreshes,
     profile,
     refreshAvailable: options.refreshAvailable,
+    icalImportAvailable: false,
+    icalFeedStatus: null,
     sourceStatus: {
       state: inbox.status === "partial" ? "partial" : inbox.status === "not_synced" ? "not_synced" : "ready",
       label: options.sourceLabel,

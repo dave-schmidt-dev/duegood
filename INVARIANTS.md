@@ -87,3 +87,10 @@ gate_test: npm run test:tauri, test/ui/dashboard.test.ts, test/browser/desktop-f
 threshold: 1
 always_active: true
 rationale: Promotion requires a Rust-selected frozen backup whose complete portable layout equals the preview store byte-for-byte, an in-memory one-use proof, native owner confirmation, and a repeat comparison under the import, refresh, lease, and write guards. Demotion retains a verified private recovery copy, disables refresh, and returns the store to preview before a write-frozen, equality-checked rollback export. The webview cannot supply a filesystem path or confirmation flag.
+
+### INV-13 — Source identity never replaces local identity or progress
+area: ["src/local/acquisition.ts", "src/local/coursework-store.ts", "src/local/refresh-history.ts"]
+gate_test: test/local/acquisition.test.ts, test/local/coursework-store.test.ts, test/local/refresh-history.test.ts, test/local/tauri-export.test.ts
+threshold: 1
+always_active: true
+rationale: Source facts are scoped references and field-owned observations. Existing local IDs, completion, notes, discussion state, Canvas identity, and unknown fields survive source backfill and observation updates. Duplicate references fail closed; unverified cross-source candidates are held rather than guessed; and provenance-only changes do not create Activity history.

@@ -123,9 +123,11 @@ describe("the repository's real refresh contract and fixtures", () => {
     const contractDoc = readFileSync(path.join(ROOT, "docs", "REFRESH-CONTRACT.md"), "utf8");
     const mockFixture = JSON.parse(readFileSync(path.join(ROOT, "test", "fixtures", "refresh-canvas-mock.json"), "utf8"));
     const expectedStoreFixture = JSON.parse(readFileSync(path.join(ROOT, "test", "fixtures", "refresh-expected-store.json"), "utf8"));
+    const acquisitionFixture = JSON.parse(readFileSync(path.join(ROOT, "test", "fixtures", "ical-acquisition-contract.json"), "utf8"));
 
     expect(validateContractDoc(contractDoc)).toEqual([]);
     expect(validateFixtureDoc(mockFixture, "test/fixtures/refresh-canvas-mock.json")).toEqual([]);
     expect(validateFixtureDoc(expectedStoreFixture, "test/fixtures/refresh-expected-store.json")).toEqual([]);
+    expect(validateFixtureDoc(acquisitionFixture, "test/fixtures/ical-acquisition-contract.json")).toEqual([]);
   });
 });

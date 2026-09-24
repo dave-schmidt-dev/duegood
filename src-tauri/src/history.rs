@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::store::{atomic_write, node_json_bytes, read_capped, utc_stamp, StoreError};
 
@@ -33,66 +33,82 @@ fn canvas_id(item: &Value) -> Option<String> {
     }
 }
 
-fn is_canvas_item(item: &Value) -> bool {
-    item.get("source").and_then(Value::as_str) == Some("canvas") && canvas_id(item).is_some()
+fn is_observed_source_item(item: &Value) -> bool {
+    item.get("source").and_then(Value::as_str) == Some("canvas")
+        || item
+            .get("sourceReferences")
+            .and_then(Value::as_array)
+            .is_some_and(|references| {
+                references.iter().any(|reference| {
+                    matches!(
+                        reference.get("source").and_then(Value::as_str),
+                        Some("canvas" | "ical")
+                    )
+                })
+            })
 }
 
-fn stable_key(item: &Value) -> Option<(String, String)> {
-    let course = item.get("course").and_then(Value::as_str)?;
-    Some((course.to_owned(), canvas_id(item)?))
+fn stable_key(item: &Value) -> Option<String> {
+    item.get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
 }
 
-fn indexed_items(value: &Value) -> Result<BTreeMap<(String, String), &Value>, StoreError> {
+fn indexed_items(value: &Value) -> Result<BTreeMap<String, &Value>, StoreError> {
     let items = value
         .get("items")
         .and_then(Value::as_array)
         .ok_or(StoreError::Invalid("coursework items are malformed"))?;
     let mut indexed = BTreeMap::new();
-    for item in items.iter().filter(|item| is_canvas_item(item)) {
+    for item in items.iter().filter(|item| is_observed_source_item(item)) {
         let key =
-            stable_key(item).ok_or(StoreError::Invalid("Canvas item identity is malformed"))?;
+            stable_key(item).ok_or(StoreError::Invalid("coursework item identity is malformed"))?;
         if indexed.insert(key, item).is_some() {
-            return Err(StoreError::Invalid("Canvas item identity is duplicated"));
+            return Err(StoreError::Invalid(
+                "coursework item identity is duplicated",
+            ));
         }
     }
     Ok(indexed)
 }
 
-fn item_label(item: &Value, key: &(String, String), field: &str) -> Value {
+fn item_label(item: &Value, key: &str, field: &str) -> Value {
     item.get(field)
         .cloned()
-        .unwrap_or_else(|| Value::String(key.1.clone()))
+        .unwrap_or_else(|| Value::String(key.to_owned()))
 }
 
+const VISIBLE_SOURCE_FIELDS: &[&str] = &[
+    "kind",
+    "title",
+    "at",
+    "points",
+    "url",
+    "confidence",
+    "flags",
+    "detail",
+    "assignmentGroupId",
+    "assignmentGroupName",
+    "assignmentGroupWeight",
+    "submissionStatus",
+    "submittedAt",
+    "gradedAt",
+    "grade",
+    "score",
+];
+
 fn display_changes(before: &Value, after: &Value) -> Vec<Value> {
-    let mut names = BTreeMap::<String, ()>::new();
-    for name in before
-        .as_object()
-        .into_iter()
-        .flat_map(Map::keys)
-        .chain(after.as_object().into_iter().flat_map(Map::keys))
-    {
-        if !matches!(
-            name.as_str(),
-            "id" | "course"
-                | "canvasId"
-                | "source"
-                | "done"
-                | "doneAt"
-                | "discussionPostDone"
-                | "discussionRepliesDone"
-        ) {
-            names.insert(name.clone(), ());
-        }
-    }
-    names
-        .into_keys()
+    VISIBLE_SOURCE_FIELDS
+        .iter()
+        .copied()
+        .filter(|name| before.get(*name).is_some() || after.get(*name).is_some())
         .filter_map(|name| {
-            let old = before.get(&name).unwrap_or(&Value::Null);
-            let new = after.get(&name).unwrap_or(&Value::Null);
+            let old = before.get(name).unwrap_or(&Value::Null);
+            let new = after.get(name).unwrap_or(&Value::Null);
             (old != new).then(|| {
                 serde_json::json!({
-                    "field": if name == "submissionStatus" { "submissionState" } else { name.as_str() },
+                    "field": if name == "submissionStatus" { "submissionState" } else { name },
                     "before": old,
                     "after": new,
                 })
@@ -101,8 +117,8 @@ fn display_changes(before: &Value, after: &Value) -> Vec<Value> {
         .collect()
 }
 
-/// Diffs only live Canvas items, keyed by `(course, canvasId)`. Student progress and unknown
-/// local-only items never enter Activity history.
+/// Diffs observed source items by immutable local ID. Student progress, source-reference
+/// bookkeeping, and arbitrary local extensions never enter Activity history.
 pub fn diff_coursework(before: &Value, after: &Value) -> Result<CourseworkDiff, StoreError> {
     let previous = indexed_items(before)?;
     let current = indexed_items(after)?;
@@ -116,7 +132,7 @@ pub fn diff_coursework(before: &Value, after: &Value) -> Result<CourseworkDiff, 
                     "kind": "added",
                     "itemId": item_label(item, key, "id"),
                     "title": item.get("title").cloned().unwrap_or(Value::Null),
-                    "course": key.0,
+                    "course": item.get("course").cloned().unwrap_or(Value::Null),
                 }));
             }
             Some(old) => {
@@ -127,7 +143,7 @@ pub fn diff_coursework(before: &Value, after: &Value) -> Result<CourseworkDiff, 
                         "kind": "changed",
                         "itemId": item_label(item, key, "id"),
                         "title": item.get("title").cloned().unwrap_or(Value::Null),
-                        "course": key.0,
+                        "course": item.get("course").cloned().unwrap_or(Value::Null),
                         "fields": fields,
                     }));
                 }
@@ -141,7 +157,7 @@ pub fn diff_coursework(before: &Value, after: &Value) -> Result<CourseworkDiff, 
                 "kind": "removed",
                 "itemId": item_label(item, key, "id"),
                 "title": item.get("title").cloned().unwrap_or(Value::Null),
-                "course": key.0,
+                "course": item.get("course").cloned().unwrap_or(Value::Null),
             }));
         }
     }
@@ -524,21 +540,51 @@ mod tests {
     }
 
     #[test]
-    fn diff_uses_canvas_identity_and_excludes_personal_progress() {
+    fn diff_uses_immutable_local_identity_and_excludes_personal_progress() {
         let before = serde_json::json!({"items":[
-            {"id":"old-id","course":"c1","source":"canvas","canvasId":7,"title":"Old","done":false,"doneAt":null,"discussionPostDone":false,"grade":null},
+            {"id":"stable-id","course":"c1","source":"canvas","canvasId":7,"title":"Old","done":false,"doneAt":null,"discussionPostDone":false,"grade":null},
             {"id":"manual","course":"c1","source":"manual","title":"Keep me"}
         ]});
         let after = serde_json::json!({"items":[
-            {"id":"new-id","course":"c1","source":"canvas","canvasId":7,"title":"New","done":true,"doneAt":"local-time","discussionPostDone":true,"grade":"A"},
+            {"id":"stable-id","course":"c1","source":"canvas","canvasId":7,"title":"New","done":true,"doneAt":"local-time","discussionPostDone":true,"grade":"A"},
             {"id":"new","course":"c1","source":"canvas","canvasId":"8","title":"Added"}
         ]});
         let diff = diff_coursework(&before, &after).expect("diff");
         assert_eq!((diff.added, diff.updated, diff.removed), (1, 1, 0));
-        assert_eq!(diff.changes[0]["kind"], "changed");
-        assert_eq!(diff.changes[0]["fields"].as_array().unwrap().len(), 2);
-        assert_eq!(diff.changes[0]["fields"][0]["field"], "grade");
-        assert_eq!(diff.changes[0]["fields"][1]["field"], "title");
+        let changed = diff.changes.iter().find(|change| change["kind"] == "changed").unwrap();
+        assert_eq!(changed["itemId"], "stable-id");
+        assert_eq!(changed["fields"].as_array().unwrap().len(), 2);
+        assert_eq!(changed["fields"][0]["field"], "title");
+        assert_eq!(changed["fields"][1]["field"], "grade");
+    }
+
+    #[test]
+    fn diff_ignores_reference_and_unknown_bookkeeping_but_records_visible_source_facts() {
+        let before = serde_json::json!({"items":[{
+            "id":"ical-local", "course":"c1", "source":"ical", "title":"Same",
+            "sourceReferences":[{"institution":"synthetic.invalid","course":"c1","source":"ical","id":"assignment:7"}],
+            "fieldObservations":{"at":{"selected":{"owner":{"institution":"synthetic.invalid","course":"c1","source":"ical","id":"assignment:7"},"value":"2030-01-01T10:00"}}},
+            "notesExtension":{"private":true}
+        }]});
+        let after = serde_json::json!({"items":[{
+            "id":"ical-local", "course":"c1", "source":"canvas", "title":"Same", "at":"2030-01-02T10:00",
+            "canvasId":7,
+            "sourceReferences":[
+              {"institution":"synthetic.invalid","course":"c1","source":"ical","id":"assignment:7"},
+              {"institution":"synthetic.invalid","course":"c1","source":"canvas","id":"7"}
+            ],
+            "fieldObservations":{"at":{"selected":{"owner":{"institution":"synthetic.invalid","course":"c1","source":"canvas","id":"7"},"value":"2030-01-02T10:00","observedAt":"2030-01-01T00:00:00Z"}}},
+            "notesExtension":{"private":false}
+        }]});
+        let diff = diff_coursework(&before, &after).expect("diff");
+        assert_eq!((diff.added, diff.updated, diff.removed), (0, 1, 0));
+        assert_eq!(diff.changes[0]["itemId"], "ical-local");
+        assert_eq!(
+            diff.changes[0]["fields"],
+            serde_json::json!([{
+                "field":"at", "before":null, "after":"2030-01-02T10:00"
+            }])
+        );
     }
 
     #[test]

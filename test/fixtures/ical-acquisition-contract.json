@@ -1,0 +1,128 @@
+{
+  "format": "duegood-ical-acquisition-contract-v1",
+  "synthetic": true,
+  "warning": "Invented source-reference and observation cases only. This fixture contains no live iCal feed, Canvas URL, student coursework, or credential.",
+  "institution": "synthetic.institution.invalid",
+  "icalObservation": {
+    "localId": "course-a-ical-synthetic-1",
+    "course": "course-a",
+    "reference": {
+      "institution": "synthetic.institution.invalid",
+      "course": "course-a",
+      "source": "ical",
+      "id": "synthetic-uid-1",
+      "instance": "2030-01-20T23:59:00Z"
+    },
+    "fields": {
+      "kind": "assignment",
+      "title": "Synthetic iCal work",
+      "at": "2030-01-20T23:59"
+    }
+  },
+  "ambiguousObservation": {
+    "localId": "course-a-ical-synthetic-ambiguous",
+    "course": "course-a",
+    "reference": {
+      "institution": "synthetic.institution.invalid",
+      "course": "course-a",
+      "source": "ical",
+      "id": "synthetic-uid-ambiguous"
+    },
+    "fields": {
+      "kind": "assignment",
+      "title": "Never auto-merged"
+    },
+    "possibleLocalIds": [
+      "course-a-canvas-910001",
+      "course-a-canvas-910002"
+    ]
+  },
+  "transitionRehearsal": {
+    "course": { "key": "course-transition", "title": "Synthetic new course" },
+    "parentBeforeOverride": {
+      "localId": "transition-parent-local-id",
+      "course": "course-a",
+      "reference": {
+        "institution": "synthetic.institution.invalid",
+        "course": "course-a",
+        "source": "ical",
+        "id": "synthetic-parent-uid-before"
+      },
+      "fields": { "kind": "assignment", "title": "Synthetic parent", "at": "2030-02-01T20:00:00Z" }
+    },
+    "parentAfterOverride": {
+      "localId": "transition-parent-local-id",
+      "course": "course-a",
+      "reference": {
+        "institution": "synthetic.institution.invalid",
+        "course": "course-a",
+        "source": "ical",
+        "id": "synthetic-parent-uid-after"
+      },
+      "verifiedReferences": [{
+        "institution": "synthetic.institution.invalid",
+        "course": "course-a",
+        "source": "ical",
+        "id": "synthetic-parent-uid-before"
+      }],
+      "fields": { "kind": "assignment", "title": "Synthetic parent override", "at": "2030-02-02T20:00:00Z" }
+    },
+    "discussionCheckpoints": [
+      {
+        "localId": "transition-discussion-post",
+        "course": "course-a",
+        "reference": { "institution": "synthetic.institution.invalid", "course": "course-a", "source": "ical", "id": "synthetic-discussion-post" },
+        "fields": { "kind": "discussion-post-checkpoint", "title": "Synthetic discussion post", "at": "2030-02-03T20:00:00Z" }
+      },
+      {
+        "localId": "transition-discussion-reply",
+        "course": "course-a",
+        "reference": { "institution": "synthetic.institution.invalid", "course": "course-a", "source": "ical", "id": "synthetic-discussion-reply" },
+        "fields": { "kind": "discussion-reply-checkpoint", "title": "Synthetic discussion reply", "at": "2030-02-04T20:00:00Z" }
+      }
+    ],
+    "newCourseObservation": {
+      "localId": "transition-new-course-item",
+      "course": "course-transition",
+      "reference": { "institution": "synthetic.institution.invalid", "course": "course-transition", "source": "ical", "id": "synthetic-new-course" },
+      "fields": { "kind": "assignment", "title": "Synthetic new-course work", "at": "2030-02-05T20:00:00Z" }
+    },
+    "apiAdoption": {
+      "localId": "transition-parent-local-id",
+      "course": "course-a",
+      "reference": { "institution": "synthetic.institution.invalid", "course": "course-a", "source": "canvas", "id": "synthetic-api-parent" },
+      "verifiedReferences": [{
+        "institution": "synthetic.institution.invalid",
+        "course": "course-a",
+        "source": "ical",
+        "id": "synthetic-parent-uid-after"
+      }],
+      "fields": { "title": "Synthetic API parent", "grade": "synthetic-api-grade" }
+    }
+  },
+  "nativeCanvasReconciliation": {
+    "verifiedIcalAssignmentAlias": "assignment:910001",
+    "rule": "A native Canvas assignment may adopt an iCal local item only through this exact scoped alias. Title, due date, kind, and URL resemblance are never link evidence.",
+    "expected": {
+      "preservesLocalId": true,
+      "preservesDoneAndExtensions": true,
+      "keepsIcalAndCanvasReferences": true,
+      "canvasDueFactUsesCaptureTimestamp": true,
+      "repeatUnchangedCaptureIsByteStable": true,
+      "rollingIcalOmissionDoesNotArchive": true
+    }
+  },
+  "icalNormalizer": {
+    "syntheticCanvasOrigin": "https://canvas.synthetic.invalid",
+    "verifiedCourse": {
+      "key": "course-a",
+      "canvasCourseId": "42"
+    },
+    "verifiedCalendarEventKinds": {
+      "101": "discussion-post-checkpoint",
+      "102": "discussion-reply-checkpoint",
+      "103": "other-event"
+    },
+    "acceptanceGate": "owner:ical-feed-shape"
+  }
+}

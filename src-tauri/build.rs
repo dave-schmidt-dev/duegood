@@ -18,6 +18,8 @@ const COMMANDS: &[&str] = &[
     "read_dashboard_documents",
     "set_item_completion",
     "set_discussion_field",
+    "resolve_pending_source_link",
+    "set_manual_grade",
     "read_avatar_bytes",
     "open_library_resource",
     "copy_assignment_text",

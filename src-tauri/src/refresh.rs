@@ -397,13 +397,13 @@ pub fn refresh(
         let _write_lock = store.write_lock()?;
         store.recover_refresh_locked()?;
         let current = read_authoritative_coursework(store)?;
-        if coursework_without_personal_state(&baseline)
-            != coursework_without_personal_state(&current)
+        if coursework_without_declared_local_state(&baseline)?
+            != coursework_without_declared_local_state(&current)?
             || generation_fingerprint(&store.store_dir())? != generation
         {
             return Err(StoreError::StoreChanged.into());
         }
-        let personal_reapplied = personal_state_changed(&baseline, &current);
+        let personal_reapplied = personal_state_changed(&baseline, &current)?;
         let coursework =
             merge_personal_state(&current, &capture.coursework, preserve_missing_items)?;
         write_staged_document(&staging, COURSEWORK_FILE, &node_json_bytes(&coursework))?;
@@ -621,25 +621,81 @@ fn load_prior(snapshot_root: &Path) -> Result<RefreshPrior, RefreshError> {
     })
 }
 
-fn coursework_without_personal_state(value: &Value) -> Value {
+const BUILTIN_LOCAL_FIELDS: &[&str] = &[
+    "done",
+    "doneAt",
+    "discussionPostDone",
+    "discussionRepliesDone",
+    "manualGradeObservation",
+];
+
+fn declared_local_fields(item: &Value) -> Result<BTreeSet<String>, RefreshError> {
+    let mut fields = BUILTIN_LOCAL_FIELDS
+        .iter()
+        .map(|field| (*field).to_owned())
+        .collect::<BTreeSet<_>>();
+    let Some(declared) = item.get("localOwnedFields") else {
+        return Ok(fields);
+    };
+    let declared = declared.as_array().ok_or(RefreshError::InvalidCapture)?;
+    for field in declared {
+        let field = field
+            .as_str()
+            .filter(|field| {
+                !field.is_empty()
+                    && field.len() <= 80
+                    && field
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                    && !matches!(
+                        *field,
+                        "id" | "course"
+                            | "source"
+                            | "canvasId"
+                            | "sourceReferences"
+                            | "fieldObservations"
+                            | "localOwnedFields"
+                            | "kind"
+                            | "title"
+                            | "at"
+                            | "points"
+                            | "url"
+                            | "confidence"
+                            | "flags"
+                            | "detail"
+                            | "assignmentGroupId"
+                            | "assignmentGroupName"
+                            | "assignmentGroupWeight"
+                            | "submissionStatus"
+                            | "submittedAt"
+                            | "gradedAt"
+                            | "grade"
+                            | "score"
+                    )
+            })
+            .ok_or(RefreshError::InvalidCapture)?;
+        fields.insert(field.to_owned());
+    }
+    Ok(fields)
+}
+
+/// Removes only explicitly local-owned fields for the publish CAS comparison. Any concurrent
+/// mutation to an unknown or source-owned field remains visible and aborts publication.
+fn coursework_without_declared_local_state(value: &Value) -> Result<Value, RefreshError> {
     let mut copy = value.clone();
     for list_name in ["items", "archivedForecastItems"] {
         if let Some(items) = copy.get_mut(list_name).and_then(Value::as_array_mut) {
             for item in items {
                 if let Some(object) = item.as_object_mut() {
-                    for field in [
-                        "done",
-                        "doneAt",
-                        "discussionPostDone",
-                        "discussionRepliesDone",
-                    ] {
-                        object.remove(field);
+                    let fields = declared_local_fields(&Value::Object(object.clone()))?;
+                    for field in fields {
+                        object.remove(&field);
                     }
                 }
             }
         }
     }
-    copy
+    Ok(copy)
 }
 
 fn validate_capture(capture: &RefreshCapture) -> Result<(), RefreshError> {
@@ -765,35 +821,22 @@ fn safe_relative_name(name: &str) -> bool {
 }
 
 fn personal_key(item: &Value) -> Option<String> {
-    let id = item.get("id").and_then(Value::as_str)?;
-    if item.get("source").and_then(Value::as_str) == Some("canvas") {
-        if let Some(canvas_id) = item.get("canvasId") {
-            let course = item.get("course").and_then(Value::as_str).unwrap_or("");
-            return Some(format!("canvas:{course}:{}", value_id(canvas_id)?));
-        }
-    }
-    Some(format!("id:{id}"))
+    item.get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
 }
 
-fn value_id(value: &Value) -> Option<String> {
-    match value {
-        Value::String(value) if !value.is_empty() => Some(value.clone()),
-        Value::Number(value) => Some(value.to_string()),
-        _ => None,
-    }
-}
-
-fn copy_personal_fields(source: &Value, target: &mut Map<String, Value>) {
-    for field in [
-        "done",
-        "doneAt",
-        "discussionPostDone",
-        "discussionRepliesDone",
-    ] {
-        if let Some(value) = source.get(field) {
-            target.insert(field.to_owned(), value.clone());
+fn copy_personal_fields(
+    source: &Value,
+    target: &mut Map<String, Value>,
+) -> Result<(), RefreshError> {
+    for field in declared_local_fields(source)? {
+        if let Some(value) = source.get(&field) {
+            target.insert(field, value.clone());
         }
     }
+    Ok(())
 }
 
 fn merge_personal_state(
@@ -829,7 +872,7 @@ fn merge_personal_state(
         };
         fresh_keys.insert(key.clone());
         if let (Some(previous), Some(target)) = (old_by_key.get(&key), item.as_object_mut()) {
-            copy_personal_fields(previous, target);
+            copy_personal_fields(previous, target)?;
         }
     }
     for item in old_items {
@@ -870,7 +913,7 @@ fn merge_personal_state(
     for item in archived.iter_mut() {
         if let Some(key) = personal_key(item) {
             if let (Some(previous), Some(object)) = (old_by_key.get(&key), item.as_object_mut()) {
-                copy_personal_fields(previous, object);
+                copy_personal_fields(previous, object)?;
             }
         }
     }
@@ -896,14 +939,7 @@ fn merge_personal_state(
     Ok(result)
 }
 
-fn personal_state_changed(before: &Value, after: &Value) -> bool {
-    const PERSONAL_FIELDS: [&str; 4] = [
-        "done",
-        "doneAt",
-        "discussionPostDone",
-        "discussionRepliesDone",
-    ];
-
+fn personal_state_changed(before: &Value, after: &Value) -> Result<bool, RefreshError> {
     fn index(value: &Value) -> BTreeMap<String, Value> {
         let mut indexed = BTreeMap::new();
         for list_name in ["items", "archivedForecastItems"] {
@@ -923,13 +959,16 @@ fn personal_state_changed(before: &Value, after: &Value) -> bool {
 
     let before = index(before);
     let after = index(after);
-    before.iter().any(|(key, old)| {
-        after.get(key).is_some_and(|new| {
-            PERSONAL_FIELDS
-                .iter()
-                .any(|field| old.get(*field) != new.get(*field))
-        })
-    })
+    for (key, old) in &before {
+        if let Some(new) = after.get(key) {
+            for field in declared_local_fields(old)? {
+                if old.get(&field) != new.get(&field) {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn update_staged_activity(
@@ -1043,6 +1082,7 @@ fn stage_generation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use crate::config::{ImportLimits, TEST_BUNDLE_IDENTIFIER};
     use crate::import::{import_legacy_root, ImportOptions};
     use crate::testutil::{materialize_fixture, snapshot_tree, TempRoot};
@@ -1159,6 +1199,8 @@ mod tests {
         let mut current = current_coursework(&store);
         current["items"][0]["done"] = Value::Bool(true);
         current["items"][0]["doneAt"] = Value::String("student-time".into());
+        current["items"][0]["manualGradeObservation"] =
+            json!({"version": 1, "value": "A-", "source": "pdf"});
         atomic_write(
             &store.store_dir().join(COURSEWORK_FILE),
             &node_json_bytes(&current),
@@ -1166,7 +1208,11 @@ mod tests {
         .unwrap();
         let manifest = fs::read(store.store_dir().join(MANIFEST_FILE)).unwrap();
         let baseline = current.clone();
-        let capture = capture_from(&baseline);
+        let mut capture = capture_from(&baseline);
+        capture.coursework["items"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("manualGradeObservation");
         let result =
             refresh(&store, move |_, _| Ok(capture), &mut |_| {}).expect("complete refresh");
         assert_eq!(result.status, "complete");
@@ -1174,6 +1220,10 @@ mod tests {
         assert_eq!(published["items"][0]["title"], "Canvas title update");
         assert_eq!(published["items"][0]["done"], true);
         assert_eq!(published["items"][0]["doneAt"], "student-time");
+        assert_eq!(
+            published["items"][0]["manualGradeObservation"],
+            json!({"version": 1, "value": "A-", "source": "pdf"})
+        );
         assert_eq!(
             fs::read(store.store_dir().join(MANIFEST_FILE)).unwrap(),
             manifest
@@ -1309,6 +1359,70 @@ mod tests {
                 "title": "Personal progress kept",
                 "detail": "Changes made during this refresh were preserved."
             })
+        );
+    }
+
+    #[test]
+    fn declared_local_edit_rebases_under_the_publish_lock() {
+        let root = TempRoot::new("refresh-declared-local-rebase");
+        let store = authoritative_store(&root);
+        let mut baseline = current_coursework(&store);
+        baseline["items"][0]["localOwnedFields"] = json!(["studentNote"]);
+        baseline["items"][0]["studentNote"] = json!("before");
+        atomic_write(
+            &store.store_dir().join(COURSEWORK_FILE),
+            &node_json_bytes(&baseline),
+        )
+        .unwrap();
+        let capture = capture_from(&baseline);
+        let mut changed = false;
+        let mut report = |progress: RefreshProgress| {
+            if !changed && progress.phase == RefreshPhase::Stage && progress.completed > 0 {
+                let _write_lock = store.write_lock().expect("write lock");
+                let mut current = current_coursework(&store);
+                current["items"][0]["studentNote"] = json!("during-refresh");
+                atomic_write(
+                    &store.store_dir().join(COURSEWORK_FILE),
+                    &node_json_bytes(&current),
+                )
+                .unwrap();
+                changed = true;
+            }
+        };
+        refresh(&store, move |_, _| Ok(capture), &mut report).expect("declared field rebase");
+        let published = current_coursework(&store);
+        assert!(changed);
+        assert_eq!(published["items"][0]["title"], "Canvas title update");
+        assert_eq!(published["items"][0]["studentNote"], "during-refresh");
+    }
+
+    #[test]
+    fn unknown_item_edit_during_staging_fails_closed() {
+        let root = TempRoot::new("refresh-unknown-item-conflict");
+        let store = authoritative_store(&root);
+        let before = current_coursework(&store);
+        let capture = capture_from(&before);
+        let mut changed = false;
+        let mut report = |progress: RefreshProgress| {
+            if !changed && progress.phase == RefreshPhase::Stage && progress.completed > 0 {
+                let _write_lock = store.write_lock().expect("write lock");
+                let mut current = current_coursework(&store);
+                current["items"][0]["unrecognizedExtension"] = json!({"changed": true});
+                atomic_write(
+                    &store.store_dir().join(COURSEWORK_FILE),
+                    &node_json_bytes(&current),
+                )
+                .unwrap();
+                changed = true;
+            }
+        };
+        let error = refresh(&store, move |_, _| Ok(capture), &mut report)
+            .expect_err("unknown concurrent edit must fail closed");
+        assert!(changed);
+        assert_eq!(error.to_string(), "refresh could not be completed");
+        assert_eq!(
+            current_coursework(&store)["items"][0]["unrecognizedExtension"]["changed"],
+            true
         );
     }
 

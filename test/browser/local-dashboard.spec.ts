@@ -168,6 +168,67 @@ test.describe("local Marymount dashboard", () => {
     await expect(card.getByRole("checkbox", { name: "Done" })).not.toBeChecked();
   });
 
+  test("edits a local grade without hiding Canvas facts, supports Escape, and reloads on a stale version", async ({ page }) => {
+    const localFixture = await fixture();
+    await openTimeline(page);
+    await page.getByRole("link", { name: "Grades", exact: true }).click();
+    const row = page.locator("tr", { hasText: "Synthetic Submitted Work" });
+    await expect(row).toContainText("18 / 20");
+    await expect(row).toContainText("18");
+    await row.getByRole("button", { name: "Edit local grade for Synthetic Submitted Work" }).click();
+    const input = row.getByRole("textbox", { name: "Local grade for Synthetic Submitted Work" });
+    await input.fill("A-");
+    await input.press("Escape");
+    await expect(row.getByRole("button", { name: "Edit local grade for Synthetic Submitted Work" })).toBeVisible();
+
+    await row.getByRole("button", { name: "Edit local grade for Synthetic Submitted Work" }).click();
+    await input.fill("A-");
+    await input.press("Enter");
+    await expect(row).toContainText("A-");
+    await expect(row).toContainText("Local observation · v1");
+    await expect(row).toContainText("18 / 20");
+    await page.reload();
+    const reloaded = page.locator("tr", { hasText: "Synthetic Submitted Work" });
+    await expect(reloaded).toContainText("A-");
+    await reloaded.getByRole("button", { name: "Edit local grade for Synthetic Submitted Work" }).click();
+    const document = JSON.parse(await readFile(localFixture.coursework, "utf8")) as { generated: string };
+    document.generated = new Date().toISOString();
+    await writeFile(localFixture.coursework, `${JSON.stringify(document, null, 2)}\n`);
+    const staleInput = reloaded.getByRole("textbox", { name: "Local grade for Synthetic Submitted Work" });
+    await staleInput.fill("B+");
+    await staleInput.press("Enter");
+    await expect(reloaded.getByRole("status")).toContainText("This local grade changed elsewhere");
+    await expect(reloaded).toContainText("A-");
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const dimensions = await page.locator(".grade-table-wrap").evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }));
+    expect(dimensions.scrollWidth).toBeGreaterThan(dimensions.clientWidth);
+  });
+
+  test("previews a browser-selected synthetic PDF and only saves a confirmed exact match", async ({ page }) => {
+    await openTimeline(page);
+    await page.getByRole("link", { name: "Grades", exact: true }).click();
+    const row = page.locator("tr", { hasText: "Synthetic Submitted Work" });
+    const beforeCancel = await row.textContent();
+    const chooser = page.getByLabel("Choose local PDF grade report");
+    await chooser.setInputFiles(path.resolve("test/fixtures/synthetic-grade-report.pdf"));
+    const dialog = page.getByRole("dialog", { name: "Local PDF grade preview" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText("Synthetic Submitted Work", { exact: true })).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(row).toHaveText(beforeCancel ?? "");
+    await chooser.setInputFiles(path.resolve("test/fixtures/synthetic-grade-report.pdf"));
+    await expect(dialog).toBeVisible();
+    const choice = dialog.getByRole("radio", { name: "Confirm PDF grade for Synthetic Submitted Work" });
+    await choice.check();
+    await dialog.getByRole("button", { name: "Confirm grade" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(row).toContainText("A-");
+    await expect(row).toContainText("18 / 20");
+    await expect(row).toContainText("User-confirmed PDF · v1");
+  });
+
   test("fills desktop width and exposes the complete mobile navigation", async ({ page }) => {
     await page.setViewportSize({ width: 2400, height: 1000 });
     await openTimeline(page);
@@ -179,6 +240,71 @@ test.describe("local Marymount dashboard", () => {
     await expect(page.locator(".sidebar")).toHaveCSS("position", "fixed");
     await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("link")).toHaveCount(8);
     await expect(page.getByRole("link", { name: "Inbox", exact: true })).toBeVisible();
+  });
+
+  test("reviews a pending Canvas link explicitly, selects among candidates, supports cancellation, and reloads after confirmation", async ({ page }) => {
+    const pendingId = JSON.stringify(["synthetic", "course-a", "canvas", "8421", null]);
+    let pending = true;
+    await page.route("**/api/dashboard", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json() as Record<string, unknown>;
+      body.pendingSourceLinks = pending ? [{
+        id: pendingId, localId: "canvas-api-8421", course: "course-a",
+        reference: { source: "canvas", id: "8421", institution: "synthetic", course: "course-a" },
+        fields: { title: "Synthetic API assignment", at: "2026-10-09T08:00:00Z", points: 25 },
+        observedAt: "2026-10-01T12:00:00Z", candidateIds: ["course-a-canvas-910001", "course-a-canvas-910002"], reason: "ambiguous-match",
+      }] : [];
+      await route.fulfill({ response, body: JSON.stringify(body) });
+    });
+    await page.route("**/api/local/pending-source-links/*", async (route) => {
+      const submitted = route.request().postDataJSON() as Record<string, unknown>;
+      expect(submitted).toMatchObject({ expectedVersion: expect.stringMatching(/^[0-9a-f]{64}$/), localItemId: "course-a-canvas-910001", decision: "confirm" });
+      pending = false;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "linked" }) });
+    });
+    await openTimeline(page);
+    await page.getByRole("link", { name: "More", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Possible source link", exact: true })).toBeVisible();
+    await expect(page.getByText('"Synthetic API assignment"', { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Confirm link", exact: true })).toBeDisabled();
+    await page.getByRole("radio", { name: "Choose Due Good item course-a-canvas-910001" }).check();
+    await page.getByRole("button", { name: "Confirm link", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Confirm source link" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: "Confirm source link" })).toHaveCount(0);
+    await page.keyboard.press("c");
+    await page.getByRole("dialog", { name: "Confirm source link" }).getByRole("button", { name: "Confirm link", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Possible source link", exact: true })).toHaveCount(0);
+    await expect(page.getByText("Link confirmed. The original local item was kept.", { exact: true })).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByRole("link", { name: "More", exact: true })).toBeVisible();
+    await page.unroute("**/api/local/pending-source-links/*");
+    await page.unroute("**/api/dashboard");
+  });
+
+  test("keeps a multi-candidate source record distinct without choosing a local item", async ({ page }) => {
+    const pendingId = JSON.stringify(["synthetic", "course-a", "canvas", "8422", null]);
+    await page.route("**/api/dashboard", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json() as Record<string, unknown>;
+      body.pendingSourceLinks = [{
+        id: pendingId, localId: "canvas-api-8422", course: "course-a",
+        reference: { source: "canvas", id: "8422", institution: "synthetic", course: "course-a" }, fields: { title: "Another synthetic API assignment" },
+        candidateIds: ["course-a-canvas-910001", "course-a-canvas-910002"], reason: "ambiguous-match",
+      }];
+      await route.fulfill({ response, body: JSON.stringify(body) });
+    });
+    await page.route("**/api/local/pending-source-links/*", async (route) => {
+      expect(route.request().postDataJSON()).toMatchObject({ localItemId: "", decision: "reject" });
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "kept-distinct" }) });
+    });
+    await openTimeline(page);
+    await page.getByRole("link", { name: "More", exact: true }).click();
+    await page.getByRole("button", { name: "Keep distinct", exact: true }).click();
+    await page.getByRole("dialog", { name: "Keep records distinct" }).getByRole("button", { name: "Keep distinct", exact: true }).click();
+    await expect(page.getByText("Records kept distinct. The Canvas item is now separate.", { exact: true })).toBeVisible();
+    await page.unroute("**/api/local/pending-source-links/*");
+    await page.unroute("**/api/dashboard");
   });
 
   test("copies assignment plain text with polite feedback on timeline card and rail item, and handles copy failure", async ({ page, context }) => {

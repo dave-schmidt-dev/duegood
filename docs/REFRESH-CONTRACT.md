@@ -139,8 +139,31 @@ the dashboard.
 | 64 | Merged stdout/stderr from the broker/wrapper invocation is captured up to a 65,536-byte cap for local logging only; it is never relayed verbatim to the dashboard UI — only a generic success/failure status and message are. | confirmed |
 | 65 | On any refresh failure (broker error, timeout, reconciliation error), the orchestration layer surfaces a generic failure message to the dashboard; it does not surface raw child-process output or broker internals to the UI. | confirmed |
 | 66 | The store lock in today's design is coarse: one lock covers acquiring the external data *and* writing it locally, held by the same process for the whole duration. | intentionally changed — Decision 7 replaces this with a short local write lock plus a separate lease/CAS-style commit step, so a slow external fetch does not hold the store lock for its full duration. |
-| 67 | History capture (`captureCanvasSnapshot`/`diffCanvasSnapshots`) only tracks items where `source === "canvas"` **and** `canvasId` is set; manual/session/milestone items and archived-forecast items (row 31) are invisible to the refresh-history diff regardless of what the reconciliation script did to them. | confirmed |
+| 67 | History capture (`captureCanvasSnapshot`/`diffCanvasSnapshots`) now uses scoped source coverage when present, with the legacy `source`/`canvasId` rule only for documents that have not been backfilled. It tracks source-owned field changes by immutable local ID, not provenance bookkeeping; manual-only items remain outside the refresh diff. | intentionally changed — Task 1.1 introduces source-neutral iCal/API continuity while keeping historical local documents readable. |
 | 68 | Refresh-history events are capped at 100 retained events, written atomically, with a corruption-quarantine path if the history file is unreadable/invalid on load (quarantine the bad file, start a fresh history rather than crash the refresh). | confirmed |
 | 69 | A `recoverMissedGradeHistory()`-style pass exists to backfill a grade-change history event when a grade changed between refreshes without an intervening history write (e.g. after a gap in refresh cadence); this does not re-fetch Canvas, it only reconciles locally stored snapshots. | confirmed |
 | 70 | An incomplete/aborted refresh (any course failed, broker timeout, or reconciliation error) leaves `coursework.json` **unmodified** from before the run — because the wrapper only invokes the reconciliation script's `--apply` after all course imports succeed (row 7), a failed run never reaches the write-if-changed step at all. Any already-completed course's `canvas-export/` output for that run may still exist on disk (row 25's per-course best-effort install can succeed for earlier courses in the fixed list before a later course fails), but it is orphaned data no reconciliation step has consumed. | confirmed |
 | 71 | An incomplete/aborted refresh does not append a "succeeded" refresh-history event (none is written until `runRefresh()`'s wrapping completes without throwing); whether a distinct "failed" history event type is recorded today, versus the failure only surfacing as the generic dashboard message (row 65), was not resolved from source alone. | unknown — the failure/error path in `local-server.mjs` was traced for lock release and dashboard messaging, but not exhaustively for every history-writing branch; recording as unknown rather than asserting either way. |
+
+## Source-neutral acquisition (Task 1.1)
+
+`src/local/acquisition.ts` is a pure, local merge contract. It contains no iCal parser, feed URL,
+network request, or Canvas credential path. The synthetic fixture
+`test/fixtures/ical-acquisition-contract.json` is the only acquisition input retained here.
+
+- Local `id` is immutable. Existing `canvasId` records receive a deterministic scoped Canvas
+  reference; an iCal observation never writes `canvasId`.
+- A scoped reference includes institution, local course key, source kind, stable source ID, and an
+  optional instance. One scoped reference may belong to only one local item.
+- A source observation writes only declared source-owned fields and records a selected
+  `{ owner, value }` plus bounded alternative source facts per field. Verified Canvas facts
+  take display priority over iCal facts without discarding feed evidence. It cannot write
+  local completion, notes, unknown extensions, discussion state, identity, course membership,
+  display provenance, or Canvas identity.
+- Manual and PDF reference kinds are reserved for the later grade contract. The current merger
+  refuses those observations; optional source-provided `observedAt` changes only with its fact.
+- Automatic matches are only an exact local ID or verified scoped reference. Potential matches are
+  held in a bounded `pendingSourceLinks` list; no title, due-date, or source-kind heuristic creates
+  a second item or silently merges one.
+- The local store preserves exact input bytes for a no-op acquisition. Activity snapshots exclude
+  source-reference and field-observation bookkeeping, so a backfill alone produces no Activity row.

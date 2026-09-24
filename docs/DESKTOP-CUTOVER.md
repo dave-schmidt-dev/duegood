@@ -2,6 +2,13 @@
 
 **Status: the signed Phase 5 desktop candidate is installed and its synthetic native gates passed; the owner-attended cutover steps below are pending.** A private preparatory copy and Rust dry run passed, but it is not the frozen rehearsal backup. This is the planned Phase 5 cutover. It records no private paths, account identifiers, token values, coursework, or run results. Replace angle-bracket placeholders locally; do not paste their resolved values into Git, tickets, or shared evidence. Stop on any failed check or unexpected writer.
 
+**Task 4.2 compatibility gate:** an enriched layout (source references, field observations,
+pending links, or manual/PDF grade observations) cannot be exported as a refreshable legacy
+layout. The native app must retain an exact frozen rollback snapshot instead. Only an owner-side
+compatibility check of the private Python reconciler may clear this gate; no repository test,
+synthetic fixture, or installed candidate grants that approval. This is separate from live iCal
+feed-shape acceptance and PDF-layout acceptance.
+
 ## Before rehearsal
 
 1. **Content-free source dry run.** Run the legacy-root dry run against `<PRIVATE_LEGACY_ROOT>`. Record only totals, refusal counts, lock state, and result. Refusals for entries outside the Due Good layout are expected; confirm those entries remain in place. Do not copy their names or contents into evidence. Stop if the Due Good layout itself is refused, the legacy writer is active, or the result is unclear.
@@ -25,6 +32,9 @@
 4. **Prove equality before refresh.** Export the imported preview store to `<PRIVATE_PRE_REFRESH_EXPORT>`. Compare the Due Good layout subset byte-for-byte with the corresponding layout in `<PRIVATE_BACKUP_DIR>`, using the cutover verifier. Require an exact equality result and content-free report. Any mismatch stops the rehearsal; do not promote or refresh.
 5. **Promote only with the owner present.** In More, use `Choose and compare backup…` to select the frozen backup through the native picker. Require the app's exact layout match and a fresh readiness proof. Then use `Promote to authoritative store` and answer the native confirmation. The app rechecks the same bytes and locks before changing the manifest state. A cancel, mismatch, changed byte, or expired proof stops the cutover; repeat preparation instead of editing the manifest. Record the resulting state without coursework data. Confirm refresh is available and that no legacy writer is loaded.
 6. **Run one live refresh.** Start exactly one desktop Canvas refresh through the installed app and fixed BWS consumer. This is the first step that should use the new token or contact Canvas. Record only start/end time, result, content-free progress, and error category. Require a complete successful refresh and inspect the app with the owner. An incomplete, failed, or ambiguous result stops the rehearsal; preserve the pre-refresh export and recover before continuing.
+   Confirm any pre-existing iCal-linked assignment remains one local item with both scoped source
+   references and its local progress/extensions intact. Stop on an unexpected duplicate item,
+   changed unknown extension, or ambiguous identity; do not repair private coursework by hand.
 
 ## Rollback drill
 

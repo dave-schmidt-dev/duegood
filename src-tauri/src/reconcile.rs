@@ -3,6 +3,8 @@
 //! The caller must pass every successfully captured assignment for each course it supplies.
 //! A course omitted from `courses` is left untouched, so a failed course capture cannot make
 //! its existing work disappear. Canvas submission fields are separate from local completion.
+//! Cross-source adoption is exact: a legacy Canvas ID, a scoped Canvas reference, or a scoped
+//! iCal `assignment:<Canvas ID>` reference. Titles and dates are never identity evidence.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -114,6 +116,45 @@ pub fn reconcile_coursework(
         .transpose()?
         .cloned()
         .unwrap_or_default();
+    validate_source_references(&local_items, &archive_existing)?;
+
+    // Resolve every link before mutating anything. This makes a duplicate Canvas/iCal claim a
+    // transaction failure rather than a choice based on input order.
+    let mut assignment_matches = HashMap::<(String, String), usize>::new();
+    for capture in courses {
+        for assignment in &capture.assignments {
+            let canvas_id = identity_key(assignment.get("id").expect("assignment id validated"))
+                .expect("assignment id validated");
+            let matching: Vec<usize> = local_items
+                .iter()
+                .enumerate()
+                .filter_map(|(index, item)| {
+                    match item_matches_assignment(item, &capture.key, &canvas_id) {
+                        Ok(true) => Some(index),
+                        Ok(false) | Err(_) => None,
+                    }
+                })
+                .collect();
+            // A malformed reference is just as unsafe as two apparently valid candidates.
+            if local_items
+                .iter()
+                .any(|item| item_matches_assignment(item, &capture.key, &canvas_id).is_err())
+            {
+                return Err(invalid("coursework source reference is malformed"));
+            }
+            match matching.as_slice() {
+                [] => {}
+                [index] => {
+                    assignment_matches.insert((capture.key.clone(), canvas_id), *index);
+                }
+                _ => {
+                    return Err(invalid(
+                        "Canvas assignment has conflicting local identities",
+                    ))
+                }
+            }
+        }
+    }
     let archived_canvas_ids: HashSet<(String, String)> = archive_existing
         .iter()
         .filter_map(|item| {
@@ -128,7 +169,7 @@ pub fn reconcile_coursework(
     let mut next_items = Vec::with_capacity(local_items.len());
     let mut newly_archived = Vec::new();
 
-    for mut item in local_items.iter().cloned() {
+    for (item_index, mut item) in local_items.iter().cloned().enumerate() {
         let object = item.as_object().expect("validated item object");
         let kind = object
             .get("kind")
@@ -152,7 +193,7 @@ pub fn reconcile_coursework(
         }
 
         if source == "canvas" {
-            let (Some(key), Some(canvas_id)) = (key, canvas_id) else {
+            let Some(key) = key else {
                 // An incomplete identity is not safe to delete or remap.
                 next_items.push(item);
                 continue;
@@ -162,21 +203,55 @@ pub fn reconcile_coursework(
                 next_items.push(item);
                 continue;
             };
-            let ignored = ignored_ids(&local_courses, &key)?;
-            if ignored.contains(&canvas_id) {
-                move_to_archive(item, &mut newly_archived, &archived_canvas_ids);
-                continue;
-            }
-            if let Some(assignment) = capture.assignments.iter().find(|assignment| {
-                assignment.get("id").and_then(identity_key).as_deref() == Some(canvas_id.as_str())
-            }) {
-                update_item(&mut item, assignment, capture, &canvas_id)?;
-                seen.insert((key, canvas_id));
+            let matched = capture.assignments.iter().find_map(|assignment| {
+                let id = assignment.get("id").and_then(identity_key)?;
+                (assignment_matches.get(&(key.clone(), id.clone())) == Some(&item_index))
+                    .then_some((assignment, id))
+            });
+            if let Some((assignment, matched_id)) = matched {
+                let ignored = ignored_ids(&local_courses, &key)?;
+                if ignored.contains(&matched_id) {
+                    move_to_archive(item, &mut newly_archived, &archived_canvas_ids);
+                    continue;
+                }
+                update_item(&mut item, assignment, capture, &matched_id, captured_at)?;
+                seen.insert((key, matched_id));
                 next_items.push(item);
             } else {
+                // A legacy source="canvas" item without an exact identity is still not safe to
+                // overwrite, but a complete course may archive a verified old Canvas item.
+                if canvas_id.is_none() {
+                    next_items.push(item);
+                    continue;
+                }
                 move_to_archive(item, &mut newly_archived, &archived_canvas_ids);
             }
             continue;
+        }
+
+        if let Some(key) = key.as_deref() {
+            if let Some(capture) = captures.get(key) {
+                if let Some((assignment, canvas_id)) =
+                    capture.assignments.iter().find_map(|assignment| {
+                        let id = assignment.get("id").and_then(identity_key)?;
+                        (assignment_matches.get(&(key.to_owned(), id.clone())) == Some(&item_index))
+                            .then_some((assignment, id))
+                    })
+                {
+                    let ignored = ignored_ids(&local_courses, key)?;
+                    if ignored.contains(&canvas_id) {
+                        // An iCal-only item is never archived merely because a rolling iCal
+                        // window omits it. An explicit ignored Canvas ID also must not create a
+                        // competing native item, so retain the iCal record unchanged.
+                        next_items.push(item);
+                    } else {
+                        update_item(&mut item, assignment, capture, &canvas_id, captured_at)?;
+                        seen.insert((key.to_owned(), canvas_id));
+                        next_items.push(item);
+                    }
+                    continue;
+                }
+            }
         }
 
         if source == "syllabus" {
@@ -223,7 +298,7 @@ pub fn reconcile_coursework(
             if seen.contains(&identity) {
                 continue;
             }
-            let item = new_item(&capture.key, assignment, capture, &canvas_id)?;
+            let item = new_item(&capture.key, assignment, capture, &canvas_id, captured_at)?;
             let generated_id = item["id"]
                 .as_str()
                 .expect("new item id is a string")
@@ -324,6 +399,148 @@ fn identity_key(value: &Value) -> Option<String> {
     }
 }
 
+fn reference_key(
+    reference: &Map<String, Value>,
+) -> Result<(String, String, String, String, Option<String>), ReconcileError> {
+    let institution = reference
+        .get("institution")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| invalid("coursework source reference is malformed"))?;
+    let course = reference
+        .get("course")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| invalid("coursework source reference is malformed"))?;
+    let source = reference
+        .get("source")
+        .and_then(Value::as_str)
+        .filter(|value| matches!(*value, "canvas" | "ical" | "manual" | "pdf"))
+        .ok_or_else(|| invalid("coursework source reference is malformed"))?;
+    let id = reference
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| invalid("coursework source reference is malformed"))?;
+    let instance = match reference.get("instance") {
+        None => None,
+        Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
+        _ => return Err(invalid("coursework source reference is malformed")),
+    };
+    Ok((
+        institution.to_owned(),
+        course.to_owned(),
+        source.to_owned(),
+        id.to_owned(),
+        instance,
+    ))
+}
+
+fn item_references(item: &Value) -> Result<Vec<&Map<String, Value>>, ReconcileError> {
+    match item.get("sourceReferences") {
+        None => Ok(Vec::new()),
+        Some(Value::Array(references)) => references
+            .iter()
+            .map(|reference| {
+                reference
+                    .as_object()
+                    .ok_or_else(|| invalid("coursework source reference is malformed"))
+            })
+            .collect(),
+        _ => Err(invalid("coursework source reference is malformed")),
+    }
+}
+
+fn validate_source_references(items: &[Value], archived: &[Value]) -> Result<(), ReconcileError> {
+    let mut owners = HashMap::new();
+    for item in items.iter().chain(archived) {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| invalid("coursework item id must be a nonempty string"))?;
+        for reference in item_references(item)? {
+            let key = reference_key(reference)?;
+            if let Some(previous) = owners.insert(key, id) {
+                if previous != id {
+                    return Err(invalid("duplicate scoped source reference"));
+                }
+                return Err(invalid("duplicate scoped source reference"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The iCal parser emits this exact verified alias only after it recognizes Canvas's assignment
+/// endpoint. It is intentionally not a title, date, or loose URL comparison.
+fn item_matches_assignment(
+    item: &Value,
+    course: &str,
+    canvas_id: &str,
+) -> Result<bool, ReconcileError> {
+    if item.get("course").and_then(Value::as_str) != Some(course) {
+        return Ok(false);
+    }
+    if item.get("canvasId").and_then(identity_key).as_deref() == Some(canvas_id) {
+        return Ok(true);
+    }
+    for reference in item_references(item)? {
+        let (_, reference_course, source, id, _) = reference_key(reference)?;
+        if reference_course != course {
+            continue;
+        }
+        if (source == "canvas" && id == canvas_id)
+            || (source == "ical" && id == format!("assignment:{canvas_id}"))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn canvas_reference_for(
+    item: &Value,
+    course: &str,
+    canvas_id: &str,
+) -> Result<Option<Value>, ReconcileError> {
+    for reference in item_references(item)? {
+        let (institution, reference_course, source, id, _) = reference_key(reference)?;
+        if reference_course != course {
+            continue;
+        }
+        if source == "canvas" && id == canvas_id {
+            return Ok(Some(Value::Object(reference.clone())));
+        }
+        if source == "ical" && id == format!("assignment:{canvas_id}") {
+            return Ok(Some(
+                json!({"institution": institution, "course": course, "source": "canvas", "id": canvas_id}),
+            ));
+        }
+    }
+    Ok(None)
+}
+
+fn append_canvas_reference(
+    target: &mut Map<String, Value>,
+    course: &str,
+    canvas_id: &str,
+) -> Result<Option<Value>, ReconcileError> {
+    let current = Value::Object(target.clone());
+    let Some(reference) = canvas_reference_for(&current, course, canvas_id)? else {
+        return Ok(None);
+    };
+    let references = target
+        .entry("sourceReferences".to_owned())
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| invalid("coursework source reference is malformed"))?;
+    if !references.iter().any(|value| value == &reference) {
+        references.push(reference.clone());
+    }
+    Ok(Some(reference))
+}
+
 fn ignored_ids(local_courses: &[Value], key: &str) -> Result<HashSet<String>, ReconcileError> {
     let course = local_courses
         .iter()
@@ -410,6 +627,7 @@ fn update_item(
     assignment: &Value,
     capture: &CourseAssignments,
     canvas_id: &str,
+    captured_at: SystemTime,
 ) -> Result<(), ReconcileError> {
     let target = item
         .as_object_mut()
@@ -430,7 +648,8 @@ fn update_item(
         Value::String("confirmed".to_owned()),
     );
     target.insert("canvasId".to_owned(), assignment["id"].clone());
-    patch_due_at(target, assignment)?;
+    let canvas_reference = append_canvas_reference(target, &capture.key, canvas_id)?;
+    patch_due_at(target, assignment, canvas_reference.as_ref(), captured_at)?;
     patch_optional(target, "points", assignment, "points_possible");
     patch_optional(target, "url", assignment, "html_url");
     patch_group(target, assignment, capture)?;
@@ -445,6 +664,7 @@ fn new_item(
     assignment: &Value,
     capture: &CourseAssignments,
     canvas_id: &str,
+    captured_at: SystemTime,
 ) -> Result<Value, ReconcileError> {
     let name = assignment["name"]
         .as_str()
@@ -468,7 +688,9 @@ fn new_item(
         "score": null
     });
     let target = item.as_object_mut().expect("new item is object");
-    patch_due_at(target, assignment)?;
+    // Older documents have no verified institution scope. Do not invent one solely to attach a
+    // provenance record; linked iCal records supply a verified scope during adoption.
+    patch_due_at(target, assignment, None, captured_at)?;
     patch_optional(target, "points", assignment, "points_possible");
     patch_optional(target, "url", assignment, "html_url");
     patch_group(target, assignment, capture)?;
@@ -476,7 +698,12 @@ fn new_item(
     Ok(item)
 }
 
-fn patch_due_at(target: &mut Map<String, Value>, assignment: &Value) -> Result<(), ReconcileError> {
+fn patch_due_at(
+    target: &mut Map<String, Value>,
+    assignment: &Value,
+    canvas_reference: Option<&Value>,
+    captured_at: SystemTime,
+) -> Result<(), ReconcileError> {
     let Some(value) = assignment.get("due_at") else {
         return Ok(());
     };
@@ -488,8 +715,115 @@ fn patch_due_at(target: &mut Map<String, Value>, assignment: &Value) -> Result<(
             .ok_or_else(|| invalid("Canvas due_at must be a string or null"))?;
         Value::String(utc_to_new_york(utc)?)
     };
-    target.insert("at".to_owned(), local);
+    if let Some(reference) = canvas_reference {
+        merge_canvas_due_fact(target, local, reference.clone(), captured_at)?;
+    } else {
+        target.insert("at".to_owned(), local);
+    }
     Ok(())
+}
+
+/// Preserves a verified iCal due fact as an alternative while a new Canvas API observation
+/// becomes visible. Repeated identical API captures retain the original observation timestamp,
+/// which keeps a no-op reconciliation byte-stable.
+fn merge_canvas_due_fact(
+    target: &mut Map<String, Value>,
+    local: Value,
+    canvas_reference: Value,
+    captured_at: SystemTime,
+) -> Result<(), ReconcileError> {
+    let old_visible = target.get("at").cloned().unwrap_or(Value::Null);
+    let observed_at = crate::store::utc_stamp(captured_at).iso;
+    let existing = match target.get("fieldObservations") {
+        None => None,
+        Some(Value::Object(observations)) => observations.get("at").cloned(),
+        Some(_) => return Err(invalid("field observations are malformed")),
+    };
+    let canvas_owner = canvas_reference.clone();
+    let canvas_fact = |value: Value, stamp: Option<&str>| {
+        let mut fact = Map::new();
+        fact.insert("owner".into(), canvas_owner.clone());
+        fact.insert("value".into(), value);
+        if let Some(stamp) = stamp {
+            fact.insert("observedAt".into(), Value::String(stamp.to_owned()));
+        }
+        Value::Object(fact)
+    };
+
+    let next = if let Some(existing) = existing {
+        let selected = existing
+            .get("selected")
+            .and_then(Value::as_object)
+            .ok_or_else(|| invalid("field observations are malformed"))?;
+        let selected_owner = selected
+            .get("owner")
+            .and_then(Value::as_object)
+            .ok_or_else(|| invalid("field observations are malformed"))?;
+        let selected_is_canvas =
+            selected_owner == canvas_reference.as_object().expect("reference object");
+        if selected_is_canvas && selected.get("value") == Some(&local) {
+            // No new fact: the prior capture time remains authoritative for this unchanged value.
+            existing
+        } else {
+            let mut alternatives = existing
+                .get("alternatives")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            alternatives.retain(|fact| fact.get("owner") != Some(&canvas_reference));
+            // The old selected iCal fact remains auditable after the fresh Canvas observation
+            // becomes visible. A Canvas replacement keeps its previous Canvas fact too.
+            alternatives.retain(|fact| fact.get("owner") != selected.get("owner"));
+            alternatives.push(Value::Object(selected.clone()));
+            let mut record = Map::new();
+            record.insert(
+                "selected".into(),
+                canvas_fact(local.clone(), Some(&observed_at)),
+            );
+            if !alternatives.is_empty() {
+                record.insert("alternatives".into(), Value::Array(alternatives));
+            }
+            Value::Object(record)
+        }
+    } else {
+        let mut alternatives = Vec::new();
+        if let Some(ical_owner) = item_ical_owner(target)? {
+            alternatives.push(json!({"owner": ical_owner, "value": old_visible}));
+        }
+        let mut record = Map::new();
+        record.insert(
+            "selected".into(),
+            canvas_fact(local.clone(), Some(&observed_at)),
+        );
+        if !alternatives.is_empty() {
+            record.insert("alternatives".into(), Value::Array(alternatives));
+        }
+        Value::Object(record)
+    };
+    let selected = next
+        .get("selected")
+        .and_then(|value| value.get("value"))
+        .cloned()
+        .ok_or_else(|| invalid("field observations are malformed"))?;
+    target
+        .entry("fieldObservations".to_owned())
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| invalid("field observations are malformed"))?
+        .insert("at".to_owned(), next);
+    target.insert("at".to_owned(), selected);
+    Ok(())
+}
+
+fn item_ical_owner(target: &Map<String, Value>) -> Result<Option<Value>, ReconcileError> {
+    let item = Value::Object(target.clone());
+    Ok(item_references(&item)?.into_iter().find_map(|reference| {
+        reference_key(reference)
+            .ok()
+            .and_then(|(_, _, source, _, _)| {
+                (source == "ical").then(|| Value::Object(reference.clone()))
+            })
+    }))
 }
 
 fn patch_optional(target: &mut Map<String, Value>, local: &str, source: &Value, remote: &str) {
@@ -963,6 +1297,126 @@ mod tests {
             "keep"
         );
         assert_eq!(result["courses"][0]["gradeGroups"][1]["localOnly"], true);
+    }
+
+    #[test]
+    fn verified_ical_assignment_adopts_its_immutable_local_id_and_keeps_both_facts() {
+        let (mut base, captures) = fixture_capture();
+        let item = base["items"][0].as_object_mut().unwrap();
+        item.insert("id".into(), json!("ical-local-immutable"));
+        item.insert("source".into(), json!("ical"));
+        item.remove("canvasId");
+        item.insert("at".into(), json!("2026-11-19T23:59"));
+        item.insert("done".into(), json!(true));
+        item.insert("grade".into(), json!("local-grade-preserved"));
+        item.insert("notesExtension".into(), json!({"keep": true}));
+        item.insert(
+            "sourceReferences".into(),
+            json!([{
+                "institution":"synthetic.institution.invalid", "course":"demo-alpha",
+                "source":"ical", "id":"assignment:70001"
+            }]),
+        );
+        item.insert("fieldObservations".into(), json!({"at":{"selected":{
+            "owner":{"institution":"synthetic.institution.invalid","course":"demo-alpha","source":"ical","id":"assignment:70001"},
+            "value":"2026-11-19T23:59","observedAt":"2026-11-01T00:00:00Z"
+        }}}));
+
+        let result = reconcile_coursework(&base, &captures, captured_at()).expect("reconcile");
+        let linked = result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == "ical-local-immutable")
+            .unwrap();
+        assert_eq!(linked["canvasId"], 70001);
+        assert_eq!(linked["source"], "canvas");
+        assert_eq!(linked["done"], true);
+        assert_eq!(linked["grade"], "A-");
+        assert_eq!(linked["notesExtension"]["keep"], true);
+        assert_eq!(linked["sourceReferences"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            linked["fieldObservations"]["at"]["selected"]["owner"]["source"],
+            "canvas"
+        );
+        assert_eq!(
+            linked["fieldObservations"]["at"]["alternatives"][0]["owner"]["source"],
+            "ical"
+        );
+        assert_eq!(
+            linked["fieldObservations"]["at"]["selected"]["observedAt"]
+                .as_str()
+                .unwrap(),
+            crate::store::utc_stamp(captured_at()).iso
+        );
+
+        let repeated = reconcile_coursework(&result, &captures, SystemTime::now()).expect("repeat");
+        assert_eq!(
+            repeated, result,
+            "unchanged Canvas observations keep their first timestamp"
+        );
+    }
+
+    #[test]
+    fn conflicting_or_ambiguous_verified_candidates_fail_closed_without_fuzzy_linking() {
+        let (mut base, captures) = fixture_capture();
+        base["items"].as_array_mut().unwrap().push(json!({
+            "id":"ical-a", "course":"demo-alpha", "source":"ical", "title":"same title",
+            "at":"2026-11-27T23:59", "sourceReferences":[{
+              "institution":"synthetic.institution.invalid", "course":"demo-alpha", "source":"ical", "id":"assignment:70001"
+            }]
+        }));
+        let error = reconcile_coursework(&base, &captures, captured_at()).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Canvas assignment has conflicting local identities"
+        );
+
+        base["items"].as_array_mut().unwrap().pop();
+        base["items"][0]["title"] = json!("same title but no verified alias");
+        base["items"][0]["at"] = json!("2026-11-27T23:59");
+        base["items"][0].as_object_mut().unwrap().remove("canvasId");
+        base["items"][0]["source"] = json!("ical");
+        base["items"][0]["sourceReferences"] = json!([{
+          "institution":"synthetic.institution.invalid", "course":"demo-alpha", "source":"ical", "id":"unrelated-uid"
+        }]);
+        let result = reconcile_coursework(&base, &captures, captured_at()).expect("no fuzzy link");
+        assert!(result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == base["items"][0]["id"]));
+        assert!(result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == "demo-alpha-canvas-70001"));
+    }
+
+    #[test]
+    fn complete_capture_archives_canvas_but_never_archives_ical_for_a_rolling_omission() {
+        let (mut base, mut captures) = fixture_capture();
+        captures
+            .iter_mut()
+            .find(|capture| capture.key == "demo-alpha")
+            .unwrap()
+            .assignments
+            .retain(|assignment| assignment["id"] != 70001);
+        base["items"].as_array_mut().unwrap().push(json!({
+            "id":"rolling-ical", "course":"demo-alpha", "source":"ical", "title":"iCal retained",
+            "sourceReferences":[{"institution":"synthetic.institution.invalid","course":"demo-alpha","source":"ical","id":"assignment:70001"}]
+        }));
+        let result = reconcile_coursework(&base, &captures, captured_at()).expect("reconcile");
+        assert!(result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == "rolling-ical"));
+        assert!(result["archivedForecastItems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == "demo-alpha-70001"));
     }
 
     #[test]

@@ -115,6 +115,8 @@ export interface NativeTransport extends DashboardTransport {
   loadDashboardBody(fresh: boolean): Promise<DashboardBody>;
   setCompletion(itemId: string, expected: boolean, value: boolean): Promise<NativeMutationResult>;
   setDiscussionField(itemId: string, field: "post" | "replies", expected: boolean, value: boolean): Promise<NativeMutationResult>;
+  resolvePendingSourceLink(pendingId: string, localItemId: string, decision: "confirm" | "reject", expectedVersion: string): Promise<{ readonly version: string }>;
+  setManualGrade(itemId: string, value: string | null, expectedVersion: string): Promise<{ readonly manualGrade: string | null; readonly manualGradeVersion: 1 | null; readonly version: string }>;
   readAvatar(): Promise<{ readonly contentType: string; readonly bytes: Uint8Array } | null>;
   openResource(id: string): Promise<"opened" | "downloaded" | "cancelled">;
   copyText(text: string): Promise<void>;
@@ -282,6 +284,22 @@ function parseMutation(value: unknown): NativeMutationResult {
   return { completed: row.completed, completedAt: nullableCount(row.completedAt, "completion time"), discussionPostDone: row.discussionPostDone, discussionRepliesDone: row.discussionRepliesDone, version: row.version };
 }
 
+function version(value: unknown, what: string): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw malformed(what);
+  return value;
+}
+
+function parsePendingLinkResult(value: unknown): { readonly version: string } {
+  return { version: version(objectOf(value, "source link result").version, "source link result") };
+}
+
+function parseManualGrade(value: unknown): { readonly manualGrade: string | null; readonly manualGradeVersion: 1 | null; readonly version: string } {
+  const row = objectOf(value, "local grade result");
+  if (row.manualGrade !== null && typeof row.manualGrade !== "string") throw malformed("local grade result");
+  if (row.manualGradeVersion !== null && row.manualGradeVersion !== 1) throw malformed("local grade result");
+  return { manualGrade: row.manualGrade as string | null, manualGradeVersion: row.manualGradeVersion as 1 | null, version: version(row.version, "local grade result") };
+}
+
 function parseExportProgress(value: unknown): { readonly filesDone: number; readonly bytesDone: number } {
   const row = objectOf(value, "export progress");
   return { filesDone: count(row.filesDone, "export file count"), bytesDone: count(row.bytesDone, "export byte count") };
@@ -436,6 +454,8 @@ export function createNativeTransport(invoke: TauriInvoke, createChannel: TauriC
     },
     async setCompletion(itemId, expected, value) { return parseMutation(await call("set_item_completion", { itemId, expected, value })); },
     async setDiscussionField(itemId, field, expected, value) { return parseMutation(await call("set_discussion_field", { itemId, field, expected, value })); },
+    async resolvePendingSourceLink(pendingId, localItemId, decision, expectedVersion) { return parsePendingLinkResult(await call("resolve_pending_source_link", { pendingId, localItemId, decision, expectedVersion })); },
+    async setManualGrade(itemId, value, expectedVersion) { return parseManualGrade(await call("set_manual_grade", { itemId, value, expectedVersion })); },
     async readAvatar() {
       const payload = await call("read_avatar_bytes");
       if (payload === null) return null;
