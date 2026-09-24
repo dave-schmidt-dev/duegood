@@ -5,6 +5,7 @@ import { createSession } from "../src/auth/session";
 import type { CanvasAssignmentRaw } from "../src/canvas/types";
 import { createConnection, findOrCreateAccount, findOrCreateCourse } from "../src/db/repository";
 import { importCourse } from "../src/import/course-import";
+import { INJECTED_MARKUP_TITLE } from "./seed-constants";
 
 // `process.cwd()`, not a path derived from `import.meta.url`: this source file is bundled by
 // `scripts/build-seed-script.mjs` before it runs, so its runtime location (`dist/scripts/...`) is
@@ -26,12 +27,6 @@ const CANVAS_COURSE_ID = "9001";
 function syntheticFetch(page: readonly CanvasAssignmentRaw[]): typeof fetch {
   return (async () => new Response(JSON.stringify(page), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
 }
-
-/** Title text a Playwright spec asserts renders literally (`element.textContent`) with no `<img>`
- * actually created in the DOM — the content-safety check for Canvas-authored text described in
- * `docs/DESIGN-SYSTEM.md`'s Content safety section. Canvas is a third-party content source; this
- * fixture stands in for a title an institution's Canvas instance could plausibly return. */
-export const INJECTED_MARKUP_TITLE = '<img src=x onerror="window.__xss=true">Assignment with markup in its title';
 
 function dueInDays(days: number): string {
   const date = new Date();

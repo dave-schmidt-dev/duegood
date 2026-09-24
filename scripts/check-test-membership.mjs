@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,29 @@ for (const testPath of [...manifest.worker.tests, ...manifest.ui.tests, ...manif
 }
 
 {
+  const fixtures = manifest.fixtures ?? [];
+  for (const fixturePath of fixtures) {
+    if (!existsSync(path.join(root, fixturePath))) {
+      throw new Error(`Membership names missing fixture ${fixturePath}.`);
+    }
+  }
+  const fixturesRoot = path.join(root, "test", "fixtures");
+  const actualFixtureFiles = [];
+  if (existsSync(fixturesRoot)) {
+    for (const entry of readdirSync(fixturesRoot, { recursive: true })) {
+      if (statSync(path.join(fixturesRoot, entry)).isFile()) {
+        actualFixtureFiles.push(`test/fixtures/${entry.split(path.sep).join("/")}`);
+      }
+    }
+  }
+  const listedFixtures = new Set(fixtures);
+  const unlistedFixtures = actualFixtureFiles.filter((fixturePath) => !listedFixtures.has(fixturePath));
+  if (unlistedFixtures.length > 0) {
+    throw new Error(`test/fixtures files are not listed in test-membership.json's "fixtures": ${unlistedFixtures.join(", ")}.`);
+  }
+}
+
+{
   const script = packageJson.scripts[manifest.local.runner];
   if (typeof script !== "string" || !script.includes("vitest.local.config.ts")) {
     throw new Error(`${manifest.local.runner} must invoke the local Vitest configuration.`);
@@ -49,6 +72,52 @@ for (const testPath of [...manifest.worker.tests, ...manifest.ui.tests, ...manif
   }
   if ((packageJson.scripts["test:all"] ?? "").includes("test:container")) {
     throw new Error("test:all must not launch Docker qualification.");
+  }
+}
+
+// Rust tests: `cargo test --list` is the discovery source. Every source file with a `#[test]` must be
+// listed with its exact test count, and the compiled test binary must contain exactly those tests,
+// so a test hidden behind a cfg the runner does not enable, or a new unlisted module, fails here.
+let tauriTestCount = 0;
+{
+  const tauri = manifest.tauri;
+  const script = packageJson.scripts[tauri.runner];
+  const cargoCommand = `cargo test --manifest-path ${tauri.cargoManifest} --features ${tauri.features}`;
+  const preparesUiAndSidecar = script?.includes("node scripts/build-tauri.mjs --prepare-only --test");
+  if (typeof script !== "string" || !preparesUiAndSidecar || !script.includes(cargoCommand)) {
+    throw new Error(`${tauri.runner} must prepare staged UI and the test sidecar before ${cargoCommand}.`);
+  }
+  if (!(packageJson.scripts[tauri.inclusiveRunner] ?? "").includes(`npm run ${tauri.runner}`)) {
+    throw new Error(`${tauri.inclusiveRunner} must include ${tauri.runner}.`);
+  }
+  const listed = new Map(Object.entries(tauri.tests));
+  for (const [file, count] of listed) {
+    if (!existsSync(path.join(root, file))) throw new Error(`Membership names missing Rust test file ${file}.`);
+    if (!Number.isInteger(count) || count < 1) throw new Error(`Membership count for ${file} must be a positive integer.`);
+  }
+  const sourceRoot = path.join(root, tauri.sourceRoot);
+  for (const entry of readdirSync(sourceRoot, { recursive: true })) {
+    const file = `${tauri.sourceRoot}/${String(entry).split(path.sep).join("/")}`;
+    if (!file.endsWith(".rs") || !statSync(path.join(root, file)).isFile()) continue;
+    const declared = (readFileSync(path.join(root, file), "utf8").match(/#\[test\]/g) ?? []).length;
+    if (declared > 0 && !listed.has(file)) throw new Error(`${file} declares ${declared} Rust tests but is not listed in test-membership.json's "tauri".`);
+    if (listed.has(file) && declared !== listed.get(file)) throw new Error(`${file} declares ${declared} Rust tests; membership lists ${listed.get(file)}.`);
+  }
+  // `generate_context!` embeds dist/public, so the test binary cannot compile without the UI build.
+  if (!existsSync(path.join(root, "dist", "public", "index.html"))) list(process.execPath, [path.join(root, "scripts", "build-ui.mjs")]);
+  const discovery = list("cargo", ["test", "--locked", "--manifest-path", tauri.cargoManifest, "--features", tauri.features, "--", "--list", "--format", "terse"]);
+  const discovered = new Map();
+  for (const match of discovery.matchAll(/^([A-Za-z0-9_]+)::[A-Za-z0-9_:]+: test$/gm)) {
+    const file = `${tauri.sourceRoot}/${match[1]}.rs`;
+    discovered.set(file, (discovered.get(file) ?? 0) + 1);
+  }
+  for (const [file, count] of discovered) {
+    if (!listed.has(file)) throw new Error(`${tauri.runner} discovers Rust tests in ${file}, which is not listed.`);
+    if (count !== listed.get(file)) throw new Error(`${tauri.runner} discovers ${count} Rust tests in ${file}; membership lists ${listed.get(file)}.`);
+  }
+  for (const [file, count] of listed) {
+    if (!discovered.has(file)) throw new Error(`${tauri.runner} does not discover the ${count} listed Rust tests in ${file}.`);
+    tauriTestCount += count;
   }
 }
 
@@ -100,8 +169,44 @@ for (const runner of manifest.browser.forbiddenRunners) {
   }
 }
 
+// Native UI checks seize the host desktop, so they are explicit Phase 4 gates outside test:all.
+// Keep their XCTest cases and launch scripts in the manifest even though this checker never runs
+// Xcode or opens an app.
+{
+  const native = manifest.native;
+  if (!native || typeof native !== "object") throw new Error("Native UI test membership is missing.");
+  for (const [runner, scriptPath, testCase] of [
+    [native.smokeRunner, native.smokeScript, native.smokeCase],
+    [native.productionRunner, native.productionScript, native.productionCase],
+  ]) {
+    if (packageJson.scripts[runner] !== `node ${scriptPath}`) throw new Error(`${runner} must run its registered native host script.`);
+    if (!existsSync(path.join(root, scriptPath))) throw new Error(`Native host script is missing: ${scriptPath}.`);
+    const source = readFileSync(path.join(root, scriptPath), "utf8");
+    if (!source.includes(`/${testCase}`) || !source.includes('"/usr/bin/xcodebuild"')) {
+      throw new Error(`${runner} does not select its registered XCUITest case through xcodebuild.`);
+    }
+  }
+  if (!existsSync(path.join(root, native.testFile))) throw new Error(`Native UI test file is missing: ${native.testFile}.`);
+  const swift = readFileSync(path.join(root, native.testFile), "utf8");
+  const discovered = [...swift.matchAll(/\bfunc\s+(test[A-Za-z0-9_]+)\s*\(/g)].map((match) => match[1]).sort();
+  const expected = [native.smokeCase, native.productionCase].sort();
+  if (JSON.stringify(discovered) !== JSON.stringify(expected)) {
+    throw new Error("Native XCUITest cases differ from test membership.");
+  }
+  for (const file of native.supportFiles) {
+    if (!existsSync(path.join(root, file))) throw new Error(`Native UI support file is missing: ${file}.`);
+  }
+  if ((packageJson.scripts["test:all"] ?? "").includes(native.smokeRunner)
+      || (packageJson.scripts["test:all"] ?? "").includes(native.productionRunner)) {
+    throw new Error("Native UI checks must remain explicit host gates outside test:all.");
+  }
+}
+
 console.log(`Verified ${manifest.worker.tests.length} worker tests in both non-browser runners.`);
 console.log(`Verified ${manifest.ui.tests.length} UI contract tests in ${manifest.ui.focusedRunner}.`);
 console.log(`Verified ${manifest.browser.tests.length} browser tests are reserved for test:all.`);
 console.log(`Verified ${manifest.container.tests.length} container checks in the explicit host-only runner.`);
 console.log(`Verified ${manifest.local.tests.length} local-source tests in ${manifest.local.runner} and test:all.`);
+console.log(`Verified ${tauriTestCount} Rust tests in ${Object.keys(manifest.tauri.tests).length} files via cargo test --list in ${manifest.tauri.runner} and test:all.`);
+console.log(`Verified ${(manifest.fixtures ?? []).length} listed test/fixtures files match what's on disk.`);
+console.log("Verified both explicit native XCUITest cases and their host runners.");

@@ -7,7 +7,7 @@ Replace the private Marymount coursework page with a local Due Good app. The imm
 ## Authority and evidence boundaries
 
 - David's current local-replacement instruction overrides the repository's earlier cloud-first ordering. The first implementation documentation task records that override in `AGENTS.md`; it does not weaken any security, privacy, ownership, or testing rule.
-- No Cloudflare mutation, commit, push, or publication is authorized. The owner explicitly approved local retention of Canvas Inbox metadata and activation of read-only Inbox synchronization on 2026-09-20.
+- The current ship instruction authorizes committing and pushing the tested source candidate to public `main`. It does not authorize deployment, Cloudflare mutation, or the live Canvas/Task 5.1 cutover, which remains paused pending institution token access. The owner explicitly approved local retention of Canvas Inbox metadata and activation of read-only Inbox synchronization on 2026-09-20.
 - `workers_dev: false` proves only that the default public route is disabled. It does not prove that production secrets, D1 rows, or credentials were deleted. This plan performs no production query or mutation; any retention, revocation, deletion, or re-enablement decision is a separate Red owner action.
 - The legacy server, exporter, reconciliation script, original tests, and private coursework document are not repository evidence. Before local adapter work, an attended host-only preflight must inspect them read-only and produce only a synthetic schema/behavior contract. No real coursework, grades, names, schedules, messages, credentials, private paths, or provider responses enter Git, prompts, logs, fixtures, or container mounts.
 - The untracked `main` file is owner state and remains preserved. This reviewed document is the owner-modified in-repository plan of record; Task 0.1 adopts its exact bytes into the integrity baseline before any application edit.
@@ -35,7 +35,7 @@ Replace the private Marymount coursework page with a local Due Good app. The imm
 10. **Refresh supervision.** A fixed host supervisor owns the shared lock, subprocess group, bounded progress, deadline, staged refresh output, and terminal receipt. The refresh child never writes the authoritative document directly; the supervisor validates and commits its staged output under the same lock as completion changes. The OS releases the lock on supervisor death; a restarted server can distinguish an active supervisor from an abandoned receipt without deleting a live lock. The attended private preflight verifies the real broker and fixed-consumer identity. Before the legacy server stops, the attended cutover proves the exact non-TTY spawn shape and failure handling against the disposable copy; a real Canvas refresh remains separately Red-authorized.
 11. **Local browser boundary.** The local server accepts only the injected loopback Host value, rejects cross-origin `Origin` and non-local `Sec-Fetch-Site` requests, and requires a launch-scoped CSRF token for every mutation. Tests cover DNS rebinding, hostile browser origins, missing/invalid CSRF, and valid same-origin requests.
 12. **Approved dashboard contract.** The owner-approved mockups are the production target: a dark-default interface, equal-height consecutive calendar days, stable course lanes, multiple same-day items, directly visible assignment completion, discussion-specific post/reply checks, and eight reachable pages (Timeline, Grades, Inbox, Completed, Courses, Library, Activity, More). Assignments, class sessions, Canvas-reported scores, library metadata, refresh history, and local progress state come from the private local source. Grades remains read-only and never infers a weighted or final course grade. Synthetic records never appear in the live UI.
-13. **Read-only Inbox.** Canvas Conversations are fetched account-wide with `auto_mark_as_read=false`; Due Good implements no send, reply, delete, archive, star, or mark-read mutation. Same-origin pagination, request/time/count limits, inert-text normalization, credential-value redaction, explicit safety-limit flags, and incomplete-snapshot merge prevent credential disclosure, silent clipping, and false removal while preserving ordinary URLs as visible text. Activation uses the existing fixed BWS consumer only after the private wrapper and every imported sync source are hash-pinned.
+13. **Read-only Inbox.** Canvas Conversations are fetched account-wide; each single-conversation detail GET sends `auto_mark_as_read=false` (the list-conversations GET does not send this parameter). Due Good implements no send, reply, delete, archive, star, or mark-read mutation. Same-origin pagination, request/time/count limits, inert-text normalization, credential-value redaction, explicit safety-limit flags, and incomplete-snapshot merge prevent credential disclosure, silent clipping, and false removal while preserving ordinary URLs as visible text. Activation uses the existing fixed BWS consumer only after the private wrapper and every imported sync source are hash-pinned.
 
 ## Phase 0 — Qualify the isolated executor (complete, not a cutover dependency)
 
@@ -67,6 +67,8 @@ Gate: focused UI tests and one accumulated Playwright batch cover every reachabl
 
 ## Phase 5 — Rehearse and cut over reversibly
 
+Current status: live Canvas/Task 5.1 cutover work remains paused pending institution token access. The ship instruction covers committing and pushing the tested source candidate to public `main`; it does not clear this live-data gate.
+
 Run mutation and refresh tests only against a disposable private copy. While the legacy server is still running, prove a Due Good launch on the captured bind address/port fails, then stop it and prove Due Good alone can bind. Prove the fixed refresh consumer can be spawned by the local supervisor in its non-TTY process context and that failure is bounded and redacted; do not perform a real Canvas refresh without its separate authority. Disable every standalone writer identified by the private contract; retained refresh code runs only as a supervised child producing staged output. Then run the real-file walkthrough read-only. After exact-candidate owner acceptance, update the private launcher and retain an inverse exclusive rollback command.
 
 Gate: disposable-copy before/after preservation, two-process port exclusion, byte-hash conflict, power-loss limitation documented, refresh-supervisor recovery, exact-candidate full suite, working-tree public scan plus candidate-byte scan through a throwaway Git index, read-only real-data walkthrough, rollback proof, and owner acceptance.
@@ -77,14 +79,69 @@ Replace the vertical-slice This Week screen with the approved dark-default eight
 
 Gate: descriptor tests, local store/server tests, Canvas conversation normalization/sync tests, test-membership coverage, typecheck, lint, browser tests for every route at desktop/mobile widths, public-tree scan, read-only live-source walkthrough, and explicit owner approval before account-wide Inbox capture is enabled or run. Owner approval was recorded and the protected live sync completed on 2026-09-20 with 10 threads and zero rejected records.
 
+## Phase 7 — Tauri desktop application (single authority)
+
+The owner approved a single-authority design on 2026-09-22: after this phase's attended, reversible
+cutover, the Developer ID-signed macOS Tauri 2 desktop application is the only writer of the owner's coursework
+data and its Canvas refresh. Source stays structurally portable to Windows and Linux; refresh remains
+unavailable on those platforms until a native synchronization path exists there. Browser mode keeps its
+existing HTTP, Host/Origin, and CSRF behavior; desktop mode uses narrow Rust commands instead.
+
+The desktop app owns a fixed application-data store keyed to its bundle identifier — not a configurable
+location — holding the coursework document in the existing legacy on-disk layout plus a versioned store
+manifest whose state is either `preview` or `authoritative`. Import reads only from a legacy root the
+owner selects through a native folder picker for that run; it never remembers or reuses a prior
+selection and never discovers a source by scanning. Import takes the same adjacent advisory lock the
+legacy launcher uses, records before/after source digests, applies strict schema and identity
+validation, and enforces caps that refuse the import outright and name the exact offending counts when
+exceeded. A `preview` store is archived and then replaced by a passing import; an `authoritative` store
+is never replaced by an import.
+
+Promotion from `preview` to `authoritative` happens only as an explicit owner-confirmed action, and only
+inside an attended cutover window with the browser service stopped. The rehearsal promotes the imported
+store, runs one live refresh, and verifies it; a rollback drill then demotes that store to `preview` and
+verifies refresh is unavailable. The final cutover re-imports through the archive-then-replace action and
+promotes again.
+
+Rust owns every mutating and privileged concern: file I/O, the adjacent lock, atomic writes, coursework
+mutations, snapshots, full-fidelity rollback export, and the refresh subprocess. TypeScript projections
+run only in the webview, over the raw bounded documents Rust commands return, and hold no independent
+write path. Avatar bytes, library files, and clipboard operations go through bounded native commands
+that resolve local resources by ID under the store root; nothing resolves a path supplied by the webview
+directly.
+
+The macOS refresh helper is a bundled Rust binary launched through a new dedicated fixed BWS consumer,
+pinned to both its absolute path and its content digest. It enforces an origin and path allowlist,
+bounded pagination and retry budgets, and credential-stripped, validated redirects; it performs only
+read-only Canvas Inbox capture; and it refuses to run at all unless the store is `authoritative`.
+
+All builds and all tests for this phase run against a staged copy produced by
+`scripts/stage-tauri-candidate.mjs`; nothing here builds, tests, signs, or writes inside the live
+checkout that serves the running browser app.
+
+The phase ends with that attended cutover: rehearsal, rollback drill, final cutover, and retirement of
+the legacy refresh consumer and its launcher entry points once the desktop app is accepted.
+
+Gate: the staged full suite plus the Rust test suite pass; the live checkout's `dist` digests and
+service PID are unchanged across every staged gate run; a headless smoke and a GUI smoke both pass under
+a dedicated test bundle identifier, plus a launch-only check of the production identifier; and the owner
+accepts the result.
+Notarization, certification, deployment/publication, trust installation, and Windows and Linux installers stay outside this phase; any Windows build is unsigned. The current owner instruction separately authorizes committing and pushing the tested source candidate to public `main`.
+
 ## Red boundaries
 
-- Any authoritative private-file write outside the already accepted completion workflow.
+- Any authoritative private-file write outside the already accepted completion workflow, except the
+  desktop app's writes to its own store after owner-confirmed promotion to `authoritative` in Phase 7.
 - Expanding the approved read-only Inbox capture to message mutations, additional data classes, or external storage.
 - Any production query, credential revocation, D1 deletion, Cloudflare change, or re-enablement.
-- Replacing the private launcher.
-- Commit, push, deployment, or publication.
+- Replacing the private launcher, except inside this plan's attended Phase 7 cutover authorized by the owner on 2026-09-22.
+- Deployment or publication. Committing and pushing the tested source candidate to public `main` are authorized by the current owner instruction; this does not authorize the live Canvas/Task 5.1 cutover.
 
 ## Completion boundary
 
 Completion requires the verified local contract, local source/server, daily interface, disposable-copy refresh rehearsal, exclusive launcher, rollback proof, and owner acceptance as the daily replacement. It does not require the deferred cloud Sync now increment or a separate Due Good model credential, and it does not establish cloud, OAuth, or public-pilot readiness.
+
+Phase 7 completes when the desktop application is the owner-accepted daily replacement after its
+attended cutover, with the rollback path proven. It does not require the deferred cloud Sync now
+increment or a separate Due Good model credential, and it does not establish cloud, OAuth, or
+public-pilot readiness.

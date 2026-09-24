@@ -4,7 +4,7 @@ import { dashboardNav, type DashboardPage } from "../routes";
 export interface DashboardGradeGroup { readonly id: string | null; readonly name: string | null; readonly weight: number | null }
 export interface DashboardCourse { readonly id: string; readonly courseCode: string; readonly title: string; readonly term?: string; readonly lastSuccessfulCheckAt?: number | null; readonly gradeGroups?: readonly DashboardGradeGroup[] }
 export interface DashboardEvent { readonly id: string; readonly sourceItemId?: string; readonly courseId: string; readonly courseCode: string; readonly kind: "deadline" | "class" | "discussion"; readonly title: string; readonly startsAt: string; readonly endsAt?: string | null; readonly location?: string | null; readonly detail?: string | null; readonly completed: boolean; readonly completedAt?: number | null; readonly submissionState?: string; readonly source?: string | null; readonly points?: number | null; readonly score?: number | null; readonly grade?: string | null; readonly gradedAt?: string | null; readonly assignmentGroupId?: string | null; readonly assignmentGroupName?: string | null; readonly assignmentGroupWeight?: number | null; readonly discussionPostDone?: boolean; readonly discussionRepliesDone?: boolean }
-export interface DashboardResource { readonly id: string; readonly courseId: string; readonly courseCode: string; readonly type: string; readonly title: string; readonly context?: string | null; readonly updatedAt?: string | number | null; readonly localUrl?: string | null }
+export interface DashboardResource { readonly id: string; readonly courseId: string; readonly courseCode: string; readonly type: string; readonly title: string; readonly context?: string | null; readonly updatedAt?: string | number | null; readonly localUrl?: string | null; readonly savedLocally?: boolean }
 export interface DashboardMessage { readonly id?: string | null; readonly author: string; readonly createdAt?: string | number | null; readonly body: string; readonly bodyTruncated?: boolean; readonly attachments: readonly DashboardAttachment[] }
 export interface DashboardAttachment { readonly name: string; readonly contentType?: string | null; readonly sizeBytes?: number | null }
 export interface DashboardConversation { readonly id: string; readonly courseCode?: string | null; readonly contextLabel?: string | null; readonly sender: string; readonly subject: string; readonly preview?: string | null; readonly body?: string | null; readonly receivedAt?: string | number | null; readonly unread: boolean; readonly messageCount?: number; readonly attachmentCount?: number; readonly messages?: readonly DashboardMessage[]; readonly historyComplete?: boolean; readonly safetyTruncated?: boolean }
@@ -12,7 +12,10 @@ export interface DashboardRefreshChange { readonly kind: "added" | "changed" | "
 export interface DashboardRefresh { readonly id: string; readonly startedAt: string | number; readonly status: "complete" | "partial" | "failed"; readonly summary: string; readonly added: number; readonly changed: number; readonly removed: number; readonly changes: readonly DashboardRefreshChange[] }
 export interface DashboardSourceStatus { readonly state?: string; readonly label?: string; readonly detail?: string; readonly lastRefreshAt?: string | number | null }
 export interface DashboardProfile { readonly displayName: string | null; readonly avatarPath: string | null }
-export interface DashboardData { readonly version: number; readonly courses: readonly DashboardCourse[]; readonly events: readonly DashboardEvent[]; readonly resources: readonly DashboardResource[]; readonly conversations: readonly DashboardConversation[]; readonly refreshes: readonly DashboardRefresh[]; readonly profile: DashboardProfile | null; readonly refreshAvailable: boolean; readonly sourceStatus: DashboardSourceStatus }
+/** Desktop mode: which app store the data came from. Absent in browser mode. */
+export interface DesktopStoreInfo { readonly storeState: "preview" | "authoritative"; readonly dataFolder: string; readonly importedAt: string | null; readonly lastRefreshAt?: string | null; readonly canvasRefreshEnabled?: boolean; readonly refreshAvailable?: boolean; readonly snapshotInProgress?: boolean; readonly snapshotProgress?: { readonly filesDone: number; readonly bytesDone: number } | null; readonly warning?: string | null }
+/** `version` is the opaque exact-byte digest of the coursework document (empty when unknown). */
+export interface DashboardData { readonly version: string; readonly courses: readonly DashboardCourse[]; readonly events: readonly DashboardEvent[]; readonly resources: readonly DashboardResource[]; readonly conversations: readonly DashboardConversation[]; readonly refreshes: readonly DashboardRefresh[]; readonly profile: DashboardProfile | null; readonly refreshAvailable: boolean; readonly sourceStatus: DashboardSourceStatus }
 
 export interface DashboardState {
   readonly page: DashboardPage;
@@ -34,7 +37,25 @@ export interface DashboardState {
   readonly selectedConversationId?: string;
   readonly selectedRefreshId?: string;
   readonly refreshState: "idle" | "running" | "complete" | "partial" | "failed";
-  readonly copyFeedback?: Readonly<Record<string, "copied" | "failed">>;
+  readonly refreshProgress?: { readonly phase: string; readonly completed: number; readonly total: number | null; readonly bytesDone: number | null };
+  readonly refreshSettingPending?: boolean;
+  readonly refreshSettingError?: string;
+  readonly refreshDetail?: string;
+  readonly copyFeedback?: Readonly<Record<string, "pending" | "copied" | "failed">>;
+  /** Desktop mode only. */
+  readonly desktop?: DesktopStoreInfo;
+  /** Completion and discussion controls render disabled only when explicitly requested. */
+  readonly readOnly?: boolean;
+  readonly resourceNotice?: string;
+  /** Native cutover/rollback operation state. The proof is opaque and memory-only. */
+  readonly storeTransition?: {
+    readonly phase: "idle" | "preparing" | "ready" | "promoting" | "demoting" | "exporting";
+    readonly proof?: { readonly proofId: string; readonly files: number; readonly bytes: number };
+    readonly rollbackExportVerified?: boolean;
+    readonly progress?: { readonly filesDone: number; readonly bytesDone: number };
+    readonly message?: string;
+    readonly error?: boolean;
+  };
 }
 
 export interface DashboardHandlers {
@@ -50,7 +71,19 @@ export interface DashboardHandlers {
   readonly onSelectConversation: (id: string) => void;
   readonly onSelectRefresh: (id: string) => void;
   readonly onRefresh: () => void;
+  readonly onToggleCanvasRefresh?: (enabled: boolean) => void;
   readonly onCopyAssignment: (id: string) => void;
+  /** Native-only action: Rust resolves an internal Library ID and opens or saves it. */
+  readonly onOpenResource?: (id: string) => void;
+  readonly onRecovery?: () => void;
+  readonly onExport?: () => void;
+  /** Desktop preview only: archive the preview copy and import the legacy folder again. */
+  readonly onReplacePreview?: () => void;
+  readonly onPreparePromotion?: () => void;
+  readonly onConfirmPromotion?: (proofId: string) => void;
+  readonly onCancelPromotion?: () => void;
+  readonly onDemoteStore?: () => void;
+  readonly onExportFrozenRollback?: () => void;
 }
 
 const COLORS = ["#365e8d", "#8b7840", "#4e785f", "#8a5d72", "#67717f"] as const;
@@ -78,21 +111,26 @@ export function safeLocalHref(value: string | null | undefined): string | undefi
 function empty(text: string): ElementDescriptor { return el("div", text, { class: "empty-state", role: "status" }); }
 function heading(eyebrow: string, title: string, copy: string, count?: string): ElementDescriptor { return el("header", undefined, { class: "subpage-heading" }, [el("div", undefined, undefined, [el("p", eyebrow, { class: "eyebrow" }), el("h1", title), el("p", copy)]), ...(count === undefined ? [] : [el("div", count, { class: "page-count" })])]); }
 
+function locked(state: DashboardState, id: string, pendingIds: ReadonlySet<string>): boolean {
+  return pendingIds.has(id) || state.readOnly === true;
+}
+
 function completionButton(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   const pending = state.pendingCompletionIds.has(event.id);
-  return { tag: "button", attrs: { type: "button", class: "complete-button", ...(pending ? { disabled: "" } : {}) }, text: pending ? "Saving…" : event.completed ? "Mark not done" : "Mark complete", on: { click: () => handlers.onToggleCompletion(event.id) } };
+  const disabled = locked(state, event.id, state.pendingCompletionIds);
+  return { tag: "button", attrs: { type: "button", class: "complete-button", ...(disabled ? { disabled: "" } : {}) }, text: pending ? "Saving…" : event.completed ? "Mark not done" : "Mark complete", on: { click: () => handlers.onToggleCompletion(event.id) } };
 }
 
 function completionCheckbox(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
-  const pending = state.pendingCompletionIds.has(event.id);
-  return el("label", undefined, { class: "event-check" }, [{ tag: "input", attrs: { type: "checkbox", "aria-label": "Done", ...(event.completed ? { checked: "" } : {}), ...(pending ? { disabled: "" } : {}) }, on: { change: () => handlers.onToggleCompletion(event.id) } }, el("span", "Done")]);
+  const disabled = locked(state, event.id, state.pendingCompletionIds);
+  return el("label", undefined, { class: "event-check" }, [{ tag: "input", attrs: { type: "checkbox", "aria-label": "Done", ...(event.completed ? { checked: "" } : {}), ...(disabled ? { disabled: "" } : {}) }, on: { change: () => handlers.onToggleCompletion(event.id) } }, el("span", "Done")]);
 }
 
 function discussionCheckboxes(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): readonly ElementDescriptor[] {
   if (event.kind !== "discussion") return [];
-  const pending = state.pendingDiscussionIds.has(event.id);
+  const disabled = locked(state, event.id, state.pendingDiscussionIds);
   const checkbox = (field: "post" | "replies", ariaLabel: string, title: string, hint: string, checked: boolean): ElementDescriptor => el("label", undefined, { class: "event-check discussion-step", "data-discussion-step": field }, [
-    { tag: "input", attrs: { type: "checkbox", "aria-label": ariaLabel, ...(checked ? { checked: "" } : {}), ...(pending ? { disabled: "" } : {}) }, on: { change: () => handlers.onToggleDiscussion(event.id, field) } },
+    { tag: "input", attrs: { type: "checkbox", "aria-label": ariaLabel, ...(checked ? { checked: "" } : {}), ...(disabled ? { disabled: "" } : {}) }, on: { change: () => handlers.onToggleDiscussion(event.id, field) } },
     el("span", undefined, { class: "discussion-step__copy" }, [el("strong", title), el("small", hint)]),
   ]);
   return [
@@ -180,8 +218,8 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
 
 function copyButton(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   const feedback = state.copyFeedback?.[event.id];
-  const label = feedback === "copied" ? "Copied" : feedback === "failed" ? "Could not copy" : "Copy assignment";
-  const statusClass = feedback === "copied" ? "copied" : feedback === "failed" ? "failed" : "";
+  const label = feedback === "pending" ? "Copying…" : feedback === "copied" ? "Copied" : feedback === "failed" ? "Could not copy" : "Copy assignment";
+  const statusClass = feedback === "pending" ? "pending" : feedback === "copied" ? "copied" : feedback === "failed" ? "failed" : "";
   return {
     tag: "button",
     attrs: {
@@ -189,6 +227,7 @@ function copyButton(event: DashboardEvent, state: DashboardState, handlers: Dash
       class: `copy-button copy-assignment-button ${statusClass}`.trim(),
       "data-copy-id": event.id,
       ...(feedback !== undefined ? { "aria-live": "polite" } : {}),
+      ...(feedback === "pending" ? { "aria-busy": "true", disabled: "" } : {}),
     },
     text: label,
     on: {
@@ -219,16 +258,17 @@ function eventCard(event: DashboardEvent, state: DashboardState, handlers: Dashb
 
 function railCompletionCheckbox(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   const pending = state.pendingCompletionIds.has(event.id);
-  return el("label", undefined, { class: "rail-done", title: pending ? "Saving completion state" : "Mark assignment done" }, [
-    { tag: "input", attrs: { type: "checkbox", "aria-label": `Mark ${event.title} done`, ...(event.completed ? { checked: "" } : {}), ...(pending ? { disabled: "" } : {}) }, on: { change: () => handlers.onToggleCompletion(event.id) } },
+  const disabled = locked(state, event.id, state.pendingCompletionIds);
+  return el("label", undefined, { class: "rail-done", title: pending ? "Saving completion state" : state.readOnly === true ? "Read-only preview copy" : "Mark assignment done" }, [
+    { tag: "input", attrs: { type: "checkbox", "aria-label": `Mark ${event.title} done`, ...(event.completed ? { checked: "" } : {}), ...(disabled ? { disabled: "" } : {}) }, on: { change: () => handlers.onToggleCompletion(event.id) } },
     el("span", pending ? "Saving…" : "Done", { class: "rail-done__label" }),
   ]);
 }
 
 function railDiscussionCheckboxes(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
-  const pending = state.pendingDiscussionIds.has(event.id);
+  const disabled = locked(state, event.id, state.pendingDiscussionIds);
   const checkbox = (field: "post" | "replies", ariaLabel: string, label: string, checked: boolean): ElementDescriptor => el("label", undefined, { class: "rail-subcheck", "data-discussion-step": field }, [
-    { tag: "input", attrs: { type: "checkbox", "aria-label": ariaLabel, ...(checked ? { checked: "" } : {}), ...(pending ? { disabled: "" } : {}) }, on: { change: () => handlers.onToggleDiscussion(event.id, field) } },
+    { tag: "input", attrs: { type: "checkbox", "aria-label": ariaLabel, ...(checked ? { checked: "" } : {}), ...(disabled ? { disabled: "" } : {}) }, on: { change: () => handlers.onToggleDiscussion(event.id, field) } },
     el("span", label),
   ]);
   return el("div", undefined, { class: "rail-discussion-checklist", "aria-label": "Discussion requirements" }, [
@@ -476,10 +516,12 @@ function libraryPage(state: DashboardState, handlers: DashboardHandlers): Elemen
         el("span", resource.type, { class: "resource-type" }),
         el("div", undefined, undefined, [el("h2", resource.title, { class: "resource-title" }), el("p", `${code(resource.courseCode)}${resource.context ? ` · ${resource.context}` : ""}`, { class: "resource-meta" })]),
         el("time", formatted(resource.updatedAt, true), { class: "resource-updated" }),
-        ...(href === undefined ? [el("span", "No local copy", { class: "resource-unavailable" })] : [el("a", "Open", { class: "more-action", href })]),
+        ...(state.desktop !== undefined && resource.savedLocally === true && handlers.onOpenResource !== undefined
+          ? [{ tag: "button", attrs: { type: "button", class: "more-action" }, text: "Open or save", on: { click: () => handlers.onOpenResource?.(resource.id) } }]
+          : href !== undefined ? [el("a", "Open", { class: "more-action", href })] : resource.savedLocally === true ? [el("span", "Saved locally", { class: "resource-saved" })] : [el("span", "No local copy", { class: "resource-unavailable" })]),
       ]);
     }));
-  return el("section", undefined, { class: "page" }, [heading("Imported from Canvas", "Library", "Files, pages, links, modules, and announcements from your courses.", `${resources.length} items`), toolbar, list]);
+  return el("section", undefined, { class: "page" }, [heading("Imported from Canvas", "Library", "Files, pages, links, modules, and announcements from your courses.", `${resources.length} items`), toolbar, ...(state.resourceNotice === undefined ? [] : [el("p", state.resourceNotice, { role: "status", "aria-live": "polite" })]), list]);
 }
 
 function inboxPage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
@@ -520,11 +562,68 @@ function activityPage(state: DashboardState, handlers: DashboardHandlers): Eleme
   ]);
 }
 
+/** Desktop store card: truthful about preview status, the fixed folder, and what import may replace. */
+function desktopStoreCard(desktop: DesktopStoreInfo, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
+  const source = state.data.sourceStatus;
+  const preview = desktop.storeState === "preview";
+  const refreshEnabled = desktop.canvasRefreshEnabled === true;
+  const refreshAvailable = desktop.refreshAvailable === true;
+  const transition = state.storeTransition ?? { phase: "idle" as const };
+  const busy = transition.phase === "preparing" || transition.phase === "promoting" || transition.phase === "demoting" || transition.phase === "exporting";
+  const bytes = (value: number): string => {
+    if (value < 1024) return `${String(value)} bytes`;
+    const units = ["KB", "MB", "GB", "TB"] as const;
+    let size = value / 1024; let index = 0;
+    while (size >= 1024 && index < units.length - 1) { size /= 1024; index += 1; }
+    return `${size.toFixed(size >= 10 ? 0 : 1)} ${units[index] ?? "TB"}`;
+  };
+  const transitionDetails: ElementDescriptor[] = preview
+    ? [
+      ...(handlers.onPreparePromotion === undefined ? [] : [{ tag: "button", attrs: { type: "button", class: "more-action", ...(busy ? { disabled: "" } : {}) }, text: transition.phase === "preparing" ? "Comparing backup…" : "Choose and compare backup…", on: { click: handlers.onPreparePromotion } }]),
+      ...(transition.phase === "ready" && transition.proof !== undefined ? [
+        el("p", `Exact comparison passed: ${String(transition.proof.files)} files · ${bytes(transition.proof.bytes)}. The selected backup matches this preview copy.`, { class: "status", role: "status" }),
+        el("p", "Promoting makes this app store authoritative. Due Good will ask for a final confirmation in a native dialog.", { class: "status" }),
+        ...(handlers.onConfirmPromotion === undefined ? [] : [{ tag: "button", attrs: { type: "button", class: "sync-button" }, text: "Promote to authoritative store", on: { click: () => handlers.onConfirmPromotion?.(transition.proof!.proofId) } }]),
+        ...(handlers.onCancelPromotion === undefined ? [] : [{ tag: "button", attrs: { type: "button", class: "setup-secondary" }, text: "Discard comparison", on: { click: handlers.onCancelPromotion } }]),
+      ] : []),
+      ...(handlers.onExportFrozenRollback === undefined ? [] : [
+        el("p", "After rollback demotion, export and verify a frozen copy of the legacy source before restoring or resuming it.", { class: "status" }),
+        { tag: "button", attrs: { type: "button", class: "more-action", ...(busy ? { disabled: "" } : {}) }, text: transition.phase === "exporting" ? "Exporting frozen copy…" : "Export frozen rollback copy…", on: { click: handlers.onExportFrozenRollback } },
+        ...(transition.rollbackExportVerified === true ? [el("p", "Frozen rollback export verified. Use this copy when restoring the legacy browser source.", { class: "status", role: "status" })] : []),
+      ]),
+    ]
+    : [
+      el("p", "For rollback, first confirm demotion. Due Good keeps app recovery data, turns off Canvas refresh, and returns to preview; then export the frozen legacy source.", { class: "status" }),
+      ...(handlers.onDemoteStore === undefined ? [] : [{ tag: "button", attrs: { type: "button", class: "setup-secondary", ...(busy ? { disabled: "" } : {}) }, text: transition.phase === "demoting" ? "Returning to preview…" : "Return app store to preview…", on: { click: handlers.onDemoteStore } }]),
+      ...(transition.rollbackExportVerified === true ? [el("p", "Frozen rollback export verified. Use this copy when restoring the legacy browser source.", { class: "status", role: "status" })] : []),
+    ];
+  const transitionFeedback = transition.message === undefined ? [] : [el("p", transition.message, { class: transition.error ? "inline-error" : "status", role: transition.error ? "alert" : "status", "aria-live": "polite" })];
+  const transitionProgress = transition.progress === undefined ? [] : [el("p", `${String(transition.progress.filesDone)} files · ${transition.progress.bytesDone} bytes processed.`, { class: "status", role: "status", "aria-live": "polite" })];
+  return el("section", undefined, { class: "settings-card", "data-desktop-store": desktop.storeState }, [
+    el("h2", preview ? "Preview copy" : "App store"),
+    el("p", preview ? "A copy imported from the legacy folder. It never refreshes or follows later changes in the browser app. Personal progress edits stay here; the browser app's folder remains the source of truth until cutover." : "This app store is the authoritative copy. Import never replaces it."),
+    el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", source.label ?? "Desktop app store"), el("span", source.detail ?? "Status details were not supplied")]), el("span", preview ? "Preview" : "Authoritative", { class: preview ? "preview-badge" : "status-ok" })]),
+    el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "App data folder"), el("code", desktop.dataFolder, { class: "setup-path" })])]),
+    el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Imported"), el("span", formatted(desktop.importedAt, true))]), ...(preview && handlers.onReplacePreview !== undefined ? [{ tag: "button", attrs: { type: "button", class: "more-action" }, text: "Replace preview copy…", on: { click: handlers.onReplacePreview } }] : [])]),
+    ...transitionDetails,
+    ...transitionProgress,
+    ...transitionFeedback,
+    ...(!preview ? [
+      { tag: "label", attrs: { class: "settings-row" }, children: [
+        el("span", undefined, undefined, [el("strong", "Canvas refresh"), el("span", refreshEnabled ? (refreshAvailable ? "Canvas refresh can be attempted on this computer." : "Canvas refresh is unavailable on this computer.") : "Canvas refresh is off.")]),
+        { tag: "input", attrs: { type: "checkbox", "aria-label": "Enable Canvas refresh", ...(refreshEnabled ? { checked: "" } : {}), ...((state.refreshSettingPending === true || state.refreshState === "running") ? { disabled: "" } : {}) }, on: { change: (event: Event) => handlers.onToggleCanvasRefresh?.((event.currentTarget as HTMLInputElement).checked) } },
+      ] },
+      ...(desktop.lastRefreshAt == null ? [] : [el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Last Canvas refresh"), el("span", formatted(desktop.lastRefreshAt, true))])])]),
+      ...(state.refreshSettingError === undefined ? [] : [el("p", state.refreshSettingError, { class: "inline-error", role: "status", "aria-live": "polite" })]),
+    ] : [el("p", "Canvas refresh is unavailable for a preview copy.", { class: "status", role: "status" })]),
+  ]);
+}
+
 function morePage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   const source = state.data.sourceStatus;
   const refreshing = state.refreshState === "running";
   const refreshButton: ElementDescriptor = { tag: "button", attrs: { type: "button", class: `more-action refresh-button${refreshing ? " refreshing" : ""}`, "aria-busy": String(refreshing), ...(refreshing ? { disabled: "" } : {}) }, text: refreshing ? "Refreshing…" : "Refresh", on: { click: handlers.onRefresh } };
-  return el("section", undefined, { class: "page" }, [heading("Due Good", "More", "Source status, refresh controls, and local app information."), el("div", undefined, { class: "more-grid" }, [el("section", undefined, { class: "settings-card" }, [el("h2", "Coursework source"), el("p", "The local Marymount coursework document remains the authoritative writable source."), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", source.label ?? "Local source"), el("span", source.detail ?? "Status details were not supplied")]), el("span", source.state ?? "Unknown", { class: source.state === "connected" || source.state === "ready" ? "status-ok" : "" })]), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Last refresh"), el("span", formatted(source.lastRefreshAt, true))]), ...(state.data.refreshAvailable ? [refreshButton] : [])])]), el("section", undefined, { class: "settings-card" }, [el("h2", "Import behavior"), el("p", "Incomplete refreshes never remove existing coursework."), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Canvas items"), el("span", "Assignments, class meetings, files, pages, links, modules, announcements, and read-only inbox")])]), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Privacy"), el("span", "Local app · no public coursework data")])])])])]);
+  return el("section", undefined, { class: "page" }, [heading("Due Good", "More", "Source status, refresh controls, and local app information."), el("div", undefined, { class: "more-grid" }, [state.desktop !== undefined ? desktopStoreCard(state.desktop, state, handlers) : el("section", undefined, { class: "settings-card" }, [el("h2", "Coursework source"), el("p", "The local Marymount coursework document remains the authoritative writable source."), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", source.label ?? "Local source"), el("span", source.detail ?? "Status details were not supplied")]), el("span", source.state ?? "Unknown", { class: source.state === "connected" || source.state === "ready" ? "status-ok" : "" })]), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Last refresh"), el("span", formatted(source.lastRefreshAt, true))]), ...(state.data.refreshAvailable ? [refreshButton] : [])])]), el("section", undefined, { class: "settings-card" }, [el("h2", "Import behavior"), el("p", "Incomplete refreshes never remove existing coursework."), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Canvas items"), el("span", "Assignments, class meetings, files, pages, links, modules, announcements, and read-only inbox")])]), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Privacy"), el("span", "Local app · no public coursework data")])])])])]);
 }
 
 function pagePanel(pageName: DashboardPage, descriptor: ElementDescriptor): ElementDescriptor {
@@ -545,10 +644,20 @@ function page(state: DashboardState, handlers: DashboardHandlers): ElementDescri
 }
 
 function refreshNote(state: DashboardState, latest: DashboardRefresh | undefined): string {
-  if (state.refreshState === "running") return "Canvas refresh is in progress and may take under a minute";
+  if (state.refreshState === "running") {
+    const progress = state.refreshProgress;
+    if (progress === undefined) return "Canvas refresh is in progress";
+    const phase = ({ starting: "Preparing", snapshot: "Saving safety copy", fetch: "Reading Canvas data", reconcile: "Reviewing changes", stage: "Preparing changes", publish: "Saving updates", complete: "Finishing" } as Readonly<Record<string, string>>)[progress.phase] ?? "Working";
+    const count = progress.total === null ? `${String(progress.completed)} completed` : `${String(progress.completed)} of ${String(progress.total)} completed`;
+    return `Canvas refresh · ${phase} · ${count}${progress.bytesDone === null ? "" : ` · ${String(progress.bytesDone)} bytes received`}`;
+  }
+  if (state.refreshDetail !== undefined) return state.refreshDetail;
   if (state.refreshState === "complete") return "Refresh complete.";
   if (state.refreshState === "partial") return "Refresh incomplete. Existing data was kept.";
   if (state.refreshState === "failed") return "Refresh failed. Existing data was kept.";
+  // Preview copies cannot refresh; authoritative desktop stores report their last import until refreshed.
+  if (state.desktop?.storeState === "preview") return state.desktop.importedAt === null ? "Imported copy" : `Imported ${formatted(state.desktop.importedAt, true)}`;
+  if (state.desktop?.lastRefreshAt) return `Updated ${formatted(state.desktop.lastRefreshAt, true)}`;
   return latest === undefined ? "Not yet refreshed" : `Updated ${formatted(latest.startedAt, true)}`;
 }
 
@@ -565,6 +674,10 @@ export function renderDashboard(state: DashboardState, handlers: DashboardHandle
     }]),
   ]);
   const refreshing = state.refreshState === "running";
+  const snapshotProgress = state.desktop?.snapshotProgress;
+  const snapshotFiles = snapshotProgress?.filesDone ?? 0;
+  const snapshotBytes = snapshotProgress?.bytesDone ?? 0;
+  const snapshotStatus = `Saving today’s private recovery snapshot… ${String(snapshotFiles)} file${snapshotFiles === 1 ? "" : "s"} · ${String(snapshotBytes)} bytes copied.`;
   const refreshButton: ElementDescriptor = { tag: "button", attrs: { type: "button", class: `sync-button refresh-button${refreshing ? " refreshing" : ""}`, "aria-busy": String(refreshing), ...(refreshing ? { disabled: "" } : {}) }, text: refreshing ? "Refreshing…" : "Refresh", on: { click: handlers.onRefresh } };
-  return el("div", undefined, { class: "app" }, [el("aside", undefined, { class: "sidebar" }, [el("div", undefined, { class: "brand" }, [brandMark, el("div", undefined, undefined, [el("div", "Due Good", { class: "brand-name" }), el("span", courses[0]?.term ?? "Marymount", { class: "brand-note" })])]), dashboardNav(state.page, handlers.onNavigate), el("section", undefined, { class: "course-legend", "aria-label": "Course legend" }, [el("h2", "Course colors"), ...courses.map((course) => el("div", undefined, { class: "legend-row" }, [el("span", undefined, { class: "legend-dot", style: `--dot:${color(courses, course.courseCode)}` }), el("span", `${code(course.courseCode)} · ${course.title}`)]))])]), el("div", undefined, { class: "workspace" }, [el("header", undefined, { class: "topbar" }, [el("div", undefined, { class: "term-label" }, [el("strong", courses[0]?.term ?? "Current term"), el("span", ` · ${courses.length} course${courses.length === 1 ? "" : "s"}`)]), el("div", undefined, { class: "top-actions" }, [el("span", refreshNote(state, latest), { class: "sync-note", role: "status", "aria-live": "polite" }), ...(state.data.refreshAvailable ? [refreshButton] : [])])]), el("main", undefined, { id: "main", tabindex: "-1" }, [...(state.loading ? [empty("Loading coursework…")] : []), ...(state.error === undefined ? [] : [el("div", state.error, { class: "load-error", role: "alert" })]), ...(!state.loading && state.error === undefined ? [page(state, handlers)] : [])])])]);
+  return el("div", undefined, { class: "app" }, [el("aside", undefined, { class: "sidebar" }, [el("div", undefined, { class: "brand" }, [brandMark, el("div", undefined, undefined, [el("div", "Due Good", { class: "brand-name" }), el("span", courses[0]?.term ?? "Marymount", { class: "brand-note" })])]), dashboardNav(state.page, handlers.onNavigate), el("section", undefined, { class: "course-legend", "aria-label": "Course legend" }, [el("h2", "Course colors"), ...courses.map((course) => el("div", undefined, { class: "legend-row" }, [el("span", undefined, { class: "legend-dot", style: `--dot:${color(courses, course.courseCode)}` }), el("span", `${code(course.courseCode)} · ${course.title}`)]))])]), el("div", undefined, { class: "workspace" }, [el("header", undefined, { class: "topbar" }, [el("div", undefined, { class: "term-label" }, [el("strong", courses[0]?.term ?? "Current term"), el("span", ` · ${courses.length} course${courses.length === 1 ? "" : "s"}`)]), el("div", undefined, { class: "top-actions" }, [...(state.desktop?.storeState === "preview" ? [el("span", "Preview copy", { class: "preview-badge", title: "Imported from the legacy folder. It never refreshes." })] : []), el("span", refreshNote(state, latest), { class: "sync-note", role: "status", "aria-live": "polite" }), ...(handlers.onRecovery === undefined ? [] : [{ tag: "button", attrs: { type: "button", class: "more-action" }, text: "Recovery", on: { click: handlers.onRecovery } }]), ...(handlers.onExport === undefined ? [] : [{ tag: "button", attrs: { type: "button", class: "more-action" }, text: "Export", on: { click: handlers.onExport } }]), ...(state.data.refreshAvailable ? [refreshButton] : [])])]), el("main", undefined, { id: "main", tabindex: "-1" }, [...(state.loading ? [empty("Loading coursework…")] : []), ...(state.desktop?.snapshotInProgress ? [el("div", snapshotStatus, { class: "status", role: "status", "aria-live": "polite" })] : []), ...(state.error === undefined ? [] : [el("div", state.error, { class: "load-error", role: "alert" })]), ...(state.desktop?.warning ? [el("div", state.desktop.warning, { class: "load-error", role: "alert" })] : []), ...(!state.loading && state.error === undefined ? [page(state, handlers)] : [])])])]);
 }

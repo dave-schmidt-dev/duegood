@@ -1,0 +1,44 @@
+[package]
+name = "duegood-desktop"
+version = "0.1.0"
+description = "Due Good desktop application: local coursework store, legacy import, and read-only dashboard commands."
+license = "MIT"
+edition = "2021"
+# std::fs::File::lock/try_lock (portable flock/LockFileEx) are stable since 1.89.
+rust-version = "1.89"
+publish = false
+default-run = "duegood-desktop"
+
+[lib]
+name = "duegood_desktop"
+crate-type = ["rlib"]
+
+[features]
+# Data-root overrides for tests and staged smoke builds only. Release builds never enable this.
+test-overrides = []
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "=2.11.6", features = [] }
+tauri-plugin-dialog = "=2.7.3"
+tauri-utils = { version = "=2.9.3", features = ["html-manipulation-2"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.151", features = ["preserve_order"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["blocking", "json", "rustls"] }
+sha2 = "=0.10.9"
+uuid = { version = "=1.26.1", features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.189"
+
+[dev-dependencies]
+tauri = { version = "=2.11.6", features = ["test"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

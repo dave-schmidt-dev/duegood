@@ -13,6 +13,9 @@ export default tseslint.config(
       "coverage/**",
       "playwright-report/**",
       "test-results/**",
+      "src-tauri/target/**",
+      "src-tauri/gen/**",
+      "spikes/**",
     ],
   },
   {

@@ -1,0 +1,285 @@
+{
+  "synthetic": true,
+  "format": "duegood-refresh-contract-mock-v1",
+  "warning": "Invented Canvas-shaped API payloads and one invented prior local tracker state, used only to document the refresh contract in docs/REFRESH-CONTRACT.md. Not real Canvas API responses, not real coursework, and not real student data. Every hostname below ends in .invalid.",
+  "conventions": {
+    "canvasOrigin": "https://canvas.example.invalid",
+    "placeholders": "A string wrapped in angle brackets (e.g. \"<generatedAt>\") stands for a value computed at refresh time (a timestamp, a random id, a content hash), not a literal to match byte-for-byte."
+  },
+  "priorLocalState": {
+    "coursework.json": {
+      "timezone": "America/New_York",
+      "sync": { "lastSync": "2026-11-10" },
+      "courses": [
+        { "key": "demo-alpha", "code": "DEMO 101", "folder": "classes/demo-alpha", "gradeGroups": [] },
+        { "key": "demo-beta", "code": "DEMO 202", "folder": "classes/demo-beta", "gradeGroups": [], "ignoredCanvasAssignmentIds": [80001] }
+      ],
+      "items": [
+        {
+          "id": "demo-alpha-70001",
+          "course": "demo-alpha",
+          "kind": "paper",
+          "title": "Draft essay",
+          "at": "2026-11-20T23:59",
+          "points": 20,
+          "source": "canvas",
+          "confidence": "confirmed",
+          "flags": [],
+          "detail": "",
+          "url": "https://canvas.example.invalid/courses/9101/assignments/70001",
+          "canvasId": 70001,
+          "done": false,
+          "doneAt": null,
+          "submissionStatus": "pending",
+          "submittedAt": "2026-11-15T20:00:00Z",
+          "gradedAt": null,
+          "grade": null,
+          "score": null
+        },
+        {
+          "id": "demo-alpha-session-1",
+          "course": "demo-alpha",
+          "kind": "session",
+          "title": "Week 12 seminar",
+          "at": "2026-11-24T18:00",
+          "source": "manual",
+          "confidence": "confirmed",
+          "flags": [],
+          "detail": "Weekly meeting; not a Canvas assignment."
+        },
+        {
+          "id": "demo-alpha-forecast-1",
+          "course": "demo-alpha",
+          "kind": "reading",
+          "title": "Suggested reading (syllabus forecast)",
+          "at": null,
+          "source": "syllabus",
+          "confidence": "estimated",
+          "flags": [],
+          "detail": "Never backed by a live Canvas assignment; exists only as a forecast note."
+        }
+      ]
+    }
+  },
+  "courses": [
+    {
+      "key": "demo-alpha",
+      "folder": "classes/demo-alpha",
+      "canvasCourseId": "9101",
+      "courseUrl": "https://canvas.example.invalid/courses/9101",
+      "note": "The importer receives this URL and ID only through the private wrapper's hardcoded per-course table; coursework.json itself never stores a Canvas course ID."
+    },
+    {
+      "key": "demo-beta",
+      "folder": "classes/demo-beta",
+      "canvasCourseId": "9202",
+      "courseUrl": "https://canvas.example.invalid/courses/9202"
+    }
+  ],
+  "apiResponses": {
+    "demo-alpha": {
+      "course": {
+        "status": 200,
+        "url": "https://canvas.example.invalid/api/v1/courses/9101?include[]=syllabus_body&include[]=term",
+        "body": { "id": 9101, "name": "Demo Alpha Seminar", "course_code": "DEMO 101", "syllabus_body": "<p>Welcome. Contact token=do-not-leak-this for help.</p>", "term": { "id": 40, "name": "Fall 2026" } }
+      },
+      "tabs": {
+        "status": 200,
+        "url": "https://canvas.example.invalid/api/v1/courses/9101/tabs?per_page=100",
+        "body": [{ "id": "assignments", "label": "Assignments", "visibility": "public" }]
+      },
+      "pages": {
+        "status": 200,
+        "url": "https://canvas.example.invalid/api/v1/courses/9101/pages?include[]=body&per_page=100",
+        "body": [{ "page_id": 5501, "title": "Course overview", "url": "course-overview", "updated_at": "2026-09-02T10:00:00Z", "body": "<p>Overview text.</p>" }]
+      },
+      "modules": {
+        "note": "Demonstrates Link-header pagination: page 1 carries a validated rel=\"next\" link; page 2 has no Link header, so pagination stops.",
+        "pages": [
+          {
+            "status": 200,
+            "url": "https://canvas.example.invalid/api/v1/courses/9101/modules?include[]=items&include[]=content_details&per_page=100",
+            "headers": { "link": "<https://canvas.example.invalid/api/v1/courses/9101/modules?include[]=items&include[]=content_details&per_page=100&page=2>; rel=\"next\", <https://canvas.example.invalid/api/v1/courses/9101/modules?include[]=items&include[]=content_details&per_page=100&page=1>; rel=\"first\"" },
+            "body": [{ "id": 6001, "name": "Unit 3: Sources", "items_count": 2, "items": [{ "id": 60011, "type": "ExternalUrl", "title": "Primary source archive (external)" }] }]
+          },
+          {
+            "status": 200,
+            "url": "https://canvas.example.invalid/api/v1/courses/9101/modules?include[]=items&include[]=content_details&per_page=100&page=2",
+            "headers": { "link": null },
+            "body": [{ "id": 6002, "name": "Unit 4: Synthesis", "items_count": 0, "items": [] }]
+          }
+        ]
+      },
+      "adversarialPaginationLinkExample": {
+        "note": "Not part of the two real pages above. Shows the security-relevant gap this contract documents: a same-origin Link header whose target is NOT under /api/v1/courses/9101 (e.g. an account-scoped path). The private importer's canvasFetch() only checks response origin, so it would follow this. The intentionally-changed helper design (Decision 7) validates origin AND path prefix per hop and must drop it instead.",
+        "linkHeader": "<https://canvas.example.invalid/api/v1/accounts/self/reports>; rel=\"next\""
+      },
+      "assignment_groups": {
+        "status": 200,
+        "url": "https://canvas.example.invalid/api/v1/courses/9101/assignment_groups?per_page=100",
+        "body": [{ "id": 601, "name": "Essays", "group_weight": 40 }]
+      },
+      "assignments": {
+        "status": 200,
+        "url": "https://canvas.example.invalid/api/v1/courses/9101/assignments?include[]=submission&per_page=100",
+        "body": [
+          {
+            "id": 70001,
+            "name": "Draft Essay v2",
+            "due_at": "2026-11-28T04:59:00Z",
+            "points_possible": 20,
+            "assignment_group_id": 601,
+            "html_url": "https://canvas.example.invalid/courses/9101/assignments/70001",
+            "submission_types": ["online_upload"],
+            "submission": { "workflow_state": "graded", "submitted_at": "2026-11-15T20:00:00Z", "graded_at": "2026-11-29T14:00:00Z", "grade": "A-", "score": 93, "excused": false, "missing": false, "late": false }
+          },
+          {
+            "id": 70002,
+            "name": "Reading Reflection 3",
+            "due_at": "2026-12-05T04:59:00Z",
+            "points_possible": 10,
+            "assignment_group_id": 601,
+            "html_url": "https://canvas.example.invalid/courses/9101/assignments/70002",
+            "submission_types": ["online_text_entry"],
+            "submission": null
+          }
+        ]
+      },
+      "discussions": {
+        "status": 200,
+        "url": "https://canvas.example.invalid/api/v1/courses/9101/discussion_topics?per_page=100",
+        "body": []
+      },
+      "announcements": {
+        "status": 200,
+        "url": "https://canvas.example.invalid/api/v1/announcements?context_codes[]=course_9101&per_page=100",
+        "note": "Same-origin but NOT under /api/v1/courses; a distinct allowed prefix the contract must name separately.",
+        "body": [{ "id": 9001, "title": "Office hours moved", "posted_at": "2026-11-18T15:00:00Z" }]
+      },
+      "files": {
+        "status": 200,
+        "url": "https://canvas.example.invalid/api/v1/courses/9101/files?per_page=100",
+        "body": [
+          {
+            "id": 501,
+            "display_name": "Syllabus.pdf",
+            "filename": "Syllabus.pdf",
+            "size": 25,
+            "updated_at": "2026-09-01T12:00:00Z",
+            "url": "https://canvas.example.invalid/files/501/download?verifier=syn-abc123"
+          }
+        ]
+      },
+      "folders": {
+        "status": 200,
+        "url": "https://canvas.example.invalid/api/v1/courses/9101/folders?per_page=100",
+        "body": [{ "id": 701, "name": "course files" }]
+      }
+    },
+    "demo-beta": {
+      "course": { "status": 200, "url": "https://canvas.example.invalid/api/v1/courses/9202?include[]=syllabus_body&include[]=term", "body": { "id": 9202, "name": "Demo Beta Workshop", "course_code": "DEMO 202", "syllabus_body": "<p>Welcome.</p>", "term": { "id": 40, "name": "Fall 2026" } } },
+      "tabs": { "status": 200, "url": "https://canvas.example.invalid/api/v1/courses/9202/tabs?per_page=100", "body": [] },
+      "pages": { "status": 200, "url": "https://canvas.example.invalid/api/v1/courses/9202/pages?include[]=body&per_page=100", "body": [] },
+      "modules": { "status": 200, "url": "https://canvas.example.invalid/api/v1/courses/9202/modules?include[]=items&include[]=content_details&per_page=100", "body": [] },
+      "assignment_groups": { "status": 200, "url": "https://canvas.example.invalid/api/v1/courses/9202/assignment_groups?per_page=100", "body": [{ "id": 602, "name": "Memos", "group_weight": 60 }] },
+      "assignments": {
+        "status": 200,
+        "url": "https://canvas.example.invalid/api/v1/courses/9202/assignments?include[]=submission&per_page=100",
+        "body": [
+          {
+            "id": 80001,
+            "name": "Ungraded practice memo (non-actionable)",
+            "due_at": null,
+            "points_possible": 0,
+            "assignment_group_id": 602,
+            "html_url": "https://canvas.example.invalid/courses/9202/assignments/80001",
+            "submission_types": ["not_graded"],
+            "submission": null,
+            "note": "Listed in priorLocalState.coursework.json's demo-beta.ignoredCanvasAssignmentIds, so reconciliation must never place this on the timeline even though it is present in the raw export."
+          },
+          {
+            "id": 80002,
+            "name": "Policy Memo",
+            "due_at": "2026-12-10T04:59:00Z",
+            "points_possible": 15,
+            "assignment_group_id": 602,
+            "html_url": "https://canvas.example.invalid/courses/9202/assignments/80002",
+            "submission_types": ["online_text_entry"],
+            "submission": null
+          }
+        ]
+      },
+      "discussions": { "status": 200, "url": "https://canvas.example.invalid/api/v1/courses/9202/discussion_topics?per_page=100", "body": [] },
+      "announcements": { "status": 200, "url": "https://canvas.example.invalid/api/v1/announcements?context_codes[]=course_9202&per_page=100", "body": [] },
+      "files": { "status": 200, "url": "https://canvas.example.invalid/api/v1/courses/9202/files?per_page=100", "body": [] },
+      "folders": { "status": 200, "url": "https://canvas.example.invalid/api/v1/courses/9202/folders?per_page=100", "body": [] }
+    }
+  },
+  "fileDownload": {
+    "note": "One file, one redirect. The requested URL carries a query-string verifier that the importer's own writeJson()/safeUrl() strips before persisting to disk, while the in-memory download itself uses the full URL including the verifier.",
+    "requestUrl": "https://canvas.example.invalid/files/501/download?verifier=syn-abc123",
+    "hop1": { "status": 302, "location": "https://canvas-files.example.invalid/objects/501/download" },
+    "hop2Final": {
+      "status": 200,
+      "contentType": "application/pdf",
+      "contentDisposition": "attachment; filename=\"syllabus-2026.pdf\"",
+      "bytesDescription": "25-byte synthetic placeholder payload (not a real file)"
+    }
+  },
+  "inbox": {
+    "list": {
+      "status": 200,
+      "url": "https://canvas.example.invalid/api/v1/conversations?scope=inbox&per_page=100",
+      "headers": { "link": null },
+      "note": "Single page; no rel=\"next\" link, so pagination stops after page 1.",
+      "body": [
+        { "id": "77001", "subject": "Question about Essay 2 rubric", "context_name": "Demo Alpha Seminar", "last_message": "<p>Hi, quick question about the rubric.</p>", "last_message_at": "2026-11-25T15:00:00Z", "workflow_state": "unread", "starred": false, "message_count": 2 }
+      ]
+    },
+    "thread": {
+      "status": 200,
+      "url": "https://canvas.example.invalid/api/v1/conversations/77001?auto_mark_as_read=false",
+      "note": "auto_mark_as_read=false is asserted on every detail fetch; the thread must remain unread in Canvas after this call.",
+      "body": {
+        "id": "77001",
+        "subject": "Question about Essay 2 rubric",
+        "context_name": "Demo Alpha Seminar",
+        "workflow_state": "unread",
+        "starred": false,
+        "message_count": 2,
+        "participants": [{ "id": "9500", "name": "Course Instructor" }, { "id": "9600", "name": "Synthetic Student" }],
+        "messages": [
+          {
+            "id": "770011",
+            "author_id": "9600",
+            "author_name": "Synthetic Student",
+            "created_at": "2026-11-25T15:00:00Z",
+            "body": "<p>Hi, quick question about the rubric. <script>alert(1)</script></p>",
+            "attachments": []
+          },
+          {
+            "id": "770012",
+            "author_id": "9500",
+            "author_name": "Course Instructor",
+            "created_at": "2026-11-25T16:30:00Z",
+            "body": "<p>Sure — see the attached rubric. (Not for sharing: access_token=leak-me-not)</p>",
+            "attachments": [{ "display_name": "rubric.pdf", "content-type": "application/pdf", "size": 4096 }]
+          }
+        ]
+      }
+    }
+  },
+  "profile": {
+    "response": {
+      "status": 200,
+      "url": "https://canvas.example.invalid/api/v1/users/self/profile",
+      "body": { "name": "Sam Rivera (Synthetic)", "short_name": "Sam R.", "avatar_url": "https://canvas.example.invalid/images/thumbnails/9010/avatar.png" }
+    },
+    "avatar": {
+      "status": 200,
+      "requestUrl": "https://canvas.example.invalid/images/thumbnails/9010/avatar.png",
+      "contentType": "image/png",
+      "bytesDescription": "8-byte PNG-signature-only synthetic placeholder"
+    }
+  }
+}

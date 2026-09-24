@@ -270,6 +270,28 @@ button:disabled { opacity: .6; cursor: wait; }
 .status-ok, .inline-success { color: var(--sage) !important; font-weight: 700; }
 .inline-error { color: #ff9c8c; }
 .load-error { color: #ff9c8c; }
+.resource-saved { color: var(--sage); font: 10px var(--utility); }
+
+/* Desktop first run, replace-preview, and recovery screens. */
+.setup-card { width: min(720px, calc(100% - 2rem)); padding: 36px 40px 32px; border-top: 5px solid var(--gold); }
+.setup-card h1 { margin: 6px 0 10px; font: 700 34px/1.08 var(--display); letter-spacing: -.02em; }
+.setup-card > p { max-width: 60ch; margin: 0 0 14px; color: var(--muted); }
+.setup-card h2 { margin: 0 0 6px; font-size: 16px; }
+.preview-label { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: 13px; }
+.preview-badge { display: inline-flex; align-items: center; min-height: 22px; padding: 0 9px; border: 1px solid var(--gold); border-radius: 999px; color: var(--gold); font: 700 10px var(--utility); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+.setup-choice { display: grid; gap: 4px; margin-top: 16px; padding: 18px 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-raised); }
+.setup-choice small, .setup-step { color: var(--muted); font-size: 12px; }
+.setup-path { display: block; margin-top: 4px; color: var(--ink); font: 12px/1.4 var(--utility); overflow-wrap: anywhere; }
+.setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 14px; }
+.setup-secondary { min-height: 38px; padding: 0 4px; border: 0; color: var(--navy); background: transparent; cursor: pointer; font-weight: 700; }
+.setup-report, .setup-progress { display: grid; gap: 8px; margin-top: 18px; padding: 18px 20px; border: 1px solid var(--line); border-radius: 14px; }
+.setup-report > p { margin: 0; color: var(--muted); font-size: 12px; }
+.setup-counts { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 4px 18px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
+.setup-counts li { display: flex; justify-content: space-between; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.setup-counts li span { color: var(--muted); }
+.setup-refusals li strong { color: #ff9c8c; }
+.setup-progress progress { width: 100%; accent-color: var(--gold); }
+.setup-progress span { color: var(--muted); font-size: 12px; }
 
 /* The wide sidebar leaves less room than the viewport width suggests. */
 @media (min-width: 861px) and (max-width: 1400px) {

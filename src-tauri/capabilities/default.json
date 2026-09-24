@@ -1,0 +1,28 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Main window: only Due Good's own narrow commands. The folder picker runs in Rust, so the webview receives no dialog, filesystem, shell, or remote-URL permission.",
+  "local": true,
+  "windows": ["main"],
+  "permissions": [
+    "allow-store-status",
+    "allow-choose-legacy-root",
+    "allow-dry-run-import",
+    "allow-import-legacy-root",
+    "allow-read-dashboard-documents",
+    "allow-set-item-completion",
+    "allow-set-discussion-field",
+    "allow-read-avatar-bytes",
+    "allow-open-library-resource",
+    "allow-copy-assignment-text",
+    "allow-list-snapshots",
+    "allow-restore-snapshot",
+    "allow-export-legacy-folder",
+    "allow-set-canvas-refresh-enabled",
+    "allow-start-canvas-refresh",
+    "allow-prepare-store-promotion",
+    "allow-confirm-store-promotion",
+    "allow-demote-store-for-rollback",
+    "allow-export-frozen-for-rollback"
+  ]
+}

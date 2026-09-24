@@ -31,4 +31,4 @@ for (const [lineNumber, line] of checksumText.split(/\r?\n/).entries()) {
 if (failures.length > 0) {
   throw new Error(`Baseline integrity failed: ${failures.join(", ")}.`);
 }
-console.log(`Baseline integrity passed for ${verified} immutable package files; .gitignore is Task 1.1 mutable scope.`);
+console.log(`Baseline integrity passed for ${verified} immutable package files; .gitignore is intentionally excluded from checksum verification because its ignore patterns change routinely as new build and output paths are added.`);

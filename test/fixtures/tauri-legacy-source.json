@@ -1,0 +1,268 @@
+{
+  "description": "Synthetic legacy Due Good root for the Tauri import and parity tests. Every value is invented. Entries are materialized into a temporary directory: json is written as JSON.stringify(value, null, 2) plus a newline, text as UTF-8, hex as bytes, symlink as a relative link, and jsonRepeat as an array of count copies of template where {n} in strings becomes n and the exact string {n#} becomes the number n.",
+  "entries": [
+    {
+      "path": "coursework.json",
+      "json": {
+        "generated": "2026-09-20T12:00:00Z",
+        "futureTopLevelField": { "kept": [1, 2.5, null] },
+        "courses": [
+          {
+            "key": "syn-101",
+            "code": "SYN 101",
+            "title": "Synthetic Studies",
+            "color": "#3a6ea5",
+            "folder": "syn-101",
+            "gradeGroups": [
+              { "id": "g-essays", "name": "Essays", "weight": 40 },
+              { "id": "g-quizzes", "name": "Quizzes", "weight": 60.5 }
+            ],
+            "futureCourseField": { "kept": true }
+          },
+          { "key": "syn-202", "code": "SYN 202", "title": "Applied Synthesis", "color": "#7a5c3e", "folder": "classes/syn-202" },
+          { "key": "syn-303", "code": "SYN 303", "title": "Dormant Seminar", "color": null, "folder": null }
+        ],
+        "items": [
+          {
+            "id": "syn-101-essay-1",
+            "course": "syn-101",
+            "kind": "assignment",
+            "title": "Essay draft",
+            "at": "2026-09-25T23:59",
+            "submissionStatus": "unsubmitted",
+            "done": false,
+            "doneAt": null,
+            "points": 100,
+            "assignmentGroupId": "g-essays",
+            "assignmentGroupName": "Essays",
+            "assignmentGroupWeight": 40,
+            "source": "canvas",
+            "zUnknownItemField": "kept"
+          },
+          {
+            "id": "syn-101-quiz-1",
+            "course": "syn-101",
+            "kind": "quiz",
+            "title": "Quiz one",
+            "at": "2026-09-22T10:00",
+            "submissionStatus": "graded",
+            "done": true,
+            "doneAt": "2026-09-21T15:00:00Z",
+            "points": 10,
+            "score": 9.5,
+            "grade": "A",
+            "gradedAt": "2026-09-22T18:00:00Z"
+          },
+          {
+            "id": "syn-101-discussion-1",
+            "course": "syn-101",
+            "kind": "discussion",
+            "title": "Discussion: sources",
+            "at": null,
+            "submissionStatus": "pending",
+            "discussionPostDone": true,
+            "discussionRepliesDone": false
+          },
+          { "id": "syn-101-session-1", "course": "syn-101", "kind": "session", "title": "Seminar session", "at": "2026-09-24T09:00", "detail": "Room is synthetic" },
+          { "id": "syn-101-milestone", "course": "syn-101", "kind": "milestone", "title": "Midterm checkpoint", "at": 12345 },
+          { "id": "syn-202-lab-1", "course": "syn-202", "title": "Lab report", "submissionStatus": "other" }
+        ]
+      }
+    },
+    {
+      "path": "coursework-refresh-history.json",
+      "json": {
+        "schema": 1,
+        "events": [
+          {
+            "id": "refresh-1",
+            "status": "succeeded",
+            "sourceComplete": true,
+            "startedAt": "2026-09-19T12:00:00Z",
+            "finishedAt": "2026-09-19T12:01:00Z",
+            "summary": { "added": 1, "updated": 2, "removed": 1 },
+            "changes": [
+              { "kind": "added", "itemId": "syn-101-essay-1", "title": "Essay draft", "course": "syn-101" },
+              {
+                "kind": "changed",
+                "itemId": "syn-101-quiz-1",
+                "title": "Quiz one",
+                "course": "syn-101",
+                "fields": [
+                  { "field": "at", "before": "2026-09-20T10:00", "after": "2026-09-22T10:00" },
+                  { "field": "submissionState", "before": "known_not_submitted", "after": "graded" },
+                  { "field": "assignmentGroupWeight", "before": null, "after": 60.5 },
+                  { "field": "score", "before": null, "after": 9.5 },
+                  { "field": "futureField", "before": "x", "after": "y" },
+                  { "field": "grade", "before": "", "after": "A" },
+                  { "field": "gradedAt", "before": "not a date", "after": "2026-09-22T18:00:00Z" }
+                ]
+              },
+              { "kind": "removed", "title": "Old worksheet", "course": "syn-202", "detail": "Removed from Canvas." },
+              { "kind": "mystery", "title": "   Spaced    title   " }
+            ]
+          },
+          {
+            "id": "refresh-2",
+            "status": "incomplete",
+            "sourceComplete": false,
+            "startedAt": "2026-09-20T12:00:00Z",
+            "finishedAt": "2026-09-20T12:02:00Z",
+            "summary": { "added": 0, "updated": 0, "removed": 3 },
+            "changes": []
+          },
+          {
+            "id": "refresh-3",
+            "status": "failed",
+            "startedAt": "2026-09-18T08:00:00Z",
+            "finishedAt": null,
+            "summary": { "added": 0, "updated": 0, "removed": 0 },
+            "changes": [{ "kind": "notice", "title": "Canvas timed out", "detail": "The export stopped early." }]
+          }
+        ],
+        "futureHistoryField": true
+      }
+    },
+    { "path": "coursework-refresh-history.json.corrupt-1790000000000-0a1b2c3d.json", "text": "{\"events\": [" },
+    {
+      "path": "canvas-conversations.json",
+      "json": {
+        "complete": true,
+        "generatedAt": "2026-09-20T12:05:00Z",
+        "conversations": [
+          {
+            "canvasConversationId": "c-1",
+            "contextLabel": "SYN 101",
+            "subject": "  Question   about   essay ",
+            "participants": [
+              { "canvasUserId": "u-1", "name": "Synthetic Instructor" },
+              { "canvasUserId": "u-2" },
+              { "name": "No identifier" }
+            ],
+            "latestMessagePreview": "Thanks for the question.",
+            "latestMessageAt": "2026-09-19T09:00:00Z",
+            "unread": true,
+            "starred": false,
+            "messageCount": 2.7,
+            "historyComplete": true,
+            "messages": [
+              {
+                "canvasMessageId": "m-1",
+                "authorId": "u-1",
+                "author": "Synthetic Instructor",
+                "createdAt": "2026-09-19T09:00:00Z",
+                "body": "Thanks for the question.\n\nSee the rubric.",
+                "attachments": [
+                  { "name": "rubric.pdf", "contentType": "application/pdf", "sizeBytes": 2048 },
+                  { "contentType": "text/plain" }
+                ]
+              },
+              { "author": "   ", "body": "Dropped because the author is blank." },
+              { "author": "Synthetic Learner", "body": null }
+            ],
+            "attachments": [{ "name": "rubric.pdf", "contentType": "application/pdf", "sizeBytes": "2048" }]
+          },
+          {
+            "canvasConversationId": "c-2",
+            "subject": "Lab schedule",
+            "participants": [],
+            "latestMessageAt": "2026-09-20T08:00:00Z",
+            "unread": false,
+            "starred": true,
+            "messageCount": 250000,
+            "safetyTruncated": true
+          },
+          { "canvasConversationId": "c-3", "subject": "Missing flags", "unread": "yes", "starred": false, "messageCount": 1 },
+          { "canvasConversationId": "c-4", "subject": "Older thread", "unread": false, "starred": false, "messageCount": -3, "latestMessageAt": null }
+        ],
+        "changes": {
+          "added": [{ "subject": "Lab schedule" }],
+          "changed": [{ "after": { "subject": "  Question about essay" } }],
+          "removed": [{ "subject": "Retired thread" }, {}]
+        }
+      }
+    },
+    { "path": "canvas-inbox.json", "json": { "note": "legacy Inbox alias; imported but not read by the dashboard", "conversations": [] } },
+    {
+      "path": "canvas-profile.json",
+      "json": {
+        "name": "  Synthetic \u0007 Learner  ",
+        "short_name": "Syn",
+        "avatar": { "path": "canvas-avatar.png", "contentType": "image/png; charset=binary", "bytes": 69 },
+        "futureProfileField": 1
+      }
+    },
+    {
+      "path": "canvas-avatar.png",
+      "hex": "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de0000000c49444154789c63b0ca5b0a000233014ea63706380000000049454e44ae426082"
+    },
+    { "path": "courses.json", "json": { "courses": [{ "key": "syn-101", "canvasId": 1001 }, { "key": "syn-202", "canvasId": 1002 }] } },
+    { "path": ".DS_Store", "hex": "0000000142756431000010000000080000001000" },
+    { "path": "classes/syn-101/coursework.md", "text": "# SYN 101\n\nSynthetic course summary.\n" },
+    { "path": "classes/syn-101/canvas-course-report.md", "text": "# Course report\n\nSynthetic report.\n" },
+    { "path": "classes/syn-101/canvas-export/canvas-course-report.md", "text": "# Export report\n\nSynthetic export report.\n" },
+    {
+      "path": "classes/syn-101/canvas-export/download-manifest.json",
+      "json": [
+        { "id": 1, "status": "downloaded", "filename": "syllabus-v2.pdf" },
+        { "id": 2, "status": "reused", "filename": "handout-2.pdf" },
+        { "id": 3, "status": "skipped" }
+      ]
+    },
+    { "path": "classes/syn-101/canvas-export/course.json", "json": { "id": 1001, "name": "Synthetic Studies" } },
+    {
+      "path": "classes/syn-101/canvas-export/api/files.json",
+      "jsonRepeat": {
+        "count": 1005,
+        "template": {
+          "id": "{n#}",
+          "display_name": "Handout {n}",
+          "filename": "handout-{n}.pdf",
+          "size": "{n#}",
+          "updated_at": "2026-09-01T00:00:00Z",
+          "content-type": "application/pdf"
+        }
+      }
+    },
+    {
+      "path": "classes/syn-101/canvas-export/api/pages.json",
+      "json": [
+        { "page_id": 11, "title": "Élan vital", "updated_at": "2026-09-10T00:00:00Z" },
+        { "url": "apple-notes", "title": "apple notes", "updated_at": "2026-09-10T00:00:00Z" },
+        { "page_id": 13, "title": "Zebra crossings", "updated_at": "2026-09-10T00:00:00Z" },
+        { "page_id": 14, "title": "ábaco basics", "updated_at": "2026-09-10T00:00:00Z" },
+        { "page_id": 15, "title": "   " }
+      ]
+    },
+    {
+      "path": "classes/syn-101/canvas-export/api/modules.json",
+      "json": [
+        {
+          "id": 21,
+          "name": "Week 1",
+          "items_count": 3,
+          "items": [
+            { "id": 211, "type": "ExternalUrl", "title": "Reading portal" },
+            { "id": 212, "type": "Page", "title": "Intro page" },
+            { "id": 213, "type": "ExternalUrl", "title": "  " }
+          ]
+        },
+        { "id": 22, "name": "Week 2" }
+      ]
+    },
+    { "path": "classes/syn-101/canvas-export/api/announcements.json", "json": [{ "id": 31, "title": "Welcome", "posted_at": "2026-09-02T12:00:00Z" }] },
+    { "path": "classes/syn-101/materials/syllabus-v2.pdf", "text": "%PDF-1.4\n% synthetic syllabus\n" },
+    { "path": "classes/syn-101/materials/current-syllabus.pdf", "symlink": "syllabus-v2.pdf" },
+    { "path": "classes/syn-101/materials/week-01/notes.txt", "text": "Synthetic week one notes.\n" },
+    { "path": "classes/syn-202/coursework.md", "text": "# SYN 202\n\nSynthetic lab course.\n" },
+    {
+      "path": "classes/syn-202/canvas-export/api/files.json",
+      "jsonRepeat": {
+        "count": 1003,
+        "template": { "id": "{n#}", "display_name": "Lab sheet {n}", "size": "{n#}", "updated_at": "2026-08-15T00:00:00Z" }
+      }
+    },
+    { "path": "classes/syn-202/canvas-export/api/announcements.json", "json": [{ "id": 41, "title": "Lab moved", "posted_at": "2026-09-21T12:00:00Z" }] },
+    { "path": "classes/syn-202/materials/200-lab-guide.txt", "text": "Synthetic lab guide.\n" }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Due Good",
+  "version": "0.1.0",
+  "identifier": "com.zerodelta.duegood",
+  "mainBinaryName": "duegood-desktop",
+  "build": {
+    "frontendDist": "../dist/public"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Due Good",
+        "width": 1280,
+        "height": 840,
+        "minWidth": 720,
+        "minHeight": 560,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' blob:; font-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-src 'none'; frame-ancestors 'none'; form-action 'none'",
+      "freezePrototype": true,
+      "capabilities": ["default"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": ["icons/icon.png"],
+    "externalBin": ["binaries/duegood-refresh"],
+    "resources": {
+      "../dist/public/": "frontend/"
+    },
+    "targets": ["app"]
+  }
+}

@@ -1,0 +1,273 @@
+{
+  "synthetic": true,
+  "format": "duegood-refresh-contract-expected-store-v1",
+  "warning": "The invented on-disk result that docs/REFRESH-CONTRACT.md's mapping rules should produce from refresh-canvas-mock.json. Hand-derived to document the mapping for Task 3.1's helper implementation; not produced by running real code. Not real coursework, and not real student data. Every hostname is .invalid.",
+  "conventions": {
+    "placeholders": "A string wrapped in angle brackets (e.g. \"<generatedAt>\") stands for a value computed at refresh time, not a literal to match byte-for-byte."
+  },
+  "perCourse": {
+    "demo-alpha": {
+      "root": "classes/demo-alpha",
+      "canvas-export/api/course.json": { "id": 9101, "name": "Demo Alpha Seminar", "course_code": "DEMO 101", "syllabus_body": "<p>Welcome. Contact token=[redacted] for help.</p>", "term": { "id": 40, "name": "Fall 2026" } },
+      "canvas-export/api/course.json note": "redactValue() replaces any 'token=...'-shaped substring inside every captured field, including rich text like syllabus_body, before the file is written.",
+      "canvas-export/api/tabs.json": [{ "id": "assignments", "label": "Assignments", "visibility": "public" }],
+      "canvas-export/api/pages.json": [{ "page_id": 5501, "title": "Course overview", "url": "course-overview", "updated_at": "2026-09-02T10:00:00Z", "body": "<p>Overview text.</p>" }],
+      "canvas-export/api/modules.json": [
+        { "id": 6001, "name": "Unit 3: Sources", "items_count": 2, "items": [{ "id": 60011, "type": "ExternalUrl", "title": "Primary source archive (external)" }] },
+        { "id": 6002, "name": "Unit 4: Synthesis", "items_count": 0, "items": [] }
+      ],
+      "canvas-export/api/modules.json note": "Both pages concatenated into one array; the page boundary and the Link header are not preserved in this file (they live in request-manifest.json instead).",
+      "canvas-export/api/assignment_groups.json": [{ "id": 601, "name": "Essays", "group_weight": 40 }],
+      "canvas-export/api/assignments.json": [
+        {
+          "id": 70001,
+          "name": "Draft Essay v2",
+          "due_at": "2026-11-28T04:59:00Z",
+          "points_possible": 20,
+          "assignment_group_id": 601,
+          "html_url": "https://canvas.example.invalid/courses/9101/assignments/70001",
+          "submission_types": ["online_upload"],
+          "submission": { "workflow_state": "graded", "submitted_at": "2026-11-15T20:00:00Z", "graded_at": "2026-11-29T14:00:00Z", "grade": "A-", "score": 93, "excused": false, "missing": false, "late": false }
+        },
+        {
+          "id": 70002,
+          "name": "Reading Reflection 3",
+          "due_at": "2026-12-05T04:59:00Z",
+          "points_possible": 10,
+          "assignment_group_id": 601,
+          "html_url": "https://canvas.example.invalid/courses/9101/assignments/70002",
+          "submission_types": ["online_text_entry"],
+          "submission": null
+        }
+      ],
+      "canvas-export/api/assignments.json note": "minimizeAssignmentSubmission() has already narrowed 'submission' to workflow_state/submitted_at/graded_at/grade/score/excused/missing/late by this point; no other submission fields (e.g. raw rubric assessment) are ever captured.",
+      "canvas-export/api/discussions.json": [],
+      "canvas-export/api/announcements.json": [{ "id": 9001, "title": "Office hours moved", "posted_at": "2026-11-18T15:00:00Z" }],
+      "canvas-export/api/files.json": [{ "id": 501, "display_name": "Syllabus.pdf", "filename": "Syllabus.pdf", "size": 25, "updated_at": "2026-09-01T12:00:00Z", "url": "https://canvas.example.invalid/files/501/download" }],
+      "canvas-export/api/files.json note": "The stored 'url' has lost its ?verifier=... query string: writeJson()/safeUrl() strips the query before persisting, even though the download itself used the full URL.",
+      "canvas-export/api/folders.json": [{ "id": 701, "name": "course files" }],
+      "canvas-export/download-manifest.json": [
+        { "id": 501, "name": "Syllabus.pdf", "filename": "501-syllabus-2026.pdf", "size": 25, "updated_at": "2026-09-01T12:00:00Z", "status": "downloaded" }
+      ],
+      "canvas-export/download-manifest.json note": "filename is `${canvasFileId}-${nameFromContentDisposition}`; status is one of \"downloaded\", \"reused\" (fingerprint match: id+filename+size+updated_at against the prior manifest, plus the local copy existing at the expected size), \"missing-download-url\", or a bare HTTP status number when the download itself failed.",
+      "canvas-export/request-manifest.json": {
+        "course": [{ "url": "https://canvas.example.invalid/api/v1/courses/9101", "status": 200 }],
+        "tabs": [{ "url": "https://canvas.example.invalid/api/v1/courses/9101/tabs", "status": 200 }],
+        "pages": [{ "url": "https://canvas.example.invalid/api/v1/courses/9101/pages", "status": 200 }],
+        "modules": [
+          { "url": "https://canvas.example.invalid/api/v1/courses/9101/modules", "status": 200 },
+          { "url": "https://canvas.example.invalid/api/v1/courses/9101/modules", "status": 200 }
+        ],
+        "assignment_groups": [{ "url": "https://canvas.example.invalid/api/v1/courses/9101/assignment_groups", "status": 200 }],
+        "assignments": [{ "url": "https://canvas.example.invalid/api/v1/courses/9101/assignments", "status": 200 }],
+        "discussions": [{ "url": "https://canvas.example.invalid/api/v1/courses/9101/discussion_topics", "status": 200 }],
+        "announcements": [{ "url": "https://canvas.example.invalid/api/v1/announcements", "status": 200 }],
+        "files": [{ "url": "https://canvas.example.invalid/api/v1/courses/9101/files", "status": 200 }],
+        "folders": [{ "url": "https://canvas.example.invalid/api/v1/courses/9101/folders", "status": 200 }]
+      },
+      "canvas-export/request-manifest.json note": "Every recorded url is origin+pathname only (safeUrl() strips the query string, so ?include[]=... and ?per_page=100 never appear here); modules has two entries, one per fetched page, both with the query-stripped pathname repeated.",
+      "canvas-export/course-inventory.json": "The full per-endpoint capture object plus a capturedAt timestamp: { capturedAt: \"<capturedAt>\", course: <as above>, tabs: <as above>, pages: <as above>, modules: <as above, concatenated>, assignment_groups: <as above>, assignments: <as above>, discussions: [], announcements: <as above>, files: <as above>, folders: <as above> }.",
+      "canvas-course-report.md excerpt": "# Demo Alpha Seminar\n\nCaptured: <capturedAt>\nSource: https://canvas.example.invalid/courses/9101\n\n## Inventory\n\n- Pages: 1\n- Modules: 2\n- Assignment groups: 1\n- Assignments: 2\n- Discussions: 0\n- Announcements: 1\n- Course files: 1\n- Material files available: 1/1\n- Downloaded this refresh: 1\n- Reused unchanged files: 0\n"
+    },
+    "demo-beta": {
+      "root": "classes/demo-beta",
+      "canvas-export/api/course.json": { "id": 9202, "name": "Demo Beta Workshop", "course_code": "DEMO 202", "syllabus_body": "<p>Welcome.</p>", "term": { "id": 40, "name": "Fall 2026" } },
+      "canvas-export/api/assignment_groups.json": [{ "id": 602, "name": "Memos", "group_weight": 60 }],
+      "canvas-export/api/assignments.json": [
+        { "id": 80001, "name": "Ungraded practice memo (non-actionable)", "due_at": null, "points_possible": 0, "assignment_group_id": 602, "html_url": "https://canvas.example.invalid/courses/9202/assignments/80001", "submission_types": ["not_graded"], "submission": null },
+        { "id": 80002, "name": "Policy Memo", "due_at": "2026-12-10T04:59:00Z", "points_possible": 15, "assignment_group_id": 602, "html_url": "https://canvas.example.invalid/courses/9202/assignments/80002", "submission_types": ["online_text_entry"], "submission": null }
+      ],
+      "canvas-export/api/tabs.json": [],
+      "canvas-export/api/pages.json": [],
+      "canvas-export/api/modules.json": [],
+      "canvas-export/api/discussions.json": [],
+      "canvas-export/api/announcements.json": [],
+      "canvas-export/api/files.json": [],
+      "canvas-export/api/folders.json": [],
+      "canvas-export/download-manifest.json": [],
+      "materials/ note": "No files under demo-beta's materials/; 80001 exists only in the raw export, never on the timeline (see coursework.json below)."
+    }
+  },
+  "coursework.json": {
+    "note": "The reconciliation script's --apply output, applied by the wrapper after both course imports succeed. done/doneAt on retained items are byte-for-byte unchanged from priorLocalState. coursework.json is rewritten only because at least one change was found (applied > 0); lastSync is bumped only in that case.",
+    "timezone": "America/New_York",
+    "sync": { "lastSync": "<today>" },
+    "courses": [
+      { "key": "demo-alpha", "code": "DEMO 101", "folder": "classes/demo-alpha", "gradeGroups": [{ "id": 601, "name": "Essays", "weight": 40 }] },
+      { "key": "demo-beta", "code": "DEMO 202", "folder": "classes/demo-beta", "gradeGroups": [{ "id": 602, "name": "Memos", "weight": 60 }], "ignoredCanvasAssignmentIds": [80001] }
+    ],
+    "items": [
+      {
+        "id": "demo-alpha-70001",
+        "course": "demo-alpha",
+        "kind": "paper",
+        "title": "Draft Essay v2",
+        "at": "2026-11-27T23:59",
+        "points": 20,
+        "source": "canvas",
+        "confidence": "confirmed",
+        "flags": [],
+        "detail": "",
+        "url": "https://canvas.example.invalid/courses/9101/assignments/70001",
+        "canvasId": 70001,
+        "assignmentGroupId": 601,
+        "assignmentGroupName": "Essays",
+        "assignmentGroupWeight": 40,
+        "done": false,
+        "doneAt": null,
+        "submissionStatus": "graded",
+        "submittedAt": "2026-11-15T20:00:00Z",
+        "gradedAt": "2026-11-29T14:00:00Z",
+        "grade": "A-",
+        "score": 93,
+        "changeNote": "TITLE (Draft essay -> Draft Essay v2), CHANGED due date (2026-11-28T04:59:00Z UTC -> 2026-11-27T23:59 local, per to_local()'s wall-clock conversion), and GRADE (pending -> graded, A-, 93) all fired for this one item. done/doneAt untouched."
+      },
+      {
+        "id": "demo-alpha-session-1",
+        "course": "demo-alpha",
+        "kind": "session",
+        "title": "Week 12 seminar",
+        "at": "2026-11-24T18:00",
+        "source": "manual",
+        "confidence": "confirmed",
+        "flags": [],
+        "detail": "Weekly meeting; not a Canvas assignment.",
+        "changeNote": "Session items are always retained (is_live_tracker_item treats kind in {session, milestone} as live regardless of source); untouched here since Canvas never speaks to it."
+      },
+      {
+        "id": "demo-alpha-canvas-70002",
+        "course": "demo-alpha",
+        "kind": "assignment",
+        "title": "Reading Reflection 3",
+        "at": "2026-12-04T23:59",
+        "points": 10,
+        "source": "canvas",
+        "confidence": "confirmed",
+        "flags": [],
+        "detail": "",
+        "url": "https://canvas.example.invalid/courses/9101/assignments/70002",
+        "canvasId": 70002,
+        "assignmentGroupId": 601,
+        "assignmentGroupName": "Essays",
+        "assignmentGroupWeight": 40,
+        "done": false,
+        "doneAt": null,
+        "submissionStatus": null,
+        "submittedAt": null,
+        "gradedAt": null,
+        "grade": null,
+        "score": null,
+        "changeNote": "NEW: appended by --apply. kind is guessed by kind_for() from name/submission_types; \"Reading Reflection 3\" falls through every heuristic (no discussion/quiz/exam/lab/paper keyword) to the \"assignment\" fallback."
+      },
+      {
+        "id": "demo-beta-canvas-80002",
+        "course": "demo-beta",
+        "kind": "assignment",
+        "title": "Policy Memo",
+        "at": "2026-12-09T23:59",
+        "points": 15,
+        "source": "canvas",
+        "confidence": "confirmed",
+        "flags": [],
+        "detail": "",
+        "url": "https://canvas.example.invalid/courses/9202/assignments/80002",
+        "canvasId": 80002,
+        "assignmentGroupId": 602,
+        "assignmentGroupName": "Memos",
+        "assignmentGroupWeight": 60,
+        "done": false,
+        "doneAt": null,
+        "submissionStatus": null,
+        "submittedAt": null,
+        "gradedAt": null,
+        "grade": null,
+        "score": null,
+        "changeNote": "NEW. 80001 never gets an equivalent entry: it is in demo-beta.ignoredCanvasAssignmentIds, so reconcile() skips it before any finding is produced."
+      }
+    ],
+    "archivedForecastItems": [
+      {
+        "id": "demo-alpha-forecast-1",
+        "course": "demo-alpha",
+        "kind": "reading",
+        "title": "Suggested reading (syllabus forecast)",
+        "at": null,
+        "source": "syllabus",
+        "confidence": "estimated",
+        "flags": [],
+        "detail": "Never backed by a live Canvas assignment; exists only as a forecast note.",
+        "changeNote": "REMOVE: not session/milestone and not a Canvas-sourced item with a canvasId, so is_live_tracker_item() is false. Moved out of items[] into archivedForecastItems[] verbatim; never deleted outright."
+      }
+    ]
+  },
+  "coursework.md excerpts": {
+    "classes/demo-alpha/coursework.md": "# DEMO 101 — coursework timeline\n\n<!-- GENERATED by the reconciliation script — do not edit by hand. -->\n<!-- Edit via the timeline UI or coursework.json. -->\n\n- **Progress:** 0 of 2 gradable items complete\n- **Canvas data synced:** <today> · all times America/New_York\n\n## Items\n\n| Done | Due | Item | Grade | Kind | Source | Confidence |\n|---|---|---|---|---|---|---|\n| [ ] | 2026-11-24 18:00 | Week 12 seminar | — | session | manual | confirmed |\n| [ ] | 2026-11-27 23:59 | Draft Essay v2 | A- | paper | canvas | confirmed |\n| [ ] | 2026-12-04 23:59 | Reading Reflection 3 | Pending | assignment | canvas | confirmed |\n",
+    "note": "Written unconditionally on every --apply run (even when applied === 0), via a direct overwrite (no temp file, no rename) — the one non-atomic write in this whole chain."
+  },
+  "canvas-conversations.json": {
+    "path-note": "The wrapper's own --output argument to sync-canvas-conversations.mjs is canvas-inbox.json (confirmed from the private wrapper's source), but dashboard-store.ts, its Playwright seed script, and this repo's own entrypoint test all read/write canvas-conversations.json. This fixture uses canvas-conversations.json because that is what the dashboard actually consults; docs/REFRESH-CONTRACT.md marks the true on-disk filename `unknown` pending an owner-side check of the live legacy root.",
+    "schema": 1,
+    "generatedAt": "<generatedAt>",
+    "complete": true,
+    "rejected": 0,
+    "conversations": [
+      {
+        "canvasConversationId": "77001",
+        "contextLabel": "Demo Alpha Seminar",
+        "subject": "Question about Essay 2 rubric",
+        "participants": [{ "canvasUserId": "9500", "name": "Course Instructor" }, { "canvasUserId": "9600", "name": "Synthetic Student" }],
+        "latestMessagePreview": "Hi, quick question about the rubric.",
+        "latestMessageAt": "2026-11-25T16:30:00.000Z",
+        "unread": true,
+        "starred": false,
+        "messageCount": 2,
+        "messages": [
+          { "canvasMessageId": "770011", "authorId": "9600", "author": "Synthetic Student", "createdAt": "2026-11-25T15:00:00.000Z", "body": "Hi, quick question about the rubric.", "bodyTruncated": false, "attachments": [] },
+          { "canvasMessageId": "770012", "authorId": "9500", "author": "Course Instructor", "createdAt": "2026-11-25T16:30:00.000Z", "body": "Sure — see the attached rubric. (Not for sharing: access_token=[redacted])", "bodyTruncated": false, "attachments": [{ "name": "rubric.pdf", "contentType": "application/pdf", "sizeBytes": 4096 }] }
+        ],
+        "historyComplete": true,
+        "safetyTruncated": false,
+        "attachments": [{ "name": "rubric.pdf", "contentType": "application/pdf", "sizeBytes": 4096 }]
+      }
+    ],
+    "changes": { "added": ["77001"], "changed": [], "removed": [] },
+    "note": "<script>alert(1)</script> is stripped entirely (tags removed, not escaped) by sanitizeBody(); access_token=leak-me-not is redacted to access_token=[redacted] by the same function's credential-pattern regex. latestMessageAt is the newer of the two messages, not last_message_at from the list summary."
+  },
+  "canvas-profile.json": {
+    "name": "Sam Rivera (Synthetic)",
+    "short_name": "Sam R.",
+    "avatar": { "path": "canvas-profile-avatar", "contentType": "image/png", "bytes": 8 }
+  },
+  "canvas-profile-avatar note": "Raw avatar bytes written to the sibling file named in avatar.path, mode 0600, staged via a temp file + rename with a backup-then-rollback commit shared with canvas-profile.json.",
+  "coursework-refresh-history.json event": {
+    "schema": 1,
+    "id": "<refresh-event-id>",
+    "status": "succeeded",
+    "sourceComplete": true,
+    "startedAt": "<startedAt>",
+    "finishedAt": "<finishedAt>",
+    "summary": { "added": 2, "updated": 1, "removed": 0 },
+    "changes": [
+      {
+        "kind": "changed",
+        "itemId": "demo-alpha-70001",
+        "title": "Draft Essay v2",
+        "course": "demo-alpha",
+        "fields": [
+          { "field": "title", "before": "Draft essay", "after": "Draft Essay v2" },
+          { "field": "at", "before": "2026-11-20T23:59", "after": "2026-11-27T23:59" },
+          { "field": "submissionState", "before": "pending", "after": "graded" },
+          { "field": "gradedAt", "before": null, "after": "2026-11-29T14:00:00Z" },
+          { "field": "grade", "before": null, "after": "A-" },
+          { "field": "score", "before": null, "after": 93 },
+          { "field": "assignmentGroupId", "before": null, "after": "601" },
+          { "field": "assignmentGroupName", "before": null, "after": "Essays" },
+          { "field": "assignmentGroupWeight", "before": null, "after": 40 }
+        ]
+      },
+      { "kind": "added", "itemId": "demo-alpha-canvas-70002", "title": "Reading Reflection 3", "course": "demo-alpha" },
+      { "kind": "added", "itemId": "demo-beta-canvas-80002", "title": "Policy Memo", "course": "demo-beta" }
+    ],
+    "note": "\"points\" is absent from the changed-fields list because it did not change (20 both before and after) — Object.is() only reports fields that actually differ. The REMOVE of demo-alpha-forecast-1 never appears here at all: captureCanvasSnapshot() only tracks items where source === \"canvas\" and canvasId is set, so a forecast item is invisible to this diff in both the before and after snapshot regardless of what the reconciliation script did to it."
+  }
+}

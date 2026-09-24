@@ -46,14 +46,18 @@
   "ui": {
     "focusedRunner": "test:ui",
     "tests": [
-      "test/ui/phase1-trust-interface.test.ts"
-      ,"test/ui/dashboard.test.ts"
+      "test/ui/phase1-trust-interface.test.ts",
+      "test/ui/dashboard.test.ts"
     ]
   },
   "browser": {
     "inclusiveRunner": "test:all",
     "componentRunner": "test:browser",
-    "forbiddenRunners": ["test:unit", "test:worker", "test:phase1"],
+    "forbiddenRunners": [
+      "test:unit",
+      "test:worker",
+      "test:phase1"
+    ],
     "tests": [
       "test/browser/test-origin.spec.ts",
       "test/browser/shell.spec.ts",
@@ -64,7 +68,8 @@
       "test/browser/phase1-desktop.spec.ts",
       "test/browser/phase1-mobile.spec.ts",
       "test/browser/accessibility-phase1.spec.ts",
-      "test/browser/local-dashboard.spec.ts"
+      "test/browser/local-dashboard.spec.ts",
+      "test/browser/desktop-first-run.spec.ts"
     ]
   },
   "container": {
@@ -86,8 +91,66 @@
       "test/local/dashboard-store.test.ts",
       "test/local/canvas-profile-entrypoint.test.ts",
       "test/local/local-server.test.ts",
-      "test/local/refresh-supervisor.test.ts"
-      ,"test/local/refresh-history.test.ts"
+      "test/local/refresh-supervisor.test.ts",
+      "test/local/refresh-history.test.ts",
+      "test/local/stage-tauri-candidate.test.ts",
+      "test/local/desktop-status.test.ts",
+      "test/local/refresh-contract.test.ts",
+      "test/local/tauri-documents.test.ts",
+      "test/local/tauri-export.test.ts",
+      "test/local/refresh-helper.test.ts",
+      "test/local/install-desktop-app.test.ts",
+      "test/local/verify-tauri-assets.test.ts",
+      "test/local/prepare-legacy-root.test.ts",
+      "test/local/verify-cutover.test.ts"
     ]
-  }
+  },
+  "native": {
+    "smokeRunner": "test:tauri:macos",
+    "smokeScript": "scripts/smoke-tauri-macos.mjs",
+    "smokeCase": "testFirstRunImportMutationRecoveryUnavailableRefreshAndRelaunch",
+    "productionRunner": "check:production-launch",
+    "productionScript": "scripts/check-production-launch.mjs",
+    "productionCase": "testProductionIdentifierLaunchOnly",
+    "testFile": "test/native/macos/DueGoodDesktopUITests.swift",
+    "supportFiles": [
+      "test/native/macos/DueGoodDesktopUITests.xcodeproj/project.pbxproj",
+      "test/native/macos/DueGoodDesktopUITests.xcodeproj/project.xcworkspace/contents.xcworkspacedata",
+      "test/native/macos/DueGoodDesktopUITests.xcodeproj/xcshareddata/xcschemes/DueGoodDesktopUITests.xcscheme",
+      "test/native/macos/DueGoodDesktopUITestsHost/HostApp.swift",
+      "test/native/macos/project.yml"
+    ]
+  },
+  "tauri": {
+    "runner": "test:tauri",
+    "inclusiveRunner": "test:all",
+    "cargoManifest": "src-tauri/Cargo.toml",
+    "features": "test-overrides",
+    "sourceRoot": "src-tauri/src",
+    "tests": {
+      "src-tauri/src/canvas.rs": 7,
+      "src-tauri/src/capture.rs": 10,
+      "src-tauri/src/clipboard.rs": 1,
+      "src-tauri/src/commands.rs": 18,
+      "src-tauri/src/config.rs": 8,
+      "src-tauri/src/documents.rs": 4,
+      "src-tauri/src/downloads.rs": 5,
+      "src-tauri/src/export.rs": 4,
+      "src-tauri/src/history.rs": 6,
+      "src-tauri/src/import.rs": 14,
+      "src-tauri/src/locking.rs": 12,
+      "src-tauri/src/phase4_smoke.rs": 1,
+      "src-tauri/src/reconcile.rs": 9,
+      "src-tauri/src/refresh.rs": 10,
+      "src-tauri/src/resources.rs": 1,
+      "src-tauri/src/snapshots.rs": 1,
+      "src-tauri/src/store.rs": 16,
+      "src-tauri/src/embedded_asset_tests.rs": 1
+    }
+  },
+  "fixtures": [
+    "test/fixtures/refresh-canvas-mock.json",
+    "test/fixtures/refresh-expected-store.json",
+    "test/fixtures/tauri-legacy-source.json"
+  ]
 }

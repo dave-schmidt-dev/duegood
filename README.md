@@ -6,6 +6,31 @@ A planned, independent student assignment tracker, starting with Marymount Unive
 
 **Status: the private coursework launcher opens the persistent local Due Good service.** The dark-default dashboard includes Timeline, Grades, Inbox, Completed, Courses, Library, Activity, and More. Grades shows read-only Canvas-reported scores without guessing a weighted or final course grade. Timeline cards have direct local completion controls, discussions have separate post/reply progress checks, Inbox shows read-only full threads, and the sidebar uses the locally cached Canvas profile picture when available. The shared legacy funding server remains separate and healthy. The cloud Worker remains offline.
 
+The native desktop Task 2.1 candidate adds local-only completion and discussion
+progress, constrained Library file handling, private daily snapshots, and a
+legacy-layout export to an owner-selected folder. Daily snapshots run in the
+background; the dashboard shows copied file and byte counts while they run.
+These actions do not contact
+Canvas or change Canvas state. The export copies
+the coursework layout and its file bytes, including unknown fields, while
+omitting desktop-only manifest, snapshot, backup, staging, and lock data.
+If a daily snapshot fails, the app keeps coursework available and shows a warning.
+Synthetic source tests do not establish an installed app or live-coursework
+acceptance. No private coursework is stored in this repository or its fixtures.
+
+The native Phase 3 candidate adds a separate read-only Canvas refresh helper.
+It captures course exports, materials, Inbox, and profile data into a staged
+generation, then publishes it with personal completion and discussion progress
+preserved. An incomplete capture retains prior records and appears as incomplete
+in Activity. The helper accepts no data-root argument and
+the app launches it through the fixed `duegood-desktop-refresh` BWS consumer.
+The refresh control remains unavailable until an authoritative store, the owner
+setting, the installed helper, and the local broker are present. Synthetic
+mock tests exercise this path; they do not establish a live Canvas connection
+or an installed desktop release. See
+[`docs/2026-09-23-TAURI-PHASE3-WALKTHROUGH.md`](docs/2026-09-23-TAURI-PHASE3-WALKTHROUGH.md)
+for the source-candidate screen and state walkthrough.
+
 ## Start here
 
 Give your coding agent [`AGENT_HANDOFF.md`](AGENT_HANDOFF.md). It must inspect the local project and write an implementation plan before changing application code.
@@ -128,6 +153,26 @@ The local verification commands use only the public synthetic contract:
 npm run test:local
 npm run test:membership
 ```
+
+## Native desktop candidate
+
+The signed macOS app is installed as `/Applications/Due Good.app` under
+`com.zerodelta.duegood`. It starts with an empty local app store; installing it
+does not import the browser app's coursework or contact Canvas. The existing
+browser service remains available during the attended cutover. The installed
+Phase 5 candidate includes owner-confirmed promotion and rollback controls; its screens
+and recovery states are recorded in
+[`docs/2026-09-23-TAURI-PHASE5-WALKTHROUGH.md`](docs/2026-09-23-TAURI-PHASE5-WALKTHROUGH.md).
+
+Builds and tests run in a private staged candidate created by
+`npm run stage:tauri`; do not run `npm run build:ui`, `npm run build:local`, or
+`npm run test:all` in the checkout serving the browser app. After staging,
+run the full suite, a separate `npm run test:tauri`, then `npm run build:tauri`
+and `npm run verify:tauri-assets`. The installer checks the signed app and
+helper, exact staged asset bytes, and bundle identity before copying. The
+owner-attended procedure and rollback order are in
+[`docs/DESKTOP-CUTOVER.md`](docs/DESKTOP-CUTOVER.md). A synthetic test or an
+installed app is not a live Canvas refresh or an accepted cutover.
 
 ## Public-source precautions
 

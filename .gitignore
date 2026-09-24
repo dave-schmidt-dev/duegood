@@ -68,3 +68,8 @@ spikes/
 
 # Personal opencode agent-permission config (not shared team config)
 opencode.jsonc
+
+# Tauri desktop build output (src-tauri/ is added by a later task)
+src-tauri/target/
+src-tauri/binaries/
+src-tauri/gen/

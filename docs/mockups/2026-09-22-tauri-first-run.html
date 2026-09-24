@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Due Good desktop first run</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b131b; --panel:#111f2a; --panel2:#172734; --line:#314553; --text:#eef3f5; --muted:#9fb0bb; --blue:#94bfdf; --gold:#d8b467; --coral:#ee947d; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; background:var(--bg); color:var(--text); font:15px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; }
+    button { font:inherit; }
+    .shell { min-height:100vh; display:grid; grid-template-columns:270px 1fr; }
+    aside { background:#071b2a; border-right:1px solid #173246; padding:28px 20px; display:flex; flex-direction:column; }
+    .brand { display:flex; gap:13px; align-items:center; font-size:18px; }
+    .mark { width:44px; height:44px; display:grid; place-items:center; border-radius:13px; background:#ddb76c; color:#15202a; font:700 25px Georgia,serif; }
+    .school { color:var(--muted); font-size:14px; margin-top:2px; }
+    nav { margin-top:38px; display:grid; gap:8px; }
+    .nav { padding:13px 16px; border-radius:11px; color:#70848f; }
+    .nav.active { background:#223746; color:#c9d5db; }
+    .course-colors { margin-top:auto; border-top:1px solid #223a49; padding-top:18px; color:#637985; font:12px ui-monospace, monospace; letter-spacing:.08em; text-transform:uppercase; }
+    main { display:grid; grid-template-rows:66px 1fr; min-width:0; }
+    header { border-bottom:1px solid var(--line); padding:0 40px; display:flex; align-items:center; justify-content:space-between; color:var(--muted); }
+    .state { color:#6e8794; font-size:13px; }
+    .content { display:grid; place-items:center; padding:48px; }
+    .card { width:min(720px,100%); border:1px solid var(--line); border-radius:20px; background:var(--panel); overflow:hidden; box-shadow:0 28px 80px rgba(0,0,0,.24); }
+    .stripe { height:5px; background:linear-gradient(90deg,var(--blue) 0 34%,var(--gold) 34% 67%,#70a981 67%); }
+    .body { padding:48px 52px 42px; }
+    .eyebrow { color:var(--coral); font:700 12px ui-monospace,monospace; letter-spacing:.12em; text-transform:uppercase; }
+    h1 { margin:8px 0 10px; font:700 42px/1.06 Georgia,serif; color:var(--blue); }
+    p { margin:0; color:var(--muted); max-width:58ch; }
+    .choice { margin-top:34px; padding:22px; border:1px solid var(--line); background:var(--panel2); border-radius:14px; display:flex; gap:18px; align-items:center; }
+    .file { width:42px; height:50px; flex:0 0 auto; border:2px solid #7893a4; border-radius:6px; position:relative; }
+    .file:after { content:'DATA'; position:absolute; left:6px; bottom:7px; font:700 9px ui-monospace,monospace; color:var(--gold); }
+    .folder { width:50px; height:40px; flex:0 0 auto; border:2px solid #7893a4; border-radius:4px 8px 6px 6px; position:relative; margin-top:6px; }
+    .folder:before { content:''; position:absolute; left:-2px; top:-9px; width:22px; height:9px; border:2px solid #7893a4; border-bottom:0; border-radius:5px 5px 0 0; }
+    .choice-body { min-width:0; flex:1; }
+    .fixed { display:block; margin-top:3px; color:#8297a2; font-size:12px; }
+    .preview-label { margin-top:18px; display:flex; flex-wrap:wrap; gap:8px; align-items:baseline; color:var(--muted); font-size:14px; }
+    .badge { display:inline-flex; align-items:center; min-height:22px; padding:0 9px; border:1px solid var(--gold); border-radius:999px; color:var(--gold); font:700 10px ui-monospace,monospace; letter-spacing:.08em; text-transform:uppercase; white-space:nowrap; }
+    .step { display:block; margin-top:8px; color:#b9cad3; font-size:13px; }
+    .picker { margin-top:12px; appearance:none; border:1px solid var(--line); background:#1d3141; color:var(--blue); padding:9px 14px; border-radius:10px; font-weight:750; cursor:pointer; }
+    .dry { margin-top:18px; padding:16px 20px; border:1px solid var(--line); border-radius:14px; display:none; }
+    .dry.shown { display:block; }
+    .dry ul { margin:8px 0 0; padding:0; list-style:none; display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:4px 18px; font-size:13px; }
+    .dry li { display:flex; justify-content:space-between; border-bottom:1px solid var(--line); padding:4px 0; color:var(--muted); }
+    .dry li strong { color:var(--text); }
+    .primary:disabled { opacity:.55; cursor:not-allowed; }
+    .choice strong { display:block; margin-bottom:3px; }
+    .choice small { color:var(--muted); }
+    .path { display:block; margin-top:8px; color:#b9cad3; font:12px/1.4 ui-monospace,monospace; overflow-wrap:anywhere; }
+    .actions { margin-top:26px; display:flex; align-items:center; gap:18px; }
+    .primary { appearance:none; border:1px solid #7fa9c3; background:#9bc7e3; color:#0d1a23; padding:12px 18px; border-radius:10px; font-weight:800; cursor:pointer; }
+    .secondary { appearance:none; border:0; background:transparent; color:var(--blue); padding:10px 2px; font-weight:750; cursor:pointer; }
+    .privacy { color:#8297a2; font-size:13px; }
+    .foot { padding:17px 52px; background:#0e1a23; border-top:1px solid var(--line); color:#768c98; font-size:13px; }
+    dialog { border:1px solid var(--line); border-radius:14px; background:#172734; color:var(--text); padding:24px; max-width:480px; }
+    dialog::backdrop { background:rgba(2,8,12,.72); }
+    @media (max-width:760px) {
+      .shell { grid-template-columns:1fr; }
+      aside { display:none; }
+      header { padding:0 20px; }
+      .content { padding:22px; align-items:start; }
+      .body { padding:34px 26px 30px; }
+      .foot { padding:16px 26px; }
+      h1 { font-size:34px; }
+      .choice { align-items:flex-start; }
+      .actions { align-items:flex-start; flex-direction:column; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside aria-label="Disabled app navigation">
+      <div class="brand"><div class="mark">D</div><div>Due Good<div class="school">Marymount</div></div></div>
+      <nav><div class="nav active">Timeline</div><div class="nav">Grades</div><div class="nav">Inbox</div><div class="nav">Done</div><div class="nav">Courses</div><div class="nav">Library</div><div class="nav">Activity</div></nav>
+      <div class="course-colors">Courses appear after setup</div>
+    </aside>
+    <main>
+      <header><strong>Local desktop app</strong><span class="state">Not connected</span></header>
+      <section class="content">
+        <div class="card">
+          <div class="stripe"></div>
+          <div class="body">
+            <div class="eyebrow">One-time setup</div>
+            <h1>Set up local storage</h1>
+            <p>Import your existing Due Good folder once. Due Good copies it into its own app store and never changes the original folder.</p>
+            <div class="preview-label"><span class="badge">Preview copy</span><span>Read-only. It never refreshes and does not follow later changes in the browser app.</span></div>
+            <div class="choice">
+              <div class="file" aria-hidden="true"></div>
+              <div class="choice-body"><strong>App data folder</strong><small class="fixed">Fixed for this app on this computer. It cannot be changed.</small><code class="path">~/Library/Application Support/com.zerodelta.duegood</code></div>
+            </div>
+            <div class="choice">
+              <div class="folder" aria-hidden="true"></div>
+              <div class="choice-body"><strong>Legacy folder</strong><small>The folder that holds coursework.json and the classes folder. Chosen with the system folder picker.</small><span class="step" id="step" role="status" aria-live="polite">No folder selected.</span><button class="picker" id="choose">Choose legacy folder…</button></div>
+            </div>
+            <div class="dry" id="dry" aria-label="Dry run"><strong>Dry run</strong><div class="privacy">Counts only; nothing was copied.</div><ul><li>Coursework documents <strong>1</strong></li><li>Course folders <strong>2</strong></li><li>Material files <strong>3</strong></li><li>Files in total <strong>24</strong></li></ul></div>
+            <div class="actions">
+              <button class="primary" id="import" disabled>Import as preview copy</button>
+            </div>
+            <div class="privacy" style="margin-top:18px" id="status">No account sign-in required. The legacy folder's location is never shown or stored.</div>
+          </div>
+          <div class="foot">An existing preview copy is archived into a timestamped backup before it is replaced. An authoritative app store is never replaced by import.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <dialog id="demo"><strong id="dialog-title">Native picker preview</strong><p id="dialog-copy" style="margin-top:8px"></p><form method="dialog" style="margin-top:18px"><button class="primary" id="dialog-action">Done</button></form></dialog>
+  <script>
+    const demo=document.querySelector('#demo');
+    const title=document.querySelector('#dialog-title');
+    const copy=document.querySelector('#dialog-copy');
+    const action=document.querySelector('#dialog-action');
+    document.querySelector('#choose').addEventListener('click',()=>{
+      title.textContent='Choose legacy folder';
+      copy.textContent='The native folder picker runs in the app, not the page. Due Good then runs a read-only dry run that reports counts only.';
+      action.textContent='Use sample folder';
+      action.onclick=()=>{
+        document.querySelector('#step').textContent='Folder selected. Its location is never shown or stored.';
+        document.querySelector('#dry').classList.add('shown');
+        document.querySelector('#import').disabled=false;
+      };
+      demo.showModal();
+    });
+    document.querySelector('#import').addEventListener('click',()=>{
+      title.textContent='Import as preview copy';
+      copy.textContent='Due Good holds the browser app\'s lock, copies the whole folder, confirms nothing changed during the copy, validates it, and then adopts it as a read-only preview copy. The original folder is never changed.';
+      action.textContent='Simulate import';
+      action.onclick=()=>{
+        document.querySelector('#status').textContent='Preview copy imported. The original folder is unchanged; later browser changes are not followed.';
+      };
+      demo.showModal();
+    });
+  </script>
+</body>
+</html>

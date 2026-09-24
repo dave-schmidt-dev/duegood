@@ -1,0 +1,44 @@
+name: DueGoodDesktopUITests
+options:
+  deploymentTarget:
+    macOS: "13.0"
+  bundleIdPrefix: com.zerodelta
+targets:
+  DueGoodDesktopUITestsHost:
+    type: application
+    platform: macOS
+    sources:
+      - path: DueGoodDesktopUITestsHost
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.duegood.uitesthost
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+  DueGoodDesktopUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: DueGoodDesktopUITests.swift
+    dependencies:
+      - target: DueGoodDesktopUITestsHost
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.duegood.uitests
+        TEST_TARGET_NAME: DueGoodDesktopUITestsHost
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+schemes:
+  DueGoodDesktopUITests:
+    build:
+      targets:
+        DueGoodDesktopUITests: [test]
+        DueGoodDesktopUITestsHost: [test]
+    test:
+      targets:
+        - DueGoodDesktopUITests
