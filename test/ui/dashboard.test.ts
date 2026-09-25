@@ -484,7 +484,7 @@ function nativeBundle(overrides: Record<string, unknown> = {}): Record<string, u
 
 const setupHandlers = (): DesktopSetupHandlers => ({ onChoose: vi.fn(), onRecheck: vi.fn(), onImport: vi.fn(), onCancel: vi.fn() });
 function setup(overrides: Partial<DesktopSetupState> = {}): DesktopSetupState {
-  return { status: storeStatus(), replacePreview: false, step: "idle", ...overrides };
+  return { status: storeStatus({ state: "preview" }), replacePreview: false, step: "idle", ...overrides };
 }
 function buttons(descriptor: ElementDescriptor): ElementDescriptor[] { return findAll(descriptor, (item) => item.tag === "button"); }
 function button(descriptor: ElementDescriptor, label: string): ElementDescriptor | undefined { return buttons(descriptor).find((item) => item.text === label); }
@@ -722,7 +722,7 @@ describe("desktop transport and first-run screen", () => {
 
   it("shows dry-run counts and enables import only for an importable folder", () => {
     const actions = setupHandlers();
-    const ready = renderDesktopSetup(setup({ status: storeStatus({ legacyRootSelected: true }), step: "ready", report: dryRun() }), actions);
+    const ready = renderDesktopSetup(setup({ status: storeStatus({ state: "preview", legacyRootSelected: true }), step: "ready", report: dryRun() }), actions);
     expect(words(ready)).toContain("Counts only; nothing was copied.");
     expect(words(ready)).toContain("Material files");
     const importButton = button(ready, "Import as preview copy");
@@ -732,7 +732,7 @@ describe("desktop transport and first-run screen", () => {
     button(ready, "Check again")?.on?.click?.(new Event("click"));
     expect(actions.onRecheck).toHaveBeenCalledOnce();
 
-    const refused = renderDesktopSetup(setup({ status: storeStatus({ legacyRootSelected: true }), step: "ready", report: dryRun({ wouldImport: false, legacyLockPresent: true, refusals: { escapingMaterialSymlinks: 2 }, unsupportedTypes: { script: 1 } }) }), actions);
+    const refused = renderDesktopSetup(setup({ status: storeStatus({ state: "preview", legacyRootSelected: true }), step: "ready", report: dryRun({ wouldImport: false, legacyLockPresent: true, refusals: { escapingMaterialSymlinks: 2 }, unsupportedTypes: { script: 1 } }) }), actions);
     expect(button(refused, "Import as preview copy")?.attrs?.disabled).toBe("");
     const refusalRows = findAll(refused, (item) => item.attrs?.class === "setup-counts setup-refusals")[0];
     expect(words(refusalRows!).replace(/\s+/g, " ").trim()).toBe("Material links that leave the materials folder 2");
@@ -743,14 +743,14 @@ describe("desktop transport and first-run screen", () => {
 
   it("shows streamed import progress, errors with refusals, and the replace-preview variant", () => {
     const actions = setupHandlers();
-    const importing = renderDesktopSetup(setup({ status: storeStatus({ legacyRootSelected: true }), step: "importing", report: dryRun(), progress: { phase: "copying", filesDone: 4, filesTotal: 9, bytesDone: 2048, bytesTotal: 4096 } }), actions);
+    const importing = renderDesktopSetup(setup({ status: storeStatus({ state: "preview", legacyRootSelected: true }), step: "importing", report: dryRun(), progress: { phase: "copying", filesDone: 4, filesTotal: 9, bytesDone: 2048, bytesTotal: 4096 } }), actions);
     const bar = findAll(importing, (item) => item.tag === "progress")[0];
     expect(bar?.attrs).toMatchObject({ max: "9", value: "4" });
     expect(words(importing)).toContain("Copying files");
     expect(words(importing)).toContain("4 of 9 files · 2.0 KB of 4.0 KB");
     expect(buttons(importing).every((item) => item.attrs?.disabled === "")).toBe(true);
 
-    const failed = renderDesktopSetup(setup({ status: storeStatus({ legacyRootSelected: true }), error: { message: "The legacy folder changed during the copy. Nothing was changed.", refusals: { malformedJson: 1 }, unsupportedTypes: {} } }), actions);
+    const failed = renderDesktopSetup(setup({ status: storeStatus({ state: "preview", legacyRootSelected: true }), error: { message: "The legacy folder changed during the copy. Nothing was changed.", refusals: { malformedJson: 1 }, unsupportedTypes: {} } }), actions);
     const alert = findAll(failed, (item) => item.attrs?.role === "alert")[0];
     expect(words(alert!)).toContain("The legacy folder changed during the copy.");
     expect(words(alert!)).toContain("Malformed JSON documents");

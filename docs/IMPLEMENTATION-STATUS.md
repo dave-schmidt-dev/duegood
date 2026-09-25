@@ -5,13 +5,14 @@
 The sections below preserve historical implementation evidence and mention retired Worker and
 browser files. They are not current build or launch instructions. The sole product surface is the
 macOS Tauri app; `README.md`, `INVARIANTS.md`, and the top of `docs/IMPLEMENTATION-PLAN.md` define
-the active workflow. The production native store is still empty at the last content-free check,
-and the existing Node listener still owns the live feed port during migration. A private staged
-candidate passed 159 Rust tests with 3 ignored; 44 native UI contract tests, typecheck, lint,
-and dead-code checks also passed. All 46 desktop Playwright cases then passed against the staged
-Tauri UI, along with 175 legacy/local rollback tests. These are synthetic/source checks, not an installed native feed
-refresh or owner acceptance. The old `check:implementation-status` command has been retired with
-the Worker lane.
+the active workflow. The production native store was empty at the last content-free check, and
+the existing Node listener still owns the live feed port during migration. This source candidate
+replaces empty-store legacy import with a user-started iCal connection that atomically creates an
+authoritative native store. The iCal credential is separate from the Canvas API token. Staged
+synthetic checks passed 162 Rust tests with 3 ignored, 44 UI contract tests, 175 local rollback
+tests, and 46 desktop Playwright cases, plus typecheck, lint, and dead-code checks. These are source
+checks, not an installed native feed refresh or owner acceptance. The old
+`check:implementation-status` command retired with the Worker lane.
 
 ## Phase 1 — OAuth and Cloudflare foundation
 

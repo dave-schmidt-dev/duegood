@@ -771,7 +771,22 @@ function mountDesktop(mount: HTMLElement, transport: NativeTransport): void {
     await showCurrent();
   }
 
+  async function connectCalendar(): Promise<void> {
+    if (setup?.status.state !== "empty" || setup.step === "connecting") return;
+    update({ step: "connecting", calendarProgress: undefined, error: undefined }); drawSetup();
+    try {
+      await transport.startIcalRefresh((calendarProgress) => {
+        if (setup?.step === "connecting") { update({ calendarProgress }); scheduleDraw(); }
+      });
+      if (frame !== 0) { window.cancelAnimationFrame(frame); frame = 0; }
+      await showCurrent();
+    } catch (error) {
+      update({ step: "idle", calendarProgress: undefined, error: setupError(error) }); drawSetup();
+    }
+  }
+
   const setupHandlers: DesktopSetupHandlers = {
+    onConnectCalendar() { void connectCalendar(); },
     onChoose() { void choose(); },
     onRecheck() { if (setup !== undefined && setup.step !== "importing") void dryRun(); },
     onImport() { void runImport(); },

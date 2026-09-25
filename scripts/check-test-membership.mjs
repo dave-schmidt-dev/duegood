@@ -107,8 +107,14 @@ let tauriTestCount = 0;
   if (!existsSync(path.join(root, "dist", "public", "index.html"))) list(process.execPath, [path.join(root, "scripts", "build-ui.mjs")]);
   const discovery = list("cargo", ["test", "--locked", "--manifest-path", tauri.cargoManifest, "--features", tauri.features, "--", "--list", "--format", "terse"]);
   const discovered = new Map();
-  for (const match of discovery.matchAll(/^([A-Za-z0-9_]+)::[A-Za-z0-9_:]+: test$/gm)) {
-    const file = `${tauri.sourceRoot}/${match[1]}.rs`;
+  const pathModules = new Map([
+    ["ical::bootstrap", "ical_bootstrap.rs"],
+    ["ical_apply::bootstrap", "ical_apply_bootstrap.rs"],
+  ]);
+  for (const match of discovery.matchAll(/^([A-Za-z0-9_:]+): test$/gm)) {
+    const modulePath = match[1];
+    const parts = modulePath.split("::");
+    const file = `${tauri.sourceRoot}/${pathModules.get(`${parts[0]}::${parts[1]}`) ?? `${parts[0]}.rs`}`;
     discovered.set(file, (discovered.get(file) ?? 0) + 1);
   }
   for (const [file, count] of discovered) {

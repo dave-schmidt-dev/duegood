@@ -1,6 +1,6 @@
 import { desktopRecoveryPanel } from "./components/recovery-panel";
 import type { ElementDescriptor } from "./dom";
-import { DesktopCommandError, type DesktopStoreStatus, type DryRunReport, type ImportProgress, type DesktopSnapshot } from "./transport";
+import { DesktopCommandError, type DesktopStoreStatus, type DryRunReport, type ImportProgress, type DesktopSnapshot, type IcalRefreshProgress } from "./transport";
 
 function element(tag: string, attrs: Record<string, string> = {}, text?: string): ElementDescriptor {
   return { tag, attrs, ...(text !== undefined ? { text } : {}) };
@@ -60,7 +60,8 @@ const PHASE_LABELS: Readonly<Record<ImportProgress["phase"], string>> = {
 export interface DesktopSetupState {
   readonly status: DesktopStoreStatus;
   readonly replacePreview: boolean;
-  readonly step: "idle" | "choosing" | "checking" | "ready" | "importing";
+  readonly step: "idle" | "choosing" | "checking" | "ready" | "importing" | "connecting";
+  readonly calendarProgress?: IcalRefreshProgress;
   readonly report?: DryRunReport;
   readonly progress?: ImportProgress;
   readonly error?: { readonly message: string; readonly refusals: Readonly<Record<string, number>>; readonly unsupportedTypes: Readonly<Record<string, number>> };
@@ -72,6 +73,7 @@ export interface DesktopSetupState {
 }
 
 export interface DesktopSetupHandlers {
+  readonly onConnectCalendar?: () => void;
   readonly onChoose: () => void;
   readonly onRecheck: () => void;
   readonly onImport: () => void;
@@ -125,6 +127,22 @@ export function renderDesktopSetup(state: DesktopSetupState, handlers: DesktopSe
       element("p", {}, "Due Good found its app store but could not read it safely. Nothing was changed, and nothing will be imported over it."),
       ...(status.problem === null ? [] : [element("p", { class: "status", role: "status" }, status.problem)]),
       dataFolder,
+    ]);
+  }
+  if (status.state === "empty") {
+    const connecting = state.step === "connecting";
+    const phase = state.calendarProgress?.phase;
+    const progress = phase === "broker-starting" ? "Opening the calendar connection…"
+      : phase === "waiting-for-calendar" ? "Fetching your calendar…"
+      : phase === "importing" ? "Adding calendar assignments…"
+      : "";
+    return setupPanel("First run", "Connect your Canvas calendar", [
+      element("p", {}, "Due Good will create a fresh local coursework list from your calendar feed. The feed credential is separate from a Canvas API token."),
+      element("p", {}, "Calendar events can supply assignments and dates. They do not include grades, messages, or progress saved in an older Due Good folder."),
+      dataFolder,
+      { tag: "button", attrs: { type: "button", class: "more-action", ...(connecting ? { disabled: "" } : {}) }, text: connecting ? "Connecting…" : "Connect calendar", on: { click: () => handlers.onConnectCalendar?.() } },
+      ...(connecting ? [element("p", { role: "status", "aria-live": "polite" }, progress)] : []),
+      ...(state.error === undefined ? [] : [element("p", { role: "alert" }, state.error.message)]),
     ]);
   }
   const busy = state.step === "choosing" || state.step === "checking" || state.step === "importing";

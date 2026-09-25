@@ -6,17 +6,15 @@ the last content-free check. The existing local Node service owns the live calen
 synthetic tests, but it has not been installed, refreshed from the live feed, or accepted by the
 owner. Keep the old service and its private files until the steps below pass.
 
-## Prepare the native store
+## Prepare a clean calendar store
 
-1. In the installed Tauri app, choose the existing private Due Good folder with the native folder
-   picker. Review the content-free dry run and import it as a **preview**. Do not paste a private
-   path, coursework, or a feed URL into a command, chat, issue, or fixture.
-2. Verify the dashboard shows the expected private coursework and local progress. The preview
-   can be edited locally but cannot refresh. Keep the original folder and the Node service
-   unchanged during this check.
-3. Make a frozen private backup of the legacy layout. In More, use **Choose and compare backup…**
-   and require an exact byte comparison. Promote only through the native confirmation; cancel on
-   any mismatch or unexpected field.
+1. Verify the production native store is still empty without reading or printing private files.
+   Keep the existing private coursework folder and Node service as a rollback source.
+2. Install the exact tested candidate. Its first-run screen offers **Connect calendar**, with no
+   legacy-folder picker or Canvas API token request. Do not paste a feed URL or token into the app.
+3. After the port handoff below, connect the calendar. A useful validated feed atomically creates
+   the authoritative local store. Confirm assignment counts and representative owner-selected
+   records; grades, messages, and prior local completion are not supplied by iCal.
 
 ## Qualify the Tauri-only candidate
 
@@ -26,10 +24,9 @@ owner. Keep the old service and its private files until the steps below pass.
 2. Build and install using the project's staged build and installer. Verify the bundle ID
    `com.zerodelta.duegood`, signed candidate bytes, and embedded asset hashes. Launch by bundle
    ID using `open -b com.zerodelta.duegood`. Confirm the dashboard opens directly when the
-   native store exists; the import/recovery screen remains for an empty or damaged store.
-3. Confirm the authoritative native store and a private recovery snapshot are present. Compare
-   content-free counts and representative owner-selected records with the frozen backup. Do not
-   silently substitute an older preview or a different store root.
+   native store exists; calendar connection appears for an empty store and recovery for damage.
+3. Confirm the authoritative native store after the first feed. Compare content-free counts and
+   representative owner-selected records. Do not substitute an older preview or another root.
 
 ## Hand off the calendar port
 
@@ -40,16 +37,16 @@ owner. Keep the old service and its private files until the steps below pass.
    display the feed URL or invoke a secret-printing BWS command. The native receiver binds
    loopback before the helper starts, accepts one bounded POST, and applies observations only
    after the helper exits successfully.
-3. In the installed app, run one calendar refresh. Require a complete result, content-free
+3. In the installed app, connect the calendar, then run one repeat refresh. Require complete results, content-free
    counts, preserved student progress, and no unexpected duplicate identities. Ambiguous events
    must be held; rolling-window omissions must remove zero records. Inspect the dashboard with
    the owner before considering the handoff accepted.
 
 ## Rollback and acceptance
 
-- On a failed native check, stop native writes. Keep the frozen backup and the old service files.
-  Use the native demotion and frozen-export flow before restoring any legacy writer; require exact
-  layout equality. Do not overwrite the only private copy.
+- On a failed native check, stop native writes. Keep the old service files. Preserve the new
+  native store for diagnosis and explicitly select which source to resume; never overwrite either
+  private copy implicitly.
 - Only after the owner accepts the native dashboard and live calendar refresh should the legacy
   launchd service and source lane be retired. Preserve the private backup through the agreed
   rollback period. Do not claim an installed, launched, live, or accepted result from synthetic

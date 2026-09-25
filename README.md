@@ -6,19 +6,19 @@ The dashboard provides Timeline, Grades, Inbox, Completed, Courses, Library, Act
 
 ## Current state
 
-- The installed bundle identifier is `com.zerodelta.duegood`. At the last content-free check, its production store was empty. An empty or damaged store opens the native import/recovery screen. Once a preview or authoritative store exists, launch goes directly to the dashboard.
+- The installed bundle identifier is `com.zerodelta.duegood`. At the last content-free check, its production store was empty. This source candidate opens calendar connection for an empty store and recovery for a damaged store; the installed app has not yet been upgraded to this candidate.
 - The existing local Node service still owns the live iCal feed on `127.0.0.1:2137` during the reversible migration. Its first attended fetch on 2026-09-25 accepted 57 assignment observations and held one unverified event. Those facts are in the service's separate private store, not in the installed Tauri store.
-- A Tauri-only iCal receiver and reconciler are being verified in source. Synthetic tests and a staged build do not establish an installed native feed refresh. The listener handoff, private import, and live Tauri acceptance remain attended cutover steps.
+- The Tauri-only iCal receiver can create an authoritative store from a validated first feed, then reconcile later feeds into that store. Synthetic tests do not establish an installed native feed refresh. The listener handoff and live Tauri acceptance remain attended cutover steps.
 
-## First import and recovery
+## First run and recovery
 
-Use the native folder picker to select the existing private coursework root. A dry run reports counts and refusals before copying into a preview store. Promotion requires an exact frozen backup and owner confirmation; it enables authoritative native writes. The app never scans for or silently adopts a private source folder. The import/recovery route remains available when the store is empty or damaged.
+On an empty store, use **Connect calendar** in the native app. A successful, useful feed creates the local store without a Canvas API token or legacy-folder import. Calendar data does not contain grades, messages, or progress saved in an older Due Good folder. The older private source stays untouched. Damaged-store recovery and guarded preview replacement remain separate paths.
 
 The private coursework, grades, messages, feed URL, credentials, and screenshots do not belong in this repository, fixtures, CI output, or public issues. Public fixtures are synthetic.
 
 ## Calendar feed
 
-The feed URL lives only in Bitwarden Secrets Manager. The fixed `duegood-canvas-ical` broker consumer pins `scripts/sync-canvas-ical.mjs` and supplies the URL to that helper. The helper fetches only the reviewed Marymount Canvas calendar URL family and posts bounded calendar bytes to the native one-shot localhost receiver after the port handoff. Tauri normalizes and applies accepted observations under its store lock; unsupported or ambiguous events are held, and rolling-window omissions never delete coursework. Native feed refresh requires an authoritative store with verified course and institution scope.
+The feed URL lives only in Bitwarden Secrets Manager, separate from the Canvas API token. The fixed `duegood-canvas-ical` broker consumer pins `scripts/sync-canvas-ical.mjs` and supplies the URL to that helper. The helper fetches only the reviewed Marymount Canvas calendar URL family and posts bounded calendar bytes to the native one-shot localhost receiver after the port handoff. Tauri stages a fresh store only when empty, then applies later accepted observations under its store lock; unsupported or ambiguous events are held, and rolling-window omissions never delete coursework. Course labels initially use Canvas IDs because the feed does not establish official course names.
 
 ## Build and verify
 

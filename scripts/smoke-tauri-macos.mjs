@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,7 +9,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TEST_BUNDLE_ID = "com.zerodelta.duegood.test";
 const PROJECT = path.join(ROOT, "test/native/macos/DueGoodDesktopUITests.xcodeproj");
 const SCHEME = "DueGoodDesktopUITests";
-const TEST_CASE = `${SCHEME}/DueGoodDesktopUITests/testFirstRunImportMutationRecoveryUnavailableRefreshAndRelaunch`;
+const TEST_CASE = `${SCHEME}/DueGoodDesktopUITests/testFirstRunCalendarConnectionWithoutLegacyImport`;
 const LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 const testAppControlSwift = String.raw`
 import AppKit
@@ -192,49 +192,6 @@ function assertPrivateDirectory(directory) {
   if (mode !== 0o700) chmodSync(directory, 0o700);
 }
 
-function instantiate(value, index) {
-  if (typeof value === "string") return value === "{n#}" ? index : value.replaceAll("{n}", String(index));
-  if (Array.isArray(value)) return value.map((item) => instantiate(item, index));
-  if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, instantiate(item, index)]));
-  return value;
-}
-
-function materializeSyntheticRoot(destination) {
-  const fixturePath = path.join(ROOT, "test/fixtures/tauri-legacy-source.json");
-  const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
-  mkdirSync(destination, { mode: 0o700 });
-  for (const entry of fixture.entries) {
-    const segments = entry.path.split(/[\\/]/);
-    if (path.isAbsolute(entry.path) || segments.some((segment) => segment === ".." || segment === "")) {
-      throw new Error("Synthetic fixture contains an unsafe path.");
-    }
-    const target = path.join(destination, ...segments);
-    const relative = path.relative(destination, target);
-    if (relative.startsWith(`..${path.sep}`) || relative === "..") throw new Error("Synthetic fixture escaped its private root.");
-    let parent = destination;
-    for (const segment of segments.slice(0, -1)) {
-      parent = path.join(parent, segment);
-      mkdirSync(parent, { recursive: true, mode: 0o700 });
-      chmodSync(parent, 0o700);
-    }
-    if (Object.hasOwn(entry, "symlink")) {
-      if (path.isAbsolute(entry.symlink) || entry.symlink.split(/[\\/]/).includes("..")) throw new Error("Synthetic fixture contains an unsafe link.");
-      symlinkSync(entry.symlink, target);
-    } else {
-      let contents;
-      if (Object.hasOwn(entry, "json")) contents = `${JSON.stringify(entry.json, null, 2)}\n`;
-      else if (Object.hasOwn(entry, "jsonRepeat")) {
-        const { count, template } = entry.jsonRepeat;
-        contents = `${JSON.stringify(Array.from({ length: count }, (_, index) => instantiate(template, index + 1)), null, 2)}\n`;
-      } else if (Object.hasOwn(entry, "text")) contents = entry.text;
-      else if (Object.hasOwn(entry, "hex")) contents = Buffer.from(entry.hex.replace(/\s+/g, ""), "hex");
-      else throw new Error("Synthetic fixture contains an unknown entry type.");
-      writeFileSync(target, contents, { mode: 0o600, flag: "wx" });
-      chmodSync(target, 0o600);
-    }
-  }
-}
-
 async function main() {
   if (process.platform !== "darwin") throw new Error("The macOS UI smoke requires macOS and Xcode.");
   if (!process.env.DUEGOOD_TEST_APP_PATH) throw new Error("Set DUEGOOD_TEST_APP_PATH to the staged test-identifier Due Good.app.");
@@ -252,7 +209,6 @@ async function main() {
   const tempRoot = mkdtempSync(path.join(os.tmpdir(), "duegood-tauri-ui-smoke-"));
   chmodSync(tempRoot, 0o700);
   const dataRoot = path.join(tempRoot, TEST_BUNDLE_ID);
-  const legacyRoot = path.join(tempRoot, "synthetic-legacy");
   let clipboard;
   let registrationAttempted = false;
   let uiRunStarted = false;
@@ -266,8 +222,7 @@ async function main() {
     });
     progress("Saving the current pasteboard privately.");
     clipboard = await runSwift(pasteboardSwift, tempRoot, { env: { ...process.env, DUEGOOD_PASTEBOARD_MODE: "save" }, maxBytes: 24 * 1024 * 1024 });
-    progress("Preparing the synthetic legacy tree and isolated test data root.");
-    materializeSyntheticRoot(legacyRoot);
+    progress("Preparing the isolated test data root.");
     assertPrivateDirectory(tempRoot);
     registrationAttempted = true;
     progress("Registering the isolated test app with Launch Services.");
@@ -280,9 +235,8 @@ async function main() {
       DUEGOOD_TEST_APP_PATH: appPath,
       TEST_RUNNER_DUEGOOD_TEST_APP_PATH: appPath,
       TEST_RUNNER_DUEGOOD_TEST_DATA_ROOT: dataRoot,
-      TEST_RUNNER_DUEGOOD_SYNTHETIC_LEGACY_ROOT: legacyRoot,
     };
-    progress("Running the isolated import, navigation, mutation, recovery, availability, and relaunch smoke.");
+    progress("Running the isolated calendar first-run and relaunch smoke.");
     uiRunStarted = true;
     await runStreaming("/usr/bin/xcodebuild", [
       "test",

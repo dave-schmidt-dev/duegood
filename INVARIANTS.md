@@ -19,7 +19,7 @@ always_active: true
 rationale: Private coursework, grades, messages, schedules, feeds, and credentials remain in the owner's private stores. The WebView receives bounded documents through fixed commands, not filesystem paths or secrets. The fixed BWS broker injects the feed URL only into its pinned helper; progress and errors carry no feed content.
 
 ### INV-3 — Source facts cannot overwrite student progress
-area: ["src-tauri/src/import.rs", "src-tauri/src/store.rs", "src-tauri/src/reconcile.rs", "src-tauri/src/ical_apply.rs", "src/shared/dashboard-projection.ts"]
+area: ["src-tauri/src/import.rs", "src-tauri/src/store.rs", "src-tauri/src/reconcile.rs", "src-tauri/src/ical_apply.rs", "src-tauri/src/ical_apply_bootstrap.rs", "src/shared/dashboard-projection.ts"]
 gate_test: npm run test:tauri, npm run test:ui
 threshold: 3
 rationale: Canvas and calendar facts, Canvas submission state, local completion, notes, discussion checks, and manual grades are separate. Native import copies the legacy source without changing it; refresh preserves student fields and unknown extensions.
@@ -37,7 +37,7 @@ threshold: 1
 rationale: The interface runs inside Tauri and calls native commands. Browser authentication, Worker deployment, and HTTP dashboard routes do not ship as product lanes. The temporary migration listener is retired only after a verified native handoff.
 
 ### INV-6 — Native writes are durable and preserve unmanaged data
-area: ["src-tauri/src/store.rs", "src-tauri/src/locking.rs", "src-tauri/src/import.rs", "src-tauri/src/snapshots.rs", "src-tauri/src/export.rs", "src-tauri/src/ical_apply.rs"]
+area: ["src-tauri/src/store.rs", "src-tauri/src/locking.rs", "src-tauri/src/import.rs", "src-tauri/src/snapshots.rs", "src-tauri/src/export.rs", "src-tauri/src/ical_apply.rs", "src-tauri/src/ical_apply_bootstrap.rs"]
 gate_test: npm run test:tauri
 threshold: 3
 rationale: Writes use an OS lock, exact-byte preconditions, temporary files, fsync, and atomic rename. Import leaves the source unchanged, archives a replaced preview, and refuses to replace an authoritative store. Snapshots and owner-selected exports preserve recovery options.
@@ -78,11 +78,11 @@ always_active: true
 rationale: Build and tests run in a private staged candidate. Installation verifies the candidate, signature, bundle identity, and embedded frontend hashes. Tests, installation, launch, live behavior, and owner acceptance are distinct evidence.
 
 ### INV-12 — Store authority changes only through the owner flow
-area: ["src-tauri/src/commands.rs", "src-tauri/src/store.rs", "src-tauri/src/export.rs", "src/ui/app.ts", "src/ui/transport.ts"]
+area: ["src-tauri/src/commands.rs", "src-tauri/src/store.rs", "src-tauri/src/export.rs", "src-tauri/src/ical_apply_bootstrap.rs", "src/ui/app.ts", "src/ui/transport.ts"]
 gate_test: npm run test:tauri, npm run test:ui, npm run test:desktop-ui
 threshold: 1
 always_active: true
-rationale: Promotion requires a frozen backup comparison, one-use proof, and native confirmation. Demotion retains a recovery copy and disables refresh before a verified rollback export. The WebView cannot provide a path or confirmation flag.
+rationale: An empty store may become authoritative only from a user-started, useful validated iCal fetch staged before adoption. Existing stores cannot be overwritten by that path. Legacy preview promotion still requires a frozen backup comparison, one-use proof, and native confirmation; demotion retains recovery bytes. The WebView cannot provide a path or confirmation flag.
 
 ### INV-13 — Source identity never replaces local identity
 area: ["src-tauri/src/reconcile.rs", "src-tauri/src/ical_apply.rs", "src-tauri/src/ical_apply_refs.rs", "src/shared/pending-links.ts"]

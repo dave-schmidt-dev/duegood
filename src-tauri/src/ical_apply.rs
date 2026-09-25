@@ -1,8 +1,8 @@
 //! Bounded application of normalized iCal facts to the native coursework store.
 //!
-//! This module only applies observations to an existing authoritative store. It never bootstraps
-//! a store, imports a legacy folder, removes rolling-window omissions, or writes student-owned
-//! progress and notes.
+//! This module applies observations to an authoritative store or creates one from a verified
+//! first calendar fetch. It never imports a legacy folder, removes rolling-window omissions,
+//! or overwrites student-owned progress and notes.
 
 use std::fmt;
 
@@ -15,6 +15,8 @@ use crate::store::{
     atomic_write, node_json_bytes, sha256_hex, Store, StoreCondition, StoreError, StoreState,
 };
 
+#[path = "ical_apply_bootstrap.rs"]
+mod bootstrap;
 #[path = "ical_apply_facts.rs"]
 mod facts;
 #[path = "ical_apply_merge.rs"]
@@ -24,6 +26,7 @@ mod options;
 #[path = "ical_apply_refs.rs"]
 mod refs;
 
+pub(crate) use bootstrap::bootstrap_normalization;
 use facts::{valid_timestamp, validate_text};
 use merge::apply_to_document;
 pub(crate) use options::normalization_options;

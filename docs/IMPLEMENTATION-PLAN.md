@@ -1,5 +1,13 @@
 # Due Good local Marymount replacement plan
 
+## 2026-09-25 correction: clean iCal first run
+
+The owner rejected the legacy-folder import as the normal first-run path. The iCal feed is a separate BWS secret from the Canvas API token. Preserve the legacy source and any existing native store, but bootstrap a new authoritative native store directly from one validated iCal fetch when the app store is empty. Do not require a Canvas API token or legacy import. A damaged, preview, or authoritative store is never overwritten by bootstrap.
+
+**Confirmed:** the fixed iCal BWS consumer and native receiver exist; the current normalizer requires an imported course map and the native store is empty. **Changed:** the earlier import-first cutover sequence below is superseded for a clean first run. **Not applicable:** Canvas API token as a prerequisite for calendar setup. **Not verifiable yet:** a live feed import into an installed candidate and owner acceptance; synthetic tests cannot prove either.
+
+Implement in this order: (1) derive bounded course identities from validated links on the fixed Canvas origin and use a stable local key; hold unsupported events; (2) stage a minimal coursework document, course map, and manifest, then atomically adopt it only if the store is still empty; (3) reuse native iCal reconciliation for the first import and later refresh; (4) replace the empty-state legacy setup UI with a calendar connection action and content-free progress, while retaining recovery for damaged stores; (5) run staged Rust, UI, and headless desktop gates. Course labels may initially show Canvas course IDs because an iCal feed is not an authoritative source of course names, grades, messages, or prior student progress. The legacy source remains a private recovery reference, not an onboarding dependency. Live port handoff and installed-app acceptance remain separate gates.
+
 ## 2026-09-25 owner pivot: Tauri-only daily application
 
 The owner has now selected the Tauri desktop application as the sole product surface and asked to remove the browser/Worker lanes and the normal-path one-time setup screen. This supersedes earlier browser and Cloudflare delivery goals below. Preserve the running local service until a verified native cutover because it currently holds the only live iCal fetch/import path and the production Tauri store is empty. A desktop WebView and `dist/public` are required Tauri assets; they are not a separate browser product.

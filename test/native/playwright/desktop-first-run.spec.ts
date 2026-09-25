@@ -102,7 +102,7 @@ function installTauriMock(setup: Scenario): void {
     bytes: state === "empty" ? null : 20_480,
     canvasRefreshEnabled,
     refreshAvailable: availabilityIsReady() && state === "authoritative" && canvasRefreshEnabled && setup.helperReady,
-    icalRefreshAvailable: availabilityIsReady() && state === "authoritative" && setup.icalReady,
+    icalRefreshAvailable: availabilityIsReady() && (state === "empty" || state === "authoritative") && setup.icalReady,
     snapshotInProgress: false,
     problem: setup.problem,
   });
@@ -142,6 +142,7 @@ function installTauriMock(setup: Scenario): void {
         callback?.({ index: 0, message: { phase: "waiting-for-calendar" } });
         callback?.({ index: 1, message: { phase: "importing" } });
         callback?.({ index: 2, end: true });
+        if (state === "empty") state = "authoritative";
         return { status: "complete", updatedAt: "2026-09-25T12:00:00Z", added: 2, updated: 1, held: 0, removed: 0 };
       }
       if (command === "choose_legacy_root") { selected = true; return { selected: true }; }
@@ -321,58 +322,26 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   expect(overflow).toBeLessThanOrEqual(0);
 }
 
-const importButton = (page: Page) => page.getByRole("button", { name: "Import as preview copy" });
+const importButton = (page: Page) => page.getByRole("button", { name: "Archive and replace preview copy" });
 const dryRunSection = (page: Page) => page.getByRole("region", { name: "Dry run" });
 
 for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "mobile", width: 390, height: 844 }] as const) {
   test.describe(`desktop app screens at ${viewport.name} width`, () => {
     test.use({ viewport: { width: viewport.width, height: viewport.height } });
 
-    test("first run: fixed folder, folder picker, counts-only dry run, streamed import, writable preview", async ({ page }) => {
-      const apiRequests = await openDesktop(page, scenario({ holdImport: true }));
-      await expect(page.getByRole("heading", { level: 1, name: "Import existing coursework" })).toBeVisible();
-      const appDataBox = page.locator(".setup-choice").filter({ hasText: "App data folder" });
-      await expect(appDataBox.locator(".setup-path")).toHaveText(DATA_FOLDER);
-      await expect(appDataBox).toContainText("It cannot be changed.");
-      await expect(page.locator(".preview-label")).toContainText("Preview copy");
-      await expect(page.locator(".preview-label")).toContainText("It does not follow later changes in the legacy local source. Personal progress edits stay in this copy.");
-      await expect(page.getByText(/change storage location/i)).toHaveCount(0);
-      await expect(importButton(page)).toBeDisabled();
+    test("first run: calendar connection creates the native dashboard without a legacy folder", async ({ page }) => {
+      const apiRequests = await openDesktop(page, scenario({ icalReady: true }));
+      await expect(page.getByRole("heading", { level: 1, name: "Connect your Canvas calendar" })).toBeVisible();
+      await expect(page.getByText("The feed credential is separate from a Canvas API token.", { exact: false })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Choose legacy folder…" })).toHaveCount(0);
       await expectNoHorizontalOverflow(page);
       expect(await automaticAccessibilityViolations(page)).toEqual([]);
-
-      await page.getByRole("button", { name: "Choose legacy folder…" }).click();
-      await expect(page.locator(".setup-step")).toHaveText("Folder selected. Its location is never shown or stored.");
-      await expect(dryRunSection(page)).toContainText("Counts only; nothing was copied.");
-      const rows = await dryRunSection(page).locator(".setup-counts li").allInnerTexts();
-      expect(rows.length).toBeGreaterThan(0);
-      for (const row of rows) expect(row.replace(/\s+/g, " ").trim()).toMatch(/^[A-Z][A-Za-z ]+ \d+$/);
-      await expect(dryRunSection(page).locator(".setup-counts li").filter({ hasText: "Material files" })).toContainText("2");
-      await expect(importButton(page)).toBeEnabled();
+      await page.getByRole("button", { name: "Connect calendar" }).click();
+      await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
+      await expect(page.locator(".top-actions .preview-badge")).toHaveCount(0);
       await expectNoHorizontalOverflow(page);
-
-      await importButton(page).click();
-      const progress = page.locator(".setup-progress");
-      await expect(progress).toContainText("Copying files");
-      await expect(progress).toContainText("2 of 5 files");
-      await expect(progress.locator("progress")).toHaveAttribute("value", "2");
-      await expect(progress.locator("progress")).toHaveAttribute("max", "5");
-      await expect(importButton(page)).toBeDisabled();
-      await expect(page.getByRole("button", { name: "Choose legacy folder…" })).toBeDisabled();
-      await page.waitForFunction(() => typeof (window as unknown as { __releaseImport?: unknown }).__releaseImport === "function");
-      await page.evaluate(() => (window as unknown as { __releaseImport: () => void }).__releaseImport());
-
-      await expect(page.locator(".top-actions .preview-badge")).toHaveText("Preview copy");
-      await expect(page.locator(".sync-note")).toHaveText(/^Imported /);
-      const checkboxes = page.locator("main input[type=checkbox]");
-      expect(await checkboxes.count()).toBeGreaterThan(0);
-      expect(await checkboxes.evaluateAll((inputs) => inputs.some((input) => !(input as HTMLInputElement).disabled))).toBe(true);
-      await expect(page.getByRole("button", { name: /refresh/i })).toHaveCount(0);
-      await expectNoHorizontalOverflow(page);
-
       const calls = await expectNoPathArguments(page);
-      expect(calls.map((call) => call.command)).toEqual(["store_status", "choose_legacy_root", "dry_run_import", "import_legacy_root", "store_status", "read_dashboard_documents", "read_avatar_bytes"]);
-      expect(calls[3]?.args.replacePreview).toBe(false);
+      expect(calls.map((call) => call.command)).toEqual(["store_status", "start_ical_refresh", "store_status", "read_dashboard_documents", "read_avatar_bytes"]);
       expect(apiRequests).toEqual([]);
     });
 
@@ -406,7 +375,9 @@ for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "
     });
 
     test("import refusals show named counts and never start or keep a partial import", async ({ page }) => {
-      await openDesktop(page, scenario({ dryRunRefusals: { escapingMaterialSymlinks: 2, malformedJson: 1 } }));
+      await openDesktop(page, scenario({ state: "preview", dryRunRefusals: { escapingMaterialSymlinks: 2, malformedJson: 1 } }));
+      await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "More", exact: true }).click();
+      await page.getByRole("button", { name: "Replace preview copy…" }).click();
       await page.getByRole("button", { name: "Choose legacy folder…" }).click();
       const refusals = dryRunSection(page).locator(".setup-refusals li");
       await expect(refusals).toHaveCount(2);
@@ -420,13 +391,15 @@ for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "
     });
 
     test("an import refused after the dry run reports named counts and keeps the selection", async ({ page }) => {
-      await openDesktop(page, scenario({ importError: { code: "refused", message: "The legacy folder cannot be imported as it is. Nothing was changed.", refusals: { duplicateItemIds: 3 } } }));
+      await openDesktop(page, scenario({ state: "preview", importError: { code: "refused", message: "The legacy folder cannot be imported as it is. Nothing was changed.", refusals: { duplicateItemIds: 3 } } }));
+      await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "More", exact: true }).click();
+      await page.getByRole("button", { name: "Replace preview copy…" }).click();
       await page.getByRole("button", { name: "Choose legacy folder…" }).click();
       await importButton(page).click();
       const alert = page.getByRole("alert");
       await expect(alert).toContainText("The legacy folder cannot be imported as it is. Nothing was changed.");
       await expect(alert.locator(".setup-refusals li")).toHaveText([/Duplicate item IDs\s*3/]);
-      await expect(page.getByRole("heading", { level: 1, name: "Import existing coursework" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Replace the preview copy" })).toBeVisible();
       await expect(page.locator(".setup-step")).toHaveText("Folder selected. Its location is never shown or stored.");
       await expect(page.getByRole("button", { name: "Check again" })).toBeVisible();
       await expect(importButton(page)).toBeDisabled();

@@ -44,7 +44,7 @@
   "native": {
     "smokeRunner": "test:tauri:macos",
     "smokeScript": "scripts/smoke-tauri-macos.mjs",
-    "smokeCase": "testFirstRunImportMutationRecoveryUnavailableRefreshAndRelaunch",
+    "smokeCase": "testFirstRunCalendarConnectionWithoutLegacyImport",
     "productionRunner": "check:production-launch",
     "productionScript": "scripts/check-production-launch.mjs",
     "productionCase": "testProductionIdentifierLaunchOnly",
@@ -84,7 +84,9 @@
       "src-tauri/src/snapshots.rs": 1,
       "src-tauri/src/store.rs": 21,
       "src-tauri/src/embedded_asset_tests.rs": 1,
-      "src-tauri/src/ical_receiver.rs": 6
+      "src-tauri/src/ical_receiver.rs": 6,
+      "src-tauri/src/ical_bootstrap.rs": 1,
+      "src-tauri/src/ical_apply_bootstrap.rs": 2
     }
   },
   "fixtures": [

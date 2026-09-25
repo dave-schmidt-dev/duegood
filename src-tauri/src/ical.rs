@@ -4,6 +4,8 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+#[path = "ical_bootstrap.rs"]
+mod bootstrap;
 #[path = "ical_date.rs"]
 mod date;
 #[path = "ical_parse.rs"]
@@ -117,6 +119,12 @@ pub fn normalize_canvas_ical(
     options: &IcalNormalizeOptions,
 ) -> Result<IcalNormalization, IcalNormalizationError> {
     normalize::normalize_canvas_ical(input, options)
+}
+
+/// Builds the initial course scope from canonical links in a bounded Canvas calendar feed.
+/// Course labels are deliberately generic: iCal does not establish their display names.
+pub fn bootstrap_options(input: &[u8]) -> Result<IcalNormalizeOptions, IcalNormalizationError> {
+    bootstrap::bootstrap_options(input)
 }
 
 #[cfg(test)]
