@@ -4,8 +4,9 @@
 installed Tauri app created its native coursework store from iCal. The old local Node listener
 was disabled and stopped, freeing `127.0.0.1:2137`, while its launchd plist and private source
 remain for rollback. The owner's screenshot shows a complete native refresh with one held event,
-and exposed a date-only display bug: Sunday appeared on Saturday at 8:00 PM. A corrected source
-candidate needs its staged gate, install, and live display check before acceptance.
+and exposed a date-only display bug: Sunday appeared on Saturday at 8:00 PM. Corrected candidate
+`75ef537` passed the full staged gate, was installed with signature and embedded asset checks,
+and launched against the preserved native store. Owner visual acceptance remains open.
 
 ## Prepare a clean calendar store
 

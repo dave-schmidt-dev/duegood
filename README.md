@@ -6,7 +6,7 @@ The dashboard provides Timeline, Grades, Inbox, Completed, Courses, Library, Act
 
 ## Current state
 
-- The installed bundle identifier is `com.zerodelta.duegood`. The first iCal-backed native store is live; the owner reported Sunday date-only events appearing in Saturday's row at 8:00 PM. This source candidate corrects date-only display without changing the stored feed facts. The corrected candidate still needs an installed check.
+- The installed bundle identifier is `com.zerodelta.duegood`. The first iCal-backed native store is live. Candidate `75ef537` corrects the reported Sunday date-only events appearing in Saturday's row at 8:00 PM; it is installed and running against the preserved native store. Owner visual acceptance of the correction remains open.
 - The old local Node listener has been disabled and stopped, leaving `127.0.0.1:2137` for the native one-shot receiver. Its launchd plist and private coursework source remain for rollback.
 - The native feed refresh has run in the installed app and reported a complete refresh with one held event in the owner's screenshot. Repeat-refresh identity and owner acceptance remain open.
 
