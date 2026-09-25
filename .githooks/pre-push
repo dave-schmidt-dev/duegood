@@ -1,4 +1,4 @@
 #!/bin/sh
 set -eu
 
-npm run test:all
+npm run stage:tauri -- --skip-preflight --test test:all
