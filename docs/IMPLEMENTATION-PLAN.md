@@ -1,5 +1,9 @@
 # Due Good local Marymount replacement plan
 
+## 2026-09-25 calendar date display correction
+
+The installed iCal-first app showed Sunday date-only assignments on Saturday at 8:00 PM in New York. A synthetic reproduction confirms that JavaScript parses `2026-09-27` as UTC midnight, while the timeline uses local date and time accessors. Keep iCal `VALUE=DATE` as a calendar day, not an instant. Correct the embedded dashboard's date parsing so date-only values render and group on their stated day without an invented 8:00 PM deadline. Preserve explicitly timed values and countdown behavior. Add focused UI and desktop regressions, then run the staged candidate gate before an installed update. Do not read or publish private coursework to diagnose this.
+
 ## 2026-09-25 correction: clean iCal first run
 
 The owner rejected the legacy-folder import as the normal first-run path. The iCal feed is a separate BWS secret from the Canvas API token. Preserve the legacy source and any existing native store, but bootstrap a new authoritative native store directly from one validated iCal fetch when the app store is empty. Do not require a Canvas API token or legacy import. A damaged, preview, or authoritative store is never overwritten by bootstrap.

@@ -1,10 +1,11 @@
 # Due Good Tauri cutover
 
-**Status (2026-09-25): pending.** The installed production app has no native store manifest at
-the last content-free check. The existing local Node service owns the live calendar port
-`127.0.0.1:2137` and its own private coursework store. The revised Tauri-only source has passed
-synthetic tests, but it has not been installed, refreshed from the live feed, or accepted by the
-owner. Keep the old service and its private files until the steps below pass.
+**Status (2026-09-25): installed and live refresh observed; owner acceptance pending.** The
+installed Tauri app created its native coursework store from iCal. The old local Node listener
+was disabled and stopped, freeing `127.0.0.1:2137`, while its launchd plist and private source
+remain for rollback. The owner's screenshot shows a complete native refresh with one held event,
+and exposed a date-only display bug: Sunday appeared on Saturday at 8:00 PM. A corrected source
+candidate needs its staged gate, install, and live display check before acceptance.
 
 ## Prepare a clean calendar store
 

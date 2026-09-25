@@ -6,9 +6,9 @@ The dashboard provides Timeline, Grades, Inbox, Completed, Courses, Library, Act
 
 ## Current state
 
-- The installed bundle identifier is `com.zerodelta.duegood`. At the last content-free check, its production store was empty. This source candidate opens calendar connection for an empty store and recovery for a damaged store; the installed app has not yet been upgraded to this candidate.
-- The existing local Node service still owns the live iCal feed on `127.0.0.1:2137` during the reversible migration. Its first attended fetch on 2026-09-25 accepted 57 assignment observations and held one unverified event. Those facts are in the service's separate private store, not in the installed Tauri store.
-- The Tauri-only iCal receiver can create an authoritative store from a validated first feed, then reconcile later feeds into that store. Synthetic tests do not establish an installed native feed refresh. The listener handoff and live Tauri acceptance remain attended cutover steps.
+- The installed bundle identifier is `com.zerodelta.duegood`. The first iCal-backed native store is live; the owner reported Sunday date-only events appearing in Saturday's row at 8:00 PM. This source candidate corrects date-only display without changing the stored feed facts. The corrected candidate still needs an installed check.
+- The old local Node listener has been disabled and stopped, leaving `127.0.0.1:2137` for the native one-shot receiver. Its launchd plist and private coursework source remain for rollback.
+- The native feed refresh has run in the installed app and reported a complete refresh with one held event in the owner's screenshot. Repeat-refresh identity and owner acceptance remain open.
 
 ## First run and recovery
 

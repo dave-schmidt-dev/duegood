@@ -204,6 +204,24 @@ describe("dashboard production UI contract", () => {
     expect(lane === undefined ? [] : findAll(lane, (item) => (item.attrs?.class ?? "").includes("event-card"))).toHaveLength(2);
   });
 
+  it("keeps date-only Sunday work on Sunday without inventing a time or countdown instant", () => {
+    const sunday: DashboardEvent = { id: "sunday", courseId: "530", courseCode: "IT530", kind: "deadline", title: "Sunday assignment", startsAt: "2026-09-27", completed: false };
+    const now = Date.parse("2026-09-25T12:00:00-04:00");
+    const data = { ...DATA, events: [sunday] };
+    const dashboard = renderDashboard({ ...state("timeline"), now, data }, handlers);
+    const saturday = findAll(dashboard, (item) => item.attrs?.["data-day"] === "2026-09-26")[0];
+    const sundaySlot = findAll(dashboard, (item) => item.attrs?.["data-day"] === "2026-09-27")[0];
+    expect(findAll(saturday!, (item) => item.attrs?.class?.includes("event-card") === true)).toHaveLength(0);
+    const card = findAll(sundaySlot!, (item) => item.attrs?.class?.includes("event-card") === true)[0]!;
+    expect(words(card)).toContain("Time not specified");
+    expect(words(card)).not.toMatch(/8:\d\d\s*PM/);
+    expect(countdownText(now, sunday.startsAt)).toBe("Due in 2 days");
+    expect(countdownText(Date.parse("2026-09-27T18:00:00-04:00"), sunday.startsAt)).toBe("Due today");
+    expect(formatAssignmentCopyText(sunday)).toContain("Due date: Sep 27");
+    expect(formatAssignmentCopyText(sunday)).not.toMatch(/8:\d\d\s*PM/);
+    expect(words(findAll(dashboard, (item) => item.attrs?.["data-due-item"] === "sunday")[0]!)).toContain("Due in 2 days");
+  });
+
   it("shows a real duration to the next deadline", () => {
     expect(countdownText(NOW, "2026-09-21T23:59:00-04:00")).toBe("1d 11h");
     expect(words(renderDashboard(state("timeline"), handlers))).toContain("8h 0m");
