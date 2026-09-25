@@ -12,7 +12,7 @@ threshold: 3
 rationale: Network, process, import, snapshot, and refresh work surfaces content-free progress and a terminal result. A timeout or incomplete source cannot appear as success.
 
 ### INV-2 — Private data and credentials stay out of client, logs, and Git
-area: ["scripts/check-public-tree.mjs", "scripts/sync-canvas-ical.mjs", "scripts/stage-tauri-candidate.mjs", "src-tauri/src/ical_receiver.rs", "src-tauri/src/commands.rs", "src-tauri/src/config.rs", "src-tauri/src/documents.rs", "src-tauri/src/resources.rs", "src-tauri/src/export.rs", "src/ui/transport.ts"]
+area: ["scripts/check-public-tree.mjs", "scripts/sync-canvas-ical.mjs", "scripts/stage-tauri-candidate.mjs", "src-tauri/src/ical_receiver.rs", "src-tauri/src/commands.rs", "src-tauri/src/commands_ical.rs", "src-tauri/src/config.rs", "src-tauri/src/documents.rs", "src-tauri/src/resources.rs", "src-tauri/src/export.rs", "src/ui/transport.ts"]
 gate_test: npm run check:public-tree, npm run test:ui, npm run test:tauri
 threshold: 1
 always_active: true
@@ -50,14 +50,14 @@ always_active: true
 rationale: Cloudflare Worker, D1, public OAuth, browser sessions, and public deployment are outside the Tauri-only product. Historic cloud evidence does not establish a current live service or university approval.
 
 ### INV-8 — One native store writer
-area: ["src-tauri/src/locking.rs", "src-tauri/src/store.rs", "src-tauri/src/commands.rs", "src-tauri/src/refresh.rs", "src-tauri/src/ical_apply.rs"]
+area: ["src-tauri/src/locking.rs", "src-tauri/src/store.rs", "src-tauri/src/commands.rs", "src-tauri/src/commands_ical.rs", "src-tauri/src/refresh.rs", "src-tauri/src/ical_apply.rs"]
 gate_test: npm run test:tauri
 threshold: 1
 always_active: true
 rationale: One app instance owns the store. Native refresh and calendar import share the refresh guard and write lock; a second instance or concurrent writer cannot silently race.
 
 ### INV-9 — Preview stores never refresh
-area: ["src-tauri/src/commands.rs", "src-tauri/src/ical_apply.rs", "src/ui/app.ts", "src/ui/pages/dashboard.ts"]
+area: ["src-tauri/src/commands.rs", "src-tauri/src/commands_ical.rs", "src-tauri/src/ical_apply.rs", "src/ui/app.ts", "src/ui/pages/dashboard.ts"]
 gate_test: npm run test:tauri, npm run test:ui
 threshold: 1
 always_active: true
@@ -78,7 +78,7 @@ always_active: true
 rationale: Build and tests run in a private staged candidate. Installation verifies the candidate, signature, bundle identity, and embedded frontend hashes. Tests, installation, launch, live behavior, and owner acceptance are distinct evidence.
 
 ### INV-12 — Store authority changes only through the owner flow
-area: ["src-tauri/src/commands.rs", "src-tauri/src/store.rs", "src-tauri/src/export.rs", "src-tauri/src/ical_apply_bootstrap.rs", "src/ui/app.ts", "src/ui/transport.ts"]
+area: ["src-tauri/src/commands.rs", "src-tauri/src/commands_ical.rs", "src-tauri/src/store.rs", "src-tauri/src/export.rs", "src-tauri/src/ical_apply_bootstrap.rs", "src/ui/app.ts", "src/ui/transport.ts"]
 gate_test: npm run test:tauri, npm run test:ui, npm run test:desktop-ui
 threshold: 1
 always_active: true

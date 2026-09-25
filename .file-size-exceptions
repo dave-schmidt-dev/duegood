@@ -1,5 +1,5 @@
 # Existing integrated files above 800 lines; revisit at their next substantial change.
-src-tauri/src/commands.rs | Tauri command registration, shared state, and native dialog contracts are coupled to generated permissions; a structural split requires coordinated permission and UI regression work beyond this iCal route.
+src-tauri/src/commands.rs | Calendar refresh methods were extracted; remaining command registration, shared state, and native dialog transitions are coupled to generated permissions and require separate focused extractions.
 src-tauri/src/store.rs | Atomic store recovery, locking, and personal mutation paths share one transaction contract; splitting safely requires a dedicated storage refactor and crash-recovery verification.
 src-tauri/src/capture.rs | Existing bounded Canvas capture pipeline is kept intact during this Tauri-only cutover; its network and normalization seams need a separate verified extraction.
 src-tauri/src/import.rs | Existing legacy import scan, validation, and atomic adoption share a staged state machine; splitting during a live migration would add unverified risk.
