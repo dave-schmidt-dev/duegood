@@ -30,6 +30,8 @@
       "test/local/refresh-supervisor.test.ts",
       "test/local/refresh-history.test.ts",
       "test/local/stage-tauri-candidate.test.ts",
+      "test/local/smoke-tauri-macos.test.ts",
+      "test/local/sweep-temp-dirs.test.ts",
       "test/local/desktop-status.test.ts",
       "test/local/refresh-contract.test.ts",
       "test/local/tauri-documents.test.ts",

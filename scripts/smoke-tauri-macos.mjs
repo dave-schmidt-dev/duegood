@@ -11,6 +11,57 @@ const PROJECT = path.join(ROOT, "test/native/macos/DueGoodDesktopUITests.xcodepr
 const SCHEME = "DueGoodDesktopUITests";
 const TEST_CASE = `${SCHEME}/DueGoodDesktopUITests/testFirstRunCalendarConnectionWithoutLegacyImport`;
 const LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+const activeChildren = new Set();
+let requestedSignal;
+let cleanupStarted = false;
+let interruptKillTimer;
+
+function childEnded(child) {
+  activeChildren.delete(child);
+  if (activeChildren.size === 0 && interruptKillTimer !== undefined) {
+    clearTimeout(interruptKillTimer);
+    interruptKillTimer = undefined;
+  }
+}
+
+function signalChild(child, signal) {
+  if (child.pid === undefined) return;
+  try { process.kill(-child.pid, signal); }
+  catch {
+    try { child.kill(signal); }
+    catch { /* The child already exited. */ }
+  }
+}
+
+export function installSignalHandlers() {
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => {
+      requestedSignal ??= signal;
+      process.exitCode = requestedSignal === "SIGINT" ? 130 : 143;
+      // Finish cleanup before exiting, while still recording a signal received
+      // during cleanup for the eventual process status.
+      if (cleanupStarted) return;
+      for (const child of activeChildren) signalChild(child, requestedSignal);
+      if (activeChildren.size > 0 && interruptKillTimer === undefined) {
+        interruptKillTimer = setTimeout(() => {
+          for (const child of activeChildren) signalChild(child, "SIGKILL");
+          interruptKillTimer = undefined;
+        }, 5_000);
+        interruptKillTimer.unref();
+      }
+    });
+  }
+}
+
+function rejectIfInterrupted() {
+  if (requestedSignal && !cleanupStarted) throw new Error(`Interrupted by ${requestedSignal}.`);
+}
+
+function safeWrite(stream, message) {
+  try { stream.write(message); }
+  catch { /* A closed output stream must not interrupt cleanup. */ }
+}
+
 const testAppControlSwift = String.raw`
 import AppKit
 import Foundation
@@ -28,8 +79,13 @@ guard apps.count == 1,
       let app = apps.first,
       app.bundleURL?.resolvingSymlinksInPath().standardizedFileURL.path == URL(fileURLWithPath: appPath).resolvingSymlinksInPath().standardizedFileURL.path else { exit(2) }
 _ = app.terminate()
-let deadline = Date().addingTimeInterval(10)
+var deadline = Date().addingTimeInterval(10)
 while !app.isTerminated && Date() < deadline { Thread.sleep(forTimeInterval: 0.1) }
+if !app.isTerminated {
+    _ = app.forceTerminate()
+    deadline = Date().addingTimeInterval(5)
+    while !app.isTerminated && Date() < deadline { Thread.sleep(forTimeInterval: 0.1) }
+}
 exit(app.isTerminated ? 0 : 1)
 `;
 
@@ -86,13 +142,16 @@ do {
 `;
 
 function progress(message) {
-  process.stdout.write(`[macOS smoke] ${message}\n`);
+  safeWrite(process.stdout, `[macOS smoke] ${message}\n`);
 }
 
-function runCapture(command, args, options = {}) {
+export function runCapture(command, args, options = {}) {
   const { input, maxBytes = 32 * 1024 * 1024, timeoutMs = 60_000, ...spawnOptions } = options;
   return new Promise((resolve, reject) => {
+    try { rejectIfInterrupted(); }
+    catch (error) { reject(error); return; }
     const child = spawn(command, args, { ...spawnOptions, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    activeChildren.add(child);
     const stdout = [];
     const stderr = [];
     let size = 0;
@@ -120,11 +179,13 @@ function runCapture(command, args, options = {}) {
     });
     child.stderr.on("data", (chunk) => stderr.push(chunk));
     child.on("error", (error) => {
+      childEnded(child);
       clearTimeout(deadline);
       if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
       reject(error);
     });
     child.on("close", (code, signal) => {
+      childEnded(child);
       clearTimeout(deadline);
       if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
       if (timedOut) reject(new Error(`${path.basename(command)} timed out after ${timeoutMs / 1000} seconds.`));
@@ -146,7 +207,10 @@ function runSwift(code, tempRoot, options = {}) {
 function runStreaming(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const { timeoutMs = 15 * 60 * 1000, ...spawnOptions } = options;
+    try { rejectIfInterrupted(); }
+    catch (error) { reject(error); return; }
     const child = spawn(command, args, { ...spawnOptions, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    activeChildren.add(child);
     let pendingOut = "";
     let pendingErr = "";
     let timedOut = false;
@@ -164,18 +228,20 @@ function runStreaming(command, args, options = {}) {
     const flush = (buffer, label, final = false) => {
       const lines = buffer.split(/\r?\n/);
       const rest = final ? "" : (lines.pop() ?? "");
-      for (const line of lines) if (line.trim()) process.stdout.write(`${label}${line}\n`);
-      if (final && lines.at(-1) === undefined && buffer.trim()) process.stdout.write(`${label}${buffer.trim()}\n`);
+      for (const line of lines) if (line.trim()) safeWrite(process.stdout, `${label}${line}\n`);
+      if (final && lines.at(-1) === undefined && buffer.trim()) safeWrite(process.stdout, `${label}${buffer.trim()}\n`);
       return rest;
     };
     child.stdout.on("data", (chunk) => { pendingOut = flush(pendingOut + chunk.toString(), "[xcodebuild] "); });
     child.stderr.on("data", (chunk) => { pendingErr = flush(pendingErr + chunk.toString(), "[xcodebuild] "); });
     child.on("error", (error) => {
+      childEnded(child);
       clearTimeout(deadline);
       if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
       reject(error);
     });
     child.on("close", (code, signal) => {
+      childEnded(child);
       clearTimeout(deadline);
       if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
       if (pendingOut) flush(pendingOut, "[xcodebuild] ", true);
@@ -192,6 +258,31 @@ function assertPrivateDirectory(directory) {
   if (mode !== 0o700) chmodSync(directory, 0o700);
 }
 
+export async function withSmokeTempRoot(work, {
+  cleanup = async () => {},
+  createTempRoot = () => mkdtempSync(path.join(os.tmpdir(), "duegood-tauri-ui-smoke-")),
+} = {}) {
+  const tempRoot = createTempRoot();
+  let failure;
+  try {
+    await work(tempRoot);
+  } catch (error) {
+    failure = error;
+  } finally {
+    cleanupStarted = true;
+    if (interruptKillTimer !== undefined) {
+      clearTimeout(interruptKillTimer);
+      interruptKillTimer = undefined;
+    }
+    try { await cleanup(tempRoot); }
+    catch (error) { failure ??= error; }
+    try { rmSync(tempRoot, { recursive: true, force: true }); }
+    catch (error) { failure ??= new Error(`Could not remove isolated test files: ${error.message}`); }
+    cleanupStarted = false;
+  }
+  if (failure) throw failure;
+}
+
 async function main() {
   if (process.platform !== "darwin") throw new Error("The macOS UI smoke requires macOS and Xcode.");
   if (!process.env.DUEGOOD_TEST_APP_PATH) throw new Error("Set DUEGOOD_TEST_APP_PATH to the staged test-identifier Due Good.app.");
@@ -206,15 +297,13 @@ async function main() {
   await runCapture("/usr/bin/codesign", ["--verify", "--strict", appPath]);
   if (!lstatSync(LSREGISTER).isFile()) throw new Error("Launch Services registration utility is unavailable.");
 
-  const tempRoot = mkdtempSync(path.join(os.tmpdir(), "duegood-tauri-ui-smoke-"));
-  chmodSync(tempRoot, 0o700);
-  const dataRoot = path.join(tempRoot, TEST_BUNDLE_ID);
   let clipboard;
   let registrationAttempted = false;
   let uiRunStarted = false;
   let testAppStopped = true;
-  let failure;
-  try {
+  await withSmokeTempRoot(async (tempRoot) => {
+    const dataRoot = path.join(tempRoot, TEST_BUNDLE_ID);
+    chmodSync(tempRoot, 0o700);
     progress("Checking that no test-identifier app instance is already running.");
     await runSwift(testAppControlSwift, tempRoot, {
       env: { ...process.env, DUEGOOD_TEST_APP_CONTROL: "check", DUEGOOD_CONTROL_APP_PATH: appPath },
@@ -251,9 +340,8 @@ async function main() {
       "CODE_SIGN_STYLE=Manual",
     ], { cwd: ROOT, env });
     progress("The isolated macOS UI smoke passed.");
-  } catch (error) {
-    failure = error;
-  } finally {
+  }, { cleanup: async (tempRoot) => {
+    let failure;
     if (uiRunStarted) {
       progress("Stopping any test app instance before removing isolated data.");
       try {
@@ -284,13 +372,19 @@ async function main() {
         failure ??= new Error(`Could not restore the saved pasteboard: ${error.message}`);
       }
     }
-    if (testAppStopped) rmSync(tempRoot, { recursive: true, force: true });
-    else progress("Preserving the isolated test files because app termination was not confirmed.");
-  }
-  if (failure) throw failure;
+    if (!testAppStopped) {
+      progress("The isolated test app may still be running; removing its test files after failed termination attempts.");
+      failure ??= new Error("Could not confirm the isolated test app stopped.");
+    }
+    progress("Removing isolated test files.");
+    if (failure) throw failure;
+  } });
 }
 
-main().catch((error) => {
-  process.stderr.write(`[macOS smoke] ${error.message}\n`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  installSignalHandlers();
+  main().catch((error) => {
+    safeWrite(process.stderr, `[macOS smoke] ${error.message}\n`);
+    process.exitCode = requestedSignal === "SIGINT" ? 130 : requestedSignal === "SIGTERM" ? 143 : 1;
+  });
+}

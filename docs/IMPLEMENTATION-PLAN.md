@@ -1,5 +1,16 @@
 # Due Good local Marymount replacement plan
 
+## 2026-09-25 bounded temporary-stage cleanup
+
+**Confirmed:** the old stage command created an implicit `duegood-tauri-stage-*` root without reclaiming it; the macOS UI smoke also created a `duegood-tauri-ui-smoke-*` root. The smoke exit paths and backlog were inspected before remediation.
+
+**Verification:** source audit found the smoke's previous skip-on-app-termination-failure path, and the initial dry-run found 44 matching roots, of which 39 were eligible (110,996,790,822 apparent bytes); the other five were younger than two hours. The initial exact staged tree `f4458e6530b0` passed `test:all`, then its implicit root was absent. Hours later the owner authorized `--apply`; all five had aged past the freshness floor, and the guarded run removed all 44 matching roots, measuring 101.01 GB of pre-sweep allocated footprint, with no skips or failures. Synthetic stage, smoke lifecycle, and collector tests now cover the cleanup paths. The native macOS UI smoke itself was not run.
+
+1. Make implicit stage roots disposable on normal return, exceptions, SIGINT, and SIGTERM; retain explicit `--destination` and opt-in `--keep` roots. Update callers that require a post-command stage.
+2. Audit the smoke runner's cleanup across every exit path and repair any gap.
+3. Add targeted lifecycle regressions and a fail-closed, dry-run default backlog sweeper for only those two direct-child prefixes, with a two-hour freshness floor and canonical `lsof` held-path check. The original task excluded `--apply`; the owner separately authorized the later sweep.
+4. Wire tests into membership, run focused checks and the authoritative staged gate, then report the dry-run eligible total separately from disk-audit estimates.
+
 ## 2026-09-25 calendar date display correction
 
 The installed iCal-first app showed Sunday date-only assignments on Saturday at 8:00 PM in New York. A synthetic reproduction confirms that JavaScript parses `2026-09-27` as UTC midnight, while the timeline uses local date and time accessors. Keep iCal `VALUE=DATE` as a calendar day, not an instant. Correct the embedded dashboard's date parsing so date-only values render and group on their stated day without an invented 8:00 PM deadline. Preserve explicitly timed values and countdown behavior. Add focused UI and desktop regressions, then run the staged candidate gate before an installed update. Do not read or publish private coursework to diagnose this.

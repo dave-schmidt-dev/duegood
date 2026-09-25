@@ -28,6 +28,8 @@ Run source checks in a private staged candidate so the current installed app and
 npm run stage:tauri -- --skip-preflight --test test:tauri
 ```
 
+An implicit stage is removed when the command ends, including on failure or interruption. Use `--keep` to retain and print its path, or `--destination /absolute/private/path` when a later build or installer needs it. `npm run sweep:temp` reports old Due Good stage and UI-smoke roots under `$TMPDIR` without deleting them; `--apply` is an explicit separate cleanup action.
+
 The project installer is `npm run install:tauri` after the staged build and asset checks pass. Launch the installed app by bundle ID, `open -b com.zerodelta.duegood`, so LaunchServices selects the registered app. Installation, launch, and live feed acceptance are separate checks. See [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md) and [`docs/DESKTOP-CUTOVER.md`](docs/DESKTOP-CUTOVER.md) for the remaining gates.
 
 ## Repository map

@@ -90,3 +90,10 @@ gate_test: npm run test:tauri, npm run test:ui
 threshold: 1
 always_active: true
 rationale: References are scoped by institution and course. Duplicate claims fail closed; unverified cross-source candidates are held for review. Local IDs, progress, notes, and unknown fields survive source updates.
+
+### INV-14 — Disposable staging artifacts do not accumulate
+area: ["scripts/stage-tauri-candidate.mjs", "scripts/stage-npm-process.mjs", "scripts/smoke-tauri-macos.mjs", "scripts/sweep-temp-dirs.mjs"]
+gate_test: test/local/stage-tauri-candidate.test.ts, test/local/smoke-tauri-macos.test.ts, test/local/sweep-temp-dirs.test.ts
+threshold: 1
+always_active: true
+rationale: An implicit stage is removed after success, failure, or interruption unless explicitly retained; the npm stage is retained if its child process group cannot be stopped safely. The macOS UI smoke always attempts removal after its app-stop attempts. The backlog collector is dry-run by default and refuses deletion without age, direct-child ownership, and complete open-handle checks.

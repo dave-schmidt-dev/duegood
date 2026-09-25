@@ -39,6 +39,7 @@
     "check:desktop-status": "node scripts/check-desktop-status.mjs",
     "check:refresh-contract": "node scripts/check-refresh-contract.mjs",
     "stage:tauri": "node scripts/stage-tauri-candidate.mjs",
+    "sweep:temp": "node scripts/sweep-temp-dirs.mjs",
     "test:all": "npm run check:python && npm run typecheck && npm run lint && npm run deadcode && npm run test:ui && npm run test:local && npm run test:tauri && npm run check:package && npm run test:membership && npm run check:public-tree && npm run check:staged-public-tree && npm run integrity:baseline && npm run check:desktop-status && npm run test:desktop-ui",
     "check:package": "python3 scripts/check_package.py && python3 -m unittest discover -s tests -v",
     "check:public-tree": "node scripts/check-public-tree.mjs",

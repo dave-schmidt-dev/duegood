@@ -10,20 +10,21 @@
  * Usage:
  *   node scripts/stage-tauri-candidate.mjs [--source <checkout>] [--destination <new-dir>]
  *     [--include <path>]... [--exclude <path>]... [--build <script>]... [--test <script>]...
- *     [--playwright-browsers-path <dir>] [--skip-install] [--skip-preflight]
+ *     [--playwright-browsers-path <dir>] [--skip-install] [--skip-preflight] [--keep]
  *
  * `--destination` must not exist yet; it is created (mode 0700) outside the source, in a parent
  * that other users cannot write. Without it, the stage is a new `stage` folder inside a fresh
- * private temporary directory.
+ * private temporary directory, removed when the command exits. Pass `--keep` to retain it.
  */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { appendFile, chmod, lstat, mkdir, mkdtemp, readFile, readlink, realpath, symlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, lstat, mkdir, readFile, readlink, realpath, symlink, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { homedir, cpus as osCpus, release as osRelease, tmpdir } from "node:os";
+import { homedir, cpus as osCpus, release as osRelease } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scanContent, scanPath } from "./check-public-tree.mjs";
+import { createStageCliLifecycle, runNpmPhase } from "./stage-npm-process.mjs";
 
 export const scriptRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -247,6 +248,7 @@ function commitCandidate(repoRoot, candidatePaths, identity, date) {
  *   gitIdentity?: { name: string, email: string },
  *   gitDate?: string,
  *   log?: (message: string) => void,
+ *   checkInterrupted?: () => void,
  * }} options
  */
 export async function stageCandidate({
@@ -258,6 +260,7 @@ export async function stageCandidate({
   gitIdentity = FIXED_GIT_IDENTITY,
   gitDate = FIXED_GIT_DATE,
   log = noop,
+  checkInterrupted = noop,
 } = {}) {
   if (!source || !destination) throw new Error("stageCandidate requires both source and destination directories");
   const resolvedSource = path.resolve(source);
@@ -275,11 +278,13 @@ export async function stageCandidate({
 
   log(`stage: scanning and copying ${String(candidatePaths.length)} candidate file(s)`);
   for (const relativePath of candidatePaths) {
+    checkInterrupted();
     const pathFinding = scanPath(relativePath);
     if (pathFinding) throw new Error(`${relativePath}: ${pathFinding}`);
     await copyCandidateFile(resolvedSource, resolvedDestination, relativePath);
   }
 
+  checkInterrupted();
   log("stage: committing the candidate into a throwaway Git repository");
   initThrowawayRepo(resolvedDestination);
   commitCandidate(resolvedDestination, candidatePaths, gitIdentity, gitDate);
@@ -404,7 +409,7 @@ export function defaultPlaywrightCacheDirectory({ platform = process.platform, e
 // --- CLI ----------------------------------------------------------------------------------------
 
 function parseCliArgs(argv) {
-  const options = { include: [], exclude: [], build: [], test: [], skipInstall: false, skipPreflight: false };
+  const options = { include: [], exclude: [], build: [], test: [], skipInstall: false, skipPreflight: false, keep: false };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     const next = () => {
@@ -421,67 +426,75 @@ function parseCliArgs(argv) {
     else if (argument === "--playwright-browsers-path") options.playwrightBrowsersPath = next();
     else if (argument === "--skip-install") options.skipInstall = true;
     else if (argument === "--skip-preflight") options.skipPreflight = true;
+    else if (argument === "--keep") options.keep = true;
     else throw new Error(`Unknown argument: ${argument}`);
   }
   return options;
-}
-
-function runNpmPhase(label, args, cwd, env) {
-  // Stream the public candidate's npm output to stderr so a failing gate shows its evidence.
-  const result = spawnSync("npm", args, { cwd, stdio: ["ignore", process.stderr, process.stderr], env });
-  if (result.status !== 0) {
-    throw new Error(`${label} failed (exit ${String(result.status)}): npm ${args.join(" ")}`);
-  }
 }
 
 export async function run(argv = process.argv.slice(2)) {
   const options = parseCliArgs(argv);
   const onLog = (message) => process.stderr.write(`stage-tauri-candidate: ${message}\n`);
   const source = options.source ? path.resolve(options.source) : scriptRoot;
-  // The destination must not exist yet; by default it is a new "stage" folder inside a fresh
-  // private (0700) temporary directory.
-  const destination = options.destination
-    ? path.resolve(options.destination)
-    : path.join(await mkdtemp(path.join(tmpdir(), "duegood-tauri-stage-")), "stage");
+  const lifecycle = createStageCliLifecycle(options, onLog);
 
-  const result = await stageCandidate({ source, destination, include: options.include, exclude: options.exclude, log: onLog });
-  onLog(`stage: complete at ${result.destination}`);
+  try {
+    const result = await stageCandidate({ source, destination: lifecycle.destination, include: options.include, exclude: options.exclude, log: onLog, checkInterrupted: lifecycle.checkInterrupted });
+    onLog(`stage: complete at ${result.destination}`);
 
-  const browsersPath = options.playwrightBrowsersPath ?? process.env.PLAYWRIGHT_BROWSERS_PATH ?? defaultPlaywrightCacheDirectory();
-  const stageEnv = { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsersPath };
-  // The npm phases execute code in the stage, so recheck that it is still the directory we created.
-  await assertOwnedStageDirectory(await realpath(source), result.destination);
+    const browsersPath = options.playwrightBrowsersPath ?? process.env.PLAYWRIGHT_BROWSERS_PATH ?? defaultPlaywrightCacheDirectory();
+    const stageEnv = { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsersPath };
+    // The npm phases execute code in the stage, so recheck that it is still the directory we created.
+    await assertOwnedStageDirectory(await realpath(source), result.destination);
+    lifecycle.checkInterrupted();
 
-  if (!options.skipInstall) {
-    onLog("install: npm ci starting");
-    runNpmPhase("install", ["ci"], result.destination, stageEnv);
-    onLog("install: npm ci finished");
+    if (!options.skipInstall) {
+      onLog("install: npm ci starting");
+      await runNpmPhase("install", ["ci"], result.destination, stageEnv, lifecycle.npmPhaseOptions);
+      onLog("install: npm ci finished");
+      lifecycle.checkInterrupted();
 
-    if (!options.skipPreflight) {
-      onLog("test: playwright browser-cache preflight starting");
-      const packageLock = JSON.parse(await readFile(path.join(result.destination, "package-lock.json"), "utf8"));
-      const browsersJsonPath = path.join(result.destination, "node_modules", "playwright-core", "browsers.json");
-      const browsersJson = JSON.parse(await readFile(browsersJsonPath, "utf8"));
-      const preflight = preflightPlaywrightBrowsers({ packageLock, browsersJson, cacheDir: browsersPath });
-      onLog(`test: playwright browser-cache preflight passed for ${String(preflight.required.length)} build(s)`);
+      if (!options.skipPreflight) {
+        onLog("test: playwright browser-cache preflight starting");
+        const packageLock = JSON.parse(await readFile(path.join(result.destination, "package-lock.json"), "utf8"));
+        const browsersJsonPath = path.join(result.destination, "node_modules", "playwright-core", "browsers.json");
+        const browsersJson = JSON.parse(await readFile(browsersJsonPath, "utf8"));
+        lifecycle.checkInterrupted();
+        const preflight = preflightPlaywrightBrowsers({ packageLock, browsersJson, cacheDir: browsersPath });
+        onLog(`test: playwright browser-cache preflight passed for ${String(preflight.required.length)} build(s)`);
+      }
+    }
+
+    for (const script of options.build) {
+      onLog(`build: npm run ${script} starting`);
+      await runNpmPhase("build", ["run", script], result.destination, stageEnv, lifecycle.npmPhaseOptions);
+      onLog(`build: npm run ${script} finished`);
+      lifecycle.checkInterrupted();
+    }
+
+    for (const script of options.test) {
+      onLog(`test: npm run ${script} starting`);
+      await runNpmPhase("test", ["run", script], result.destination, stageEnv, lifecycle.npmPhaseOptions);
+      onLog(`test: npm run ${script} finished`);
+      lifecycle.checkInterrupted();
+    }
+
+    return result;
+  } catch (error) {
+    throw lifecycle.withInterruption(error);
+  } finally {
+    lifecycle.close();
+  }
+}
+if (path.resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
+  try {
+    await run();
+  } catch (error) {
+    if (error?.signal === "SIGINT" || error?.signal === "SIGTERM") {
+      process.stderr.write(`stage-tauri-candidate: ${error.message}\n`);
+      process.exitCode = error.signal === "SIGINT" ? 130 : 143;
+    } else {
+      throw error;
     }
   }
-
-  for (const script of options.build) {
-    onLog(`build: npm run ${script} starting`);
-    runNpmPhase("build", ["run", script], result.destination, stageEnv);
-    onLog(`build: npm run ${script} finished`);
-  }
-
-  for (const script of options.test) {
-    onLog(`test: npm run ${script} starting`);
-    runNpmPhase("test", ["run", script], result.destination, stageEnv);
-    onLog(`test: npm run ${script} finished`);
-  }
-
-  return result;
-}
-
-if (path.resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
-  await run();
 }

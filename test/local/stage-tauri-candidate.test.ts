@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,6 +10,7 @@ import {
   PROJECT_PLAYWRIGHT_BROWSERS,
   stageCandidate,
 } from "../../scripts/stage-tauri-candidate.mjs";
+import { runNpmPhase } from "../../scripts/stage-npm-process.mjs";
 
 const directories: string[] = [];
 
@@ -48,6 +49,20 @@ async function makeSourceRepo(): Promise<string> {
   git(source, ["add", "-A"]);
   git(source, ["commit", "--quiet", "-m", "initial"]);
   return source;
+}
+
+const stageScript = path.resolve("scripts/stage-tauri-candidate.mjs");
+
+function runStageCli(source: string, temporaryDirectory: string, args: string[] = []) {
+  return spawnSync(process.execPath, [stageScript, "--source", source, "--skip-install", "--skip-preflight", ...args], {
+    encoding: "utf8",
+    env: { ...process.env, TMPDIR: temporaryDirectory },
+    timeout: 30_000,
+  });
+}
+
+async function stageRoots(temporaryDirectory: string): Promise<string[]> {
+  return (await readdir(temporaryDirectory)).filter((name) => name.startsWith("duegood-tauri-stage-")).sort();
 }
 
 /** Every entry under `root` except `.git`, with its type, mode, and (for files) bytes. */
@@ -216,6 +231,194 @@ describe("stageCandidate", () => {
     const destination = await freshDestination();
     await expect(stageCandidate({ source, destination })).rejects.toThrow(/missing required file/);
   });
+});
+
+describe("stage CLI temporary directory lifecycle", () => {
+  it("removes the generated temporary root after a successful default run", async () => {
+    const source = await makeSourceRepo();
+    const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
+    const result = runStageCli(source, temporaryDirectory);
+
+    expect(result.status).toBe(0);
+    expect(await stageRoots(temporaryDirectory)).toEqual([]);
+  });
+
+  it("retains the generated temporary root and logs its path with --keep", async () => {
+    const source = await makeSourceRepo();
+    const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
+    const result = runStageCli(source, temporaryDirectory, ["--keep"]);
+    const roots = await stageRoots(temporaryDirectory);
+
+    expect(result.status).toBe(0);
+    expect(roots).toHaveLength(1);
+    expect(result.stderr).toContain(`stage: retained at ${path.join(temporaryDirectory, roots[0]!)}`);
+    expect(await readdir(path.join(temporaryDirectory, roots[0]!))).toEqual(["stage"]);
+  });
+
+  it("accepts --keep with a caller-owned destination and retains it", async () => {
+    const source = await makeSourceRepo();
+    const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
+    const destination = path.join(temporaryDirectory, "caller-stage");
+    const result = runStageCli(source, temporaryDirectory, ["--destination", destination, "--keep"]);
+
+    expect(result.status).toBe(0);
+    expect(await readdir(temporaryDirectory)).toEqual(["caller-stage"]);
+    expect(await readFile(path.join(destination, "app.txt"), "utf8")).toBe("original\n");
+    expect(result.stderr).toContain(`stage: retained at ${destination}`);
+  });
+
+  it("removes the generated root when an npm build phase fails", async () => {
+    const source = await makeSourceRepo();
+    await writeFile(path.join(source, "package.json"), JSON.stringify({ name: "fixture", scripts: { fail: "node -e 'process.exit(17)'" } }) + "\n");
+    git(source, ["add", "package.json"]);
+    git(source, ["commit", "--quiet", "-m", "add failing fixture script"]);
+    const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
+    const result = spawnSync(
+      process.execPath,
+      [stageScript, "--source", source, "--skip-install", "--skip-preflight", "--build", "fail"],
+      { encoding: "utf8", env: { ...process.env, TMPDIR: temporaryDirectory }, timeout: 30_000 },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("build failed");
+    expect(await stageRoots(temporaryDirectory)).toEqual([]);
+  });
+
+  it("retains and logs the generated root when a failing npm phase uses --keep", async () => {
+    const source = await makeSourceRepo();
+    await writeFile(path.join(source, "package.json"), JSON.stringify({ name: "fixture", scripts: { fail: "node -e 'process.exit(17)'" } }) + "\n");
+    git(source, ["add", "package.json"]);
+    git(source, ["commit", "--quiet", "-m", "add failing fixture script"]);
+    const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
+    const result = spawnSync(
+      process.execPath,
+      [stageScript, "--source", source, "--skip-install", "--skip-preflight", "--build", "fail", "--keep"],
+      { encoding: "utf8", env: { ...process.env, TMPDIR: temporaryDirectory }, timeout: 30_000 },
+    );
+    const roots = await stageRoots(temporaryDirectory);
+
+    expect(result.status).not.toBe(0);
+    expect(roots).toHaveLength(1);
+    expect(result.stderr).toContain(`stage: retained at ${path.join(temporaryDirectory, roots[0]!)}`);
+  });
+
+  it("retains and logs the generated root when staging fails before creating its stage folder", async () => {
+    const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
+    const missingSource = path.join(temporaryDirectory, "missing-source");
+    const result = spawnSync(
+      process.execPath,
+      [stageScript, "--source", missingSource, "--skip-install", "--skip-preflight", "--keep"],
+      { encoding: "utf8", env: { ...process.env, TMPDIR: temporaryDirectory }, timeout: 30_000 },
+    );
+    const roots = await stageRoots(temporaryDirectory);
+
+    expect(result.status).not.toBe(0);
+    expect(roots).toHaveLength(1);
+    expect(await readdir(path.join(temporaryDirectory, roots[0]!))).toEqual([]);
+    expect(result.stderr).toContain(`stage: retained at ${path.join(temporaryDirectory, roots[0]!)}`);
+  });
+
+  it("leaves a missing explicit destination caller-owned when staging fails early without --keep", async () => {
+    const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
+    const missingSource = path.join(temporaryDirectory, "missing-source");
+    const destination = path.join(temporaryDirectory, "caller-stage");
+    const result = spawnSync(
+      process.execPath,
+      [stageScript, "--source", missingSource, "--destination", destination, "--skip-install", "--skip-preflight"],
+      { encoding: "utf8", env: { ...process.env, TMPDIR: temporaryDirectory }, timeout: 30_000 },
+    );
+
+    expect(result.status).not.toBe(0);
+    await expect(lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(temporaryDirectory)).toEqual([]);
+  });
+
+  it("does not spawn npm after the caller has recorded an interruption", async () => {
+    let started = false;
+    await expect(
+      runNpmPhase("build", ["run", "unused"], process.cwd(), process.env, {
+        checkInterrupted() {
+          throw new Error("interrupted by SIGTERM");
+        },
+        onStart() {
+          started = true;
+        },
+      }),
+    ).rejects.toThrow(/interrupted by SIGTERM/);
+    expect(started).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32").each(["SIGINT", "SIGTERM"] as const)("escalates ignored %s to SIGKILL after a bounded grace period", async (signal) => {
+    const source = await makeSourceRepo();
+    const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
+    const fakeBin = await makeTempDir("duegood-stage-cli-bin-");
+    const fakeNpm = path.join(fakeBin, "npm");
+    await writeFile(
+      fakeNpm,
+      `#!/usr/bin/env node\nprocess.on("SIGINT", () => {});\nprocess.on("SIGTERM", () => {});\nsetTimeout(() => process.exit(0), 30000);\nsetInterval(() => {}, 1000);\n`,
+    );
+    await chmod(fakeNpm, 0o755);
+    const child = spawn(
+      process.execPath,
+      [stageScript, "--source", source, "--skip-preflight"],
+      { env: { ...process.env, TMPDIR: temporaryDirectory, PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}` }, stdio: ["ignore", "ignore", "pipe"] },
+    );
+    let stderr = "";
+    let sentSignal = false;
+    const startedAt = Date.now();
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+      if (!sentSignal && stderr.includes("install: npm ci starting")) {
+        sentSignal = true;
+        setTimeout(() => child.kill(signal), 50);
+      }
+    });
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, childSignal) => resolve({ code, signal: childSignal }));
+    });
+
+    expect(sentSignal).toBe(true);
+    expect(exit.code).toBe(signal === "SIGINT" ? 130 : 143);
+    expect(exit.signal).toBeNull();
+    expect(Date.now() - startedAt).toBeLessThan(9000);
+    expect(stderr).toContain(`interrupted by ${signal}`);
+    expect(await stageRoots(temporaryDirectory)).toEqual([]);
+  }, 15_000);
+
+  it.skipIf(process.platform === "win32")("waits for an interrupted npm child tree before cleaning the stage", async () => {
+    const source = await makeSourceRepo();
+    await writeFile(path.join(source, "package.json"), JSON.stringify({ name: "fixture", scripts: { hang: "node -e 'setInterval(() => {}, 1000)'" } }) + "\n");
+    git(source, ["add", "package.json"]);
+    git(source, ["commit", "--quiet", "-m", "add hanging fixture script"]);
+    const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
+    const child = spawn(
+      process.execPath,
+      [stageScript, "--source", source, "--skip-install", "--skip-preflight", "--build", "hang"],
+      { env: { ...process.env, TMPDIR: temporaryDirectory }, stdio: ["ignore", "ignore", "pipe"] },
+    );
+    let stderr = "";
+    let sentSignal = false;
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+      if (!sentSignal && stderr.includes("build: npm run hang starting")) {
+        sentSignal = true;
+        child.kill("SIGTERM");
+      }
+    });
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    });
+
+    expect(sentSignal).toBe(true);
+    expect(exit.code).toBe(143);
+    expect(exit.signal).toBeNull();
+    expect(stderr).toContain("interrupted by SIGTERM");
+    expect(await stageRoots(temporaryDirectory)).toEqual([]);
+  }, 30_000);
 });
 
 describe("Playwright browser-cache preflight", () => {
