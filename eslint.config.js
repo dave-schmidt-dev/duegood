@@ -8,7 +8,6 @@ export default tseslint.config(
       "dist/**",
       "node_modules/**",
       ".playwright/**",
-      ".wrangler/**",
       "reference/**",
       "coverage/**",
       "playwright-report/**",
@@ -30,7 +29,7 @@ export default tseslint.config(
     files: ["src/**/*.ts", "test/**/*.ts", "*.config.ts"],
   })),
   {
-    files: ["src/ui/**/*.ts", "test/browser/**/*.ts"],
+    files: ["src/ui/**/*.ts", "test/native/playwright/**/*.ts"],
     languageOptions: {
       globals: globals.browser,
     },

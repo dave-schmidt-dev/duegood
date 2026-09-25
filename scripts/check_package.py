@@ -10,8 +10,6 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = ["README.md", "SPEC.md", "AGENTS.md", "AGENT_HANDOFF.md", "MANIFEST.json",
             "docs/SOURCES.md", "fixtures/planner-scenarios.json", "fixtures/canvas-phase1.json",
-            "scripts/estimate_usage.py",
-            "templates/wrangler.example.jsonc", "templates/.dev.vars.example",
             "docs/IMPLEMENTATION-PLAN.md"]
 CANVAS_PHASE1_SUBMISSION_STATES = {"known", "known_null", "not_returned", "unsupported"}
 CANVAS_PHASE1_MAX_SAFE_INTEGER = 2**53 - 1
@@ -27,9 +25,9 @@ LOCAL_ONLY_NAMES = {
     "Codex Image Sep 16, 2026, 02_55_51 PM.png",
 }
 IGNORED_PARTS = {
-    ".git", "__pycache__", "node_modules", ".wrangler", ".evidence", ".logs",
+    ".git", "__pycache__", "node_modules", ".evidence", ".logs",
     "dist", "build", "coverage", "playwright-report", "test-results", ".playwright",
-    "target",
+    "target", ".wrangler", "spikes",
 }
 
 def validate_fixture(fixture: dict) -> None:

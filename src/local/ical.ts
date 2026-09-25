@@ -206,13 +206,27 @@ function calendarDate(raw: string, parsed: Date): IcalDateValue | "floating" {
 
 function validatedStart(raw: string): string {
   const [head, value] = raw.split(":", 2);
-  if (!head || !value || !/^DTSTART(?:;VALUE=DATE|;TZID=[A-Za-z0-9_\/+.-]+)?$/iu.test(head)) {
+  if (!head || !value) {
     throw new IcalNormalizationError("MALFORMED_CALENDAR");
   }
-  if (/;VALUE=DATE$/iu.test(head)) {
-    if (!/^\d{8}$/u.test(value)) throw new IcalNormalizationError("MALFORMED_CALENDAR");
-  } else if (!/^\d{8}T\d{6}Z?$/u.test(value)) {
+  const parameters = head.split(";");
+  if (parameters.shift()?.toUpperCase() !== "DTSTART") {
     throw new IcalNormalizationError("MALFORMED_CALENDAR");
+  }
+  const dateParameters = parameters.filter((parameter) => parameter.toUpperCase() === "VALUE=DATE");
+  const hasOnlyDateParameters = dateParameters.length === parameters.length;
+  let canonicalDateStart: string | undefined;
+  if (hasOnlyDateParameters && dateParameters.length >= 1 && dateParameters.length <= 2) {
+    if (!/^\d{8}$/u.test(value)) throw new IcalNormalizationError("MALFORMED_CALENDAR");
+    // Canvas may repeat VALUE=DATE. node-ical receives only a canonical synthetic line.
+    canonicalDateStart = `DTSTART;VALUE=DATE:${value}`;
+  } else {
+    if (dateParameters.length > 0 || !/^DTSTART(?:;TZID=[A-Za-z0-9_\/+.-]+)?$/iu.test(head)) {
+      throw new IcalNormalizationError("MALFORMED_CALENDAR");
+    }
+    if (!/^\d{8}T\d{6}Z?$/u.test(value)) {
+      throw new IcalNormalizationError("MALFORMED_CALENDAR");
+    }
   }
   const tzid = /;TZID=([^;:]+)/iu.exec(head)?.[1];
   if (tzid) {
@@ -228,10 +242,17 @@ function validatedStart(raw: string): string {
   if (value.includes("T") && (Number(value.slice(9, 11)) > 23 || Number(value.slice(11, 13)) > 59 || Number(value.slice(13, 15)) > 59)) {
     throw new IcalNormalizationError("MALFORMED_CALENDAR");
   }
-  return raw;
+  return canonicalDateStart ?? raw;
 }
 
-function canonicalLink(raw: string | undefined, origin: string): { courseId: string; type: "assignment" | "event"; id: string; url: string } | null {
+interface CanonicalCanvasLink {
+  readonly courseId: string;
+  readonly type: "assignment" | "event";
+  readonly id: string;
+  readonly url: string;
+}
+
+function canonicalLink(raw: string | undefined, origin: string): CanonicalCanvasLink | null {
   if (!raw || raw.length > 2_048) return null;
   try {
     const url = new URL(raw);
@@ -240,6 +261,34 @@ function canonicalLink(raw: string | undefined, origin: string): { courseId: str
     if (!match) return null;
     const [, courseId, resource, id] = match;
     return { courseId: courseId!, type: resource === "assignments" ? "assignment" : "event", id: id!, url: `${origin}/courses/${courseId}/${resource}/${id}` };
+  } catch { return null; }
+}
+
+/**
+ * Canvas calendar views omit resource paths, so accept them only when a strictly
+ * shaped URL and UID together provide the same resource type and numeric ID.
+ */
+function calendarViewLink(raw: string | undefined, uid: string, origin: string): CanonicalCanvasLink | null {
+  if (!raw || raw.length > 2_048) return null;
+  const uidMatch = /^event-(assignment|calendar-event)-([1-9]\d*)$/u.exec(uid);
+  if (!uidMatch) return null;
+  try {
+    const url = new URL(raw);
+    if (url.origin !== origin || url.username || url.password || url.pathname !== "/calendar") return null;
+    const expectedKeys = new Set(["include_contexts", "month", "year"]);
+    if (url.searchParams.size !== expectedKeys.size || [...url.searchParams.keys()].some((key) => !expectedKeys.has(key))) return null;
+    const courseMatch = /^course_([1-9]\d*)$/u.exec(url.searchParams.get("include_contexts") ?? "");
+    const month = url.searchParams.get("month");
+    const year = url.searchParams.get("year");
+    if (!courseMatch || !/^(?:0?[1-9]|1[0-2])$/u.test(month ?? "") || !/^[1-9]\d{3}$/u.test(year ?? "")) return null;
+    const [, uidType, id] = uidMatch;
+    const expectedFragment = uidType === "assignment" ? `#assignment_${id}` : `#calendar_event_${id}`;
+    if (url.hash !== expectedFragment) return null;
+    const resource = uidType === "assignment" ? "assignments" : "calendar_events";
+    return {
+      courseId: courseMatch[1]!, type: uidType === "assignment" ? "assignment" : "event", id: id!,
+      url: `${origin}/courses/${courseMatch[1]}/${resource}/${id}`,
+    };
   } catch { return null; }
 }
 
@@ -295,7 +344,7 @@ export async function normalizeCanvasIcal(input: string | Uint8Array, options: I
   for (const [index, item] of raw.entries()) {
     const parsedEvent = byUid.get(`SYNTHETIC-${index}`);
     if (!parsedEvent) throw new IcalNormalizationError("MALFORMED_CALENDAR");
-    const link = canonicalLink(item.url, origin);
+    const link = canonicalLink(item.url, origin) ?? calendarViewLink(item.url, item.uid, origin);
     const cancelled = item.methodCancel === true || item.status?.toUpperCase() === "CANCELLED";
     const courseCandidates = link ? [...new Set(courseMap.get(link.courseId) ?? [])].sort() : [];
     const base = { uid: item.uid, ...(link ? { canvasCourseId: link.courseId } : {}), cancelled };

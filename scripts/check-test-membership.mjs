@@ -19,7 +19,7 @@ function list(command, args) {
   return `${result.stdout}\n${result.stderr}`;
 }
 
-for (const testPath of [...manifest.worker.tests, ...manifest.ui.tests, ...manifest.browser.tests, ...manifest.container.tests, ...manifest.local.tests]) {
+for (const testPath of [...manifest.ui.tests, ...manifest.desktopUi.tests, ...manifest.container.tests, ...manifest.local.tests]) {
   if (!existsSync(path.join(root, testPath))) {
     throw new Error(`Membership names missing test ${testPath}.`);
   }
@@ -121,24 +121,6 @@ let tauriTestCount = 0;
   }
 }
 
-for (const runner of [manifest.worker.focusedRunner, manifest.worker.fullRunner]) {
-  const script = packageJson.scripts[runner];
-  if (typeof script !== "string" || script.includes("playwright")) {
-    throw new Error(`${runner} must be a non-browser runner.`);
-  }
-  const discovery = list(path.join(root, "node_modules", ".bin", "vitest"), [
-    "list",
-    "--config",
-    "vitest.config.ts",
-    "test/worker",
-  ]);
-  for (const testPath of manifest.worker.tests) {
-    if (!discovery.includes(testPath)) {
-      throw new Error(`${runner} does not discover ${testPath}.`);
-    }
-  }
-}
-
 {
   const script = packageJson.scripts[manifest.ui.focusedRunner];
   if (typeof script !== "string" || script.includes("playwright")) {
@@ -152,21 +134,21 @@ for (const runner of [manifest.worker.focusedRunner, manifest.worker.fullRunner]
   }
 }
 
-const browserDiscovery = list(path.join(root, "node_modules", ".bin", "playwright"), ["test", "--list"]);
-for (const testPath of manifest.browser.tests) {
-  if (!browserDiscovery.includes(path.basename(testPath))) {
-    throw new Error(`test:all browser batch does not discover ${testPath}.`);
+const desktopUi = manifest.desktopUi;
+const desktopUiRunner = packageJson.scripts[desktopUi.runner];
+if (typeof desktopUiRunner !== "string" || !desktopUiRunner.includes("playwright test --config playwright.config.ts")) {
+  throw new Error(`${desktopUi.runner} must run the registered Tauri UI Playwright config.`);
+}
+const desktopUiDiscovery = list(path.join(root, "node_modules", ".bin", "playwright"), ["test", "--list", "--config", "playwright.config.ts"]);
+for (const testPath of desktopUi.tests) {
+  if (!desktopUiDiscovery.includes(path.basename(testPath))) {
+    throw new Error(`${desktopUi.runner} does not discover ${testPath}.`);
   }
 }
 
-const allScript = packageJson.scripts[manifest.browser.inclusiveRunner];
-if (typeof allScript !== "string" || !allScript.includes("npm run test:browser")) {
-  throw new Error("test:all must contain the single browser batch.");
-}
-for (const runner of manifest.browser.forbiddenRunners) {
-  if ((packageJson.scripts[runner] ?? "").includes("playwright")) {
-    throw new Error(`${runner} must not execute browser tests.`);
-  }
+const allScript = packageJson.scripts[desktopUi.inclusiveRunner];
+if (typeof allScript !== "string" || !allScript.includes(`npm run ${desktopUi.runner}`)) {
+  throw new Error(`${desktopUi.inclusiveRunner} must contain the single Tauri UI Playwright batch.`);
 }
 
 // Native UI checks seize the host desktop, so they are explicit Phase 4 gates outside test:all.
@@ -202,9 +184,8 @@ for (const runner of manifest.browser.forbiddenRunners) {
   }
 }
 
-console.log(`Verified ${manifest.worker.tests.length} worker tests in both non-browser runners.`);
 console.log(`Verified ${manifest.ui.tests.length} UI contract tests in ${manifest.ui.focusedRunner}.`);
-console.log(`Verified ${manifest.browser.tests.length} browser tests are reserved for test:all.`);
+console.log(`Verified ${desktopUi.tests.length} synthetic Tauri UI Playwright spec in ${desktopUi.runner} and test:all.`);
 console.log(`Verified ${manifest.container.tests.length} container checks in the explicit host-only runner.`);
 console.log(`Verified ${manifest.local.tests.length} local-source tests in ${manifest.local.runner} and test:all.`);
 console.log(`Verified ${tauriTestCount} Rust tests in ${Object.keys(manifest.tauri.tests).length} files via cargo test --list in ${manifest.tauri.runner} and test:all.`);

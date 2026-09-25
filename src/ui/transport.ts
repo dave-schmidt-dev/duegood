@@ -1,9 +1,4 @@
-/**
- * How the dashboard reaches its data. Browser mode keeps the loopback HTTP API (reads here;
- * CSRF-protected mutations stay in `app.ts`, unchanged). Native mode calls the desktop app's
- * narrow Rust commands, validates every result, and runs the shared projection over the raw
- * documents, so both modes render the same dashboard. The webview never supplies a path.
- */
+/** Native desktop transport through narrow Tauri commands. The webview never supplies a path. */
 import {
   projectDashboardDocuments,
   type AvatarHeader,
@@ -13,28 +8,6 @@ import {
   type DashboardProjectionOptions,
 } from "../shared/dashboard-projection";
 import type { TauriChannelFactory, TauriInvoke } from "./tauri";
-
-export interface DashboardTransport {
-  readonly mode: "browser" | "native";
-  /**
-   * The `/api/dashboard`-shaped body. Browser mode resolves `undefined` when the loopback
-   * projection is unavailable (the caller falls back to the legacy routes); failures throw.
-   */
-  loadDashboardBody(fresh: boolean): Promise<unknown>;
-}
-
-type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
-
-/** Loopback HTTP transport. `fetchImpl` is resolved per call so test stubs apply. */
-export function createBrowserTransport(fetchImpl: FetchLike = (input, init) => fetch(input, init)): DashboardTransport {
-  return {
-    mode: "browser",
-    async loadDashboardBody(fresh) {
-      const response = await fetchImpl("/api/dashboard", { credentials: "same-origin", ...(fresh ? { cache: "no-store" } : {}) });
-      return response.ok ? await response.json() as unknown : undefined;
-    },
-  };
-}
 
 type DesktopStoreState = "empty" | "preview" | "authoritative" | "damaged" | "unknown";
 
@@ -49,6 +22,8 @@ export interface DesktopStoreStatus {
   readonly bytes: number | null;
   /** True only when the authoritative store, owner setting, and helper self-check all pass. */
   readonly refreshAvailable: boolean;
+  /** True only when native iCal scope, broker, and receiver port are ready. */
+  readonly icalRefreshAvailable: boolean;
   /** Owner preference. This alone does not mean refresh is available. */
   readonly canvasRefreshEnabled: boolean;
   /** A private daily recovery snapshot is being written without blocking dashboard reads. */
@@ -103,11 +78,11 @@ export class DesktopCommandError extends Error {
   }
 }
 
-export interface NativeTransport extends DashboardTransport {
-  readonly mode: "native";
+export interface NativeTransport {
   storeStatus(): Promise<DesktopStoreStatus>;
   setCanvasRefreshEnabled(enabled: boolean): Promise<CanvasRefreshSetting>;
   startCanvasRefresh(onProgress: (progress: CanvasRefreshProgress) => void): Promise<CanvasRefreshResult>;
+  startIcalRefresh(onProgress: (progress: IcalRefreshProgress) => void): Promise<IcalRefreshResult>;
   /** Opens the native folder picker in Rust; resolves whether a legacy folder is selected. */
   chooseLegacyRoot(): Promise<boolean>;
   dryRunImport(): Promise<DryRunReport>;
@@ -156,6 +131,9 @@ interface CanvasRefreshResult {
   readonly status: "complete" | "incomplete";
   readonly updatedAt: string | null;
 }
+
+export interface IcalRefreshProgress { readonly phase: "broker-starting" | "waiting-for-calendar" | "importing" | "complete" }
+export interface IcalRefreshResult { readonly status: "complete"; readonly updatedAt: string; readonly added: number; readonly updated: number; readonly held: number; readonly removed: 0 }
 
 interface NativeMutationResult {
   readonly completed: boolean;
@@ -221,7 +199,7 @@ function safeCounts(value: object): Readonly<Record<string, number>> {
 
 function parseStatus(value: unknown): DesktopStoreStatus {
   const record = objectOf(value, "store status");
-  if (typeof record.dataFolder !== "string" || typeof record.legacyRootSelected !== "boolean" || typeof record.refreshAvailable !== "boolean" || typeof record.canvasRefreshEnabled !== "boolean") throw malformed("store status");
+  if (typeof record.dataFolder !== "string" || typeof record.legacyRootSelected !== "boolean" || typeof record.refreshAvailable !== "boolean" || typeof record.icalRefreshAvailable !== "boolean" || typeof record.canvasRefreshEnabled !== "boolean") throw malformed("store status");
   let snapshotProgress: DesktopStoreStatus["snapshotProgress"] = null;
   if (record.snapshotProgress !== undefined && record.snapshotProgress !== null) {
     const progress = objectOf(record.snapshotProgress, "snapshot progress");
@@ -236,6 +214,7 @@ function parseStatus(value: unknown): DesktopStoreStatus {
     files: nullableCount(record.files, "file count"),
     bytes: nullableCount(record.bytes, "byte count"),
     refreshAvailable: record.refreshAvailable,
+    icalRefreshAvailable: record.icalRefreshAvailable,
     canvasRefreshEnabled: record.canvasRefreshEnabled,
     snapshotInProgress: record.snapshotInProgress === true,
     snapshotProgress,
@@ -359,6 +338,19 @@ function parseCanvasRefreshResult(value: unknown): CanvasRefreshResult {
   return { status: oneOf(row.status, ["complete", "incomplete"], "Canvas refresh status"), updatedAt };
 }
 
+function parseIcalRefreshProgress(value: unknown): IcalRefreshProgress | null {
+  try { return { phase: oneOf(objectOf(value, "calendar refresh progress").phase, ["broker-starting", "waiting-for-calendar", "importing", "complete"] as const, "calendar refresh phase") }; }
+  catch { return null; }
+}
+
+function parseIcalRefreshResult(value: unknown): IcalRefreshResult {
+  const row = objectOf(value, "calendar refresh result");
+  if (typeof row.updatedAt !== "string" || !Number.isFinite(Date.parse(row.updatedAt))) throw malformed("calendar refresh time");
+  const removed = count(row.removed, "calendar removals");
+  if (removed !== 0) throw malformed("calendar removals");
+  return { status: oneOf(row.status, ["complete"] as const, "calendar refresh status"), updatedAt: row.updatedAt, added: count(row.added, "calendar additions"), updated: count(row.updated, "calendar updates"), held: count(row.held, "calendar holds"), removed: 0 };
+}
+
 function parseAvatar(value: unknown): AvatarHeader | null {
   if (value === null) return null;
   const record = objectOf(value, "avatar header");
@@ -401,8 +393,7 @@ export function parseDocumentBundle(value: unknown): DashboardDocumentBundle {
 }
 
 /**
- * Native-mode projection options; the only intended differences from browser mode. The desktop
- * store holds imported documents it never refreshes, so its source detail never claims "synced".
+ * The desktop store holds imported documents and reports refresh status from native settings.
  */
 export function nativeProjectionOptions(storeState: DashboardDocumentBundle["storeState"]): DashboardProjectionOptions {
   return { resourceOpenPrefix: null, avatarPath: null, refreshAvailable: false, sourceLabel: storeState === "preview" ? "Desktop preview copy" : "Desktop app store", dataOrigin: "imported" };
@@ -421,7 +412,6 @@ export function createNativeTransport(invoke: TauriInvoke, createChannel: TauriC
     return createChannel((event) => { try { onProgress(parseExportProgress(event)); } catch { /* invalid advisory event */ } });
   }
   return {
-    mode: "native",
     async storeStatus() { return parseStatus(await call("store_status")); },
     async setCanvasRefreshEnabled(enabled) { return parseCanvasRefreshSetting(await call("set_canvas_refresh_enabled", { enabled })); },
     async startCanvasRefresh(onProgress) {
@@ -430,6 +420,13 @@ export function createNativeTransport(invoke: TauriInvoke, createChannel: TauriC
         if (progress !== null) onProgress(progress);
       });
       return parseCanvasRefreshResult(await call("start_canvas_refresh", { onProgress: channel }));
+    },
+    async startIcalRefresh(onProgress) {
+      const channel = createChannel((message) => {
+        const progress = parseIcalRefreshProgress(message);
+        if (progress !== null) onProgress(progress);
+      });
+      return parseIcalRefreshResult(await call("start_ical_refresh", { onProgress: channel }));
     },
     async chooseLegacyRoot() {
       const choice = objectOf(await call("choose_legacy_root"), "folder choice");

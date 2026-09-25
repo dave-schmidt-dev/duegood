@@ -5,7 +5,7 @@
     "moduleResolution": "Bundler",
     "allowImportingTsExtensions": true,
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
-    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types", "node"],
+    "types": ["node"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
@@ -21,7 +21,6 @@
     "src/**/*.ts",
     "test/**/*.ts",
     "scripts/**/*.ts",
-    "*.config.ts",
-    "src/worker-env.d.ts"
+    "*.config.ts"
   ]
 }

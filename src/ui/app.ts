@@ -1,16 +1,13 @@
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
-import { CSRF_HEADER_NAME, readCsrfToken, readLocalCsrfToken } from "./csrf";
 import { render, type ElementDescriptor } from "./dom";
 import {
   renderDashboard,
-  copyTextToClipboard,
   formatAssignmentCopyText,
   type DashboardConversation,
   type DashboardMessage,
   type DashboardAttachment,
   type DashboardCourse,
   type DashboardGradeGroup,
-  type DashboardGradePreviewProposal,
   type DashboardData,
   type DashboardEvent,
   type DashboardHandlers,
@@ -25,44 +22,27 @@ import {
   safeLocalHref,
 } from "./pages/dashboard";
 import { DASHBOARD_ROUTES, type DashboardPage } from "./routes";
+import { renderDesktopSetup, setupError, setupPanel, type DesktopSetupHandlers, type DesktopSetupState } from "./desktop-setup";
+export { renderDesktopSetup } from "./desktop-setup";
+export type { DesktopSetupHandlers, DesktopSetupState } from "./desktop-setup";
 import {
-  createBrowserTransport,
   createNativeTransport,
   DesktopCommandError,
-  type DashboardTransport,
   type DesktopStoreStatus,
-  type DryRunReport,
   type CanvasRefreshProgress,
-  type ImportProgress,
+  type IcalRefreshProgress,
+  type IcalRefreshResult,
   type StoreTransitionProgress,
   type NativeTransport,
-  type DesktopSnapshot,
 } from "./transport";
-import { desktopRecoveryPanel } from "./components/recovery-panel";
 
 function element(tag: string, attrs: Record<string, string> = {}, text?: string): ElementDescriptor {
   return { tag, attrs, ...(text !== undefined ? { text } : {}) };
 }
 
-/** Preserves the existing truthful pre-auth shell when the local application is unavailable. */
-function renderDisabledShell(mount: HTMLElement): void {
-  const status = element("div", { class: "status", role: "status", "aria-live": "polite" });
-  const shell: ElementDescriptor = {
-    tag: "div", attrs: { class: "shell" }, children: [{ tag: "main", attrs: { id: "main", class: "panel", tabindex: "-1" }, children: [
-      element("p", { class: "eyebrow" }, "Local foundation"),
-      element("h1", {}, "Due Good"),
-      element("p", {}, "A private student planning workspace is being prepared. No Canvas account is connected in this local scaffold."),
-      { ...status, children: [element("strong", {}, "Canvas connection unavailable"), element("span", {}, " Institution-enabled OAuth has not been configured.")] },
-    ] }],
-  };
-  mount.replaceChildren(render(shell));
-  const statusNode = mount.querySelector(".status");
-  if (window.isSecureContext && "serviceWorker" in navigator) {
-    void navigator.serviceWorker.register("/sw.js").catch(() => statusNode?.replaceChildren(render(element("strong", {}, "Local app shell unavailable")), render(element("span", {}, " Reload after the secure test origin is ready."))));
-  }
-}
-
 const EMPTY_DATA: DashboardData = { version: "", courses: [], events: [], pendingSourceLinks: [], resources: [], conversations: [], refreshes: [], profile: null, refreshAvailable: false, sourceStatus: {} };
+
+function desktopRefreshAvailable(info: DesktopStoreInfo | undefined): boolean { return info?.refreshAvailable === true || info?.icalRefreshAvailable === true; }
 
 function record(value: unknown): Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function text(value: unknown, fallback = ""): string { return typeof value === "string" ? value : fallback; }
@@ -222,51 +202,12 @@ export function parseDashboard(value: unknown): DashboardData {
   };
 }
 
-async function loadLegacyDashboard(refreshAvailable: boolean): Promise<DashboardData> {
-  const connectionsResponse = await fetch("/api/connections", { credentials: "same-origin" });
-  if (!connectionsResponse.ok) throw new Error("connections unavailable");
-  const connections = rows(record(await connectionsResponse.json()).connections);
-  if (!connections.some((connection) => record(connection).status === "active")) {
-    return { ...EMPTY_DATA, refreshAvailable, sourceStatus: { state: "disconnected", label: "Canvas connection", detail: "No active Canvas connection." } };
-  }
-  const [coursesResponse, assignmentsResponse] = await Promise.all([
-    fetch("/api/courses", { credentials: "same-origin" }),
-    fetch("/api/assignments", { credentials: "same-origin" }),
-  ]);
-  if (!coursesResponse.ok || !assignmentsResponse.ok) throw new Error("legacy coursework unavailable");
-  const courses = rows(record(await coursesResponse.json()).courses).map(parseCourse).filter((item): item is DashboardCourse => item !== undefined);
-  const events = rows(record(await assignmentsResponse.json()).assignments).map(parseEvent).filter((item): item is DashboardEvent => item !== undefined);
-  const lastRefreshAt = courses.map((course) => course.lastSuccessfulCheckAt ?? 0).reduce((latest, value) => Math.max(latest, value), 0) || null;
-  return { version: "", courses, events, pendingSourceLinks: [], resources: [], conversations: [], refreshes: [], profile: null, refreshAvailable, sourceStatus: { state: courses.length > 0 ? "ready" : "no_course", label: "Canvas coursework", detail: courses.length > 0 ? "Assignments are available; local Library and Inbox are not active in this environment." : "No course has been selected.", lastRefreshAt } };
-}
-
 function pageFromHash(): DashboardPage {
   const candidate = window.location.hash.replace(/^#/, "");
   return DASHBOARD_ROUTES.some((route) => route.page === candidate) ? candidate as DashboardPage : "timeline";
 }
 
 function replaced(set: ReadonlySet<string>, id: string, include: boolean): ReadonlySet<string> { const next = new Set(set); if (include) next.add(id); else next.delete(id); return next; }
-
-async function refreshLocalCsrf(previous: string): Promise<string | undefined> {
-  try {
-    const response = await fetch("/", { credentials: "same-origin", cache: "no-store" });
-    if (!response.ok) return undefined;
-    const next = readLocalCsrfToken();
-    return next !== undefined && next !== previous ? next : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export async function postMutation(path: string, body?: unknown): Promise<Response> {
-  const token = readCsrfToken();
-  if (token === undefined) throw new Error("csrf unavailable");
-  const init = (csrf: string): RequestInit => ({ method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", [CSRF_HEADER_NAME]: csrf }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  const response = await fetch(path, init(token));
-  if (response.status !== 403) return response;
-  const refreshed = await refreshLocalCsrf(token);
-  return refreshed === undefined ? response : fetch(path, init(refreshed));
-}
 
 /** Desktop-only dashboard context: the store the data came from and the replace action. */
 interface DesktopDashboardOptions {
@@ -284,27 +225,25 @@ export async function resolveNativeMutationConflict(error: unknown, reload: () =
 }
 
 /** Mounts the dashboard; returns a disposer so the desktop shell can swap screens cleanly. */
-function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, transport: DashboardTransport, desktop?: DesktopDashboardOptions): () => void {
-  const native = transport.mode === "native" ? transport as NativeTransport : undefined;
+function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop: DesktopDashboardOptions): () => void {
   let avatarUrl: string | undefined;
-  let state: DashboardState = { page: pageFromHash(), loading: true, data: { ...EMPTY_DATA, refreshAvailable: authRefreshAvailable }, now: Date.now(), eventMode: "all", courseFilter: "all", gradeCourseFilter: "all", gradeMode: "all", resourceFilter: "all", expandedEventIds: new Set(), pendingCompletionIds: new Set(), failedCompletionIds: new Set(), pendingDiscussionIds: new Set(), failedDiscussionIds: new Set(), pendingManualGradeIds: new Set(), failedManualGradeIds: new Set(), refreshState: "idle", ...(desktop === undefined ? {} : { desktop: desktop.info }) };
+  let state: DashboardState = { page: pageFromHash(), loading: true, data: { ...EMPTY_DATA, refreshAvailable: desktop.info.refreshAvailable === true }, now: Date.now(), eventMode: "all", courseFilter: "all", gradeCourseFilter: "all", gradeMode: "all", resourceFilter: "all", expandedEventIds: new Set(), pendingCompletionIds: new Set(), failedCompletionIds: new Set(), pendingDiscussionIds: new Set(), failedDiscussionIds: new Set(), pendingManualGradeIds: new Set(), failedManualGradeIds: new Set(), refreshState: "idle", desktop: desktop.info };
   let disposed = false;
   let snapshotStatusTimer: ReturnType<typeof setTimeout> | undefined;
   const listeners = new AbortController();
 
   function draw(): void { if (disposed) return; state = { ...state, now: Date.now() }; mount.replaceChildren(render(renderDashboard(state, handlers))); }
   async function withAvatar(data: DashboardData): Promise<DashboardData> {
-    if (native === undefined || data.profile === null) return data;
-    const avatar = await native.readAvatar().catch(() => null);
+    if (data.profile === null) return data;
+    const avatar = await transport.readAvatar().catch(() => null);
     if (avatarUrl !== undefined) URL.revokeObjectURL(avatarUrl);
     avatarUrl = avatar === null ? undefined : URL.createObjectURL(new Blob([new Uint8Array(avatar.bytes).buffer], { type: avatar.contentType }));
     return { ...data, profile: { ...data.profile, avatarPath: avatarUrl ?? null } };
   }
   async function load(): Promise<void> {
     try {
-      const body = await transport.loadDashboardBody(false);
-      const data = await withAvatar(body !== undefined ? parseDashboard(body) : await loadLegacyDashboard(authRefreshAvailable));
-      state = { ...state, loading: false, error: undefined, data: { ...data, refreshAvailable: native === undefined ? (data.refreshAvailable || authRefreshAvailable) : state.desktop?.refreshAvailable === true }, selectedConversationId: state.selectedConversationId ?? data.conversations[0]?.id, selectedRefreshId: state.selectedRefreshId ?? data.refreshes[0]?.id };
+      const data = await withAvatar(parseDashboard(await transport.loadDashboardBody(false)));
+      state = { ...state, loading: false, error: undefined, data: { ...data, refreshAvailable: desktopRefreshAvailable(state.desktop) }, selectedConversationId: state.selectedConversationId ?? data.conversations[0]?.id, selectedRefreshId: state.selectedRefreshId ?? data.refreshes[0]?.id };
     } catch (error) {
       const detail = error instanceof DesktopCommandError ? ` ${error.message}` : "";
       state = { ...state, loading: false, error: `Coursework could not be loaded. No substitute or sample data was shown.${detail}` };
@@ -313,12 +252,12 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
   }
 
   async function pollStartupSnapshot(): Promise<void> {
-    if (disposed || native === undefined || state.desktop?.snapshotInProgress !== true) return;
+    if (disposed || state.desktop?.snapshotInProgress !== true) return;
     try {
-      const status = await native.storeStatus();
+      const status = await transport.storeStatus();
       if (disposed) return;
       if (status.availability === "ready" && (status.state === "preview" || status.state === "authoritative")) {
-        state = { ...state, desktop: { ...state.desktop!, canvasRefreshEnabled: status.canvasRefreshEnabled, refreshAvailable: status.refreshAvailable, snapshotInProgress: status.snapshotInProgress, snapshotProgress: status.snapshotProgress, warning: status.problem }, data: { ...state.data, refreshAvailable: status.refreshAvailable } };
+        state = { ...state, desktop: { ...state.desktop!, canvasRefreshEnabled: status.canvasRefreshEnabled, refreshAvailable: status.refreshAvailable, icalRefreshAvailable: status.icalRefreshAvailable, snapshotInProgress: status.snapshotInProgress, snapshotProgress: status.snapshotProgress, warning: status.problem }, data: { ...state.data, refreshAvailable: status.refreshAvailable || status.icalRefreshAvailable } };
         draw();
       }
       if (status.snapshotInProgress) snapshotStatusTimer = setTimeout(() => { void pollStartupSnapshot(); }, 500);
@@ -329,10 +268,8 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
 
   async function reloadAuthoritativeDashboard(): Promise<boolean> {
     try {
-      const body = await transport.loadDashboardBody(true);
-      if (body === undefined) return false;
-      const data = await withAvatar(parseDashboard(body));
-      state = { ...state, data: { ...data, refreshAvailable: native === undefined ? (data.refreshAvailable || authRefreshAvailable) : state.desktop?.refreshAvailable === true }, selectedConversationId: data.conversations.some((conversation) => conversation.id === state.selectedConversationId) ? state.selectedConversationId : data.conversations[0]?.id, selectedRefreshId: data.refreshes[0]?.id };
+      const data = await withAvatar(parseDashboard(await transport.loadDashboardBody(true)));
+      state = { ...state, data: { ...data, refreshAvailable: state.desktop?.refreshAvailable === true }, selectedConversationId: data.conversations.some((conversation) => conversation.id === state.selectedConversationId) ? state.selectedConversationId : data.conversations[0]?.id, selectedRefreshId: data.refreshes[0]?.id };
       return true;
     } catch {
       return false;
@@ -354,7 +291,7 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
 
   function openPendingLinkDecision(decision: "confirm" | "reject"): void {
     const selected = state.data.pendingSourceLinks.find((link) => link.id === state.selectedPendingLinkId) ?? state.data.pendingSourceLinks[0];
-    if (state.readOnly === true || selected === undefined || selected.needsRefresh === true) return;
+    if (selected === undefined || selected.needsRefresh === true) return;
     const candidateId = selected.candidateIds.length === 1 ? selected.candidateIds[0] : state.selectedPendingLinkCandidateId;
     if (decision === "confirm" && (candidateId === undefined || !selected.candidateIds.includes(candidateId))) {
       state = { ...state, pendingLinkNotice: "Choose a local candidate before confirming this link." };
@@ -378,25 +315,9 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
     if (selected === undefined || selected.needsRefresh === true || decision === undefined || state.data.version.length !== 64 || (decision === "confirm" && (candidateId === undefined || !selected.candidateIds.includes(candidateId)))) return;
     state = { ...state, pendingLinkSaving: true, pendingLinkNotice: undefined }; draw();
     try {
-      if (native !== undefined) {
-        await native.resolvePendingSourceLink(selected.id, decision === "confirm" ? candidateId! : "", decision, state.data.version);
-        const reloaded = await reloadAuthoritativeDashboard();
-        state = { ...state, pendingLinkSaving: false, pendingLinkDecision: undefined, pendingLinkNotice: reloaded ? (decision === "confirm" ? "Link confirmed. The original local item was kept." : "Records kept distinct. The Canvas item is now separate.") : "Decision saved. Reload to view current coursework." };
-        draw();
-        return;
-      }
-      const response = await postMutation(`/api/local/pending-source-links/${encodeURIComponent(selected.id)}`, {
-        expectedVersion: state.data.version, localItemId: decision === "confirm" ? candidateId : "", decision,
-      });
-      if (response.status === 409) {
-        const reloaded = await reloadAuthoritativeDashboard();
-        state = { ...state, pendingLinkSaving: false, pendingLinkDecision: undefined, pendingLinkNotice: reloaded ? "This comparison changed elsewhere. Latest state reloaded; review it again." : "This comparison changed elsewhere. Reload the page and try again." };
-      } else if (!response.ok) {
-        state = { ...state, pendingLinkSaving: false, pendingLinkNotice: response.status === 403 ? "The local session changed; reload and try again." : "The decision was not saved. Coursework was unchanged." };
-      } else {
-        const reloaded = await reloadAuthoritativeDashboard();
-        state = { ...state, pendingLinkSaving: false, pendingLinkDecision: undefined, pendingLinkNotice: reloaded ? (decision === "confirm" ? "Link confirmed. The original local item was kept." : "Records kept distinct. The Canvas item is now separate.") : "Decision saved. Reload to view current coursework." };
-      }
+      await transport.resolvePendingSourceLink(selected.id, decision === "confirm" ? candidateId! : "", decision, state.data.version);
+      const reloaded = await reloadAuthoritativeDashboard();
+      state = { ...state, pendingLinkSaving: false, pendingLinkDecision: undefined, pendingLinkNotice: reloaded ? (decision === "confirm" ? "Link confirmed. The original local item was kept." : "Records kept distinct. The Canvas item is now separate.") : "Decision saved. Reload to view current coursework." };
     } catch {
       state = { ...state, pendingLinkSaving: false, pendingLinkNotice: "The decision was not saved. Coursework was unchanged." };
     }
@@ -404,70 +325,41 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
   }
 
   async function toggleCompletion(id: string): Promise<void> {
-    if (state.readOnly === true) return;
     const item = state.data.events.find((event) => event.id === id); if (item === undefined || item.kind === "class") return;
     const target = !item.completed; const sourceItemId = item.sourceItemId ?? item.id;
     const update = (completed: boolean, completedAt: number | null) => state.data.events.map((event) => event.id === id ? { ...event, completed, completedAt } : event);
     state = { ...state, data: { ...state.data, events: update(target, target ? Date.now() : null) }, pendingCompletionIds: replaced(state.pendingCompletionIds, id, true), failedCompletionIds: replaced(state.failedCompletionIds, id, false), mutationError: undefined }; draw();
-    let authoritativeReloaded = false;
     try {
-      if (native !== undefined) {
-        const result = await native.setCompletion(sourceItemId, item.completed, target);
-        state = { ...state, data: { ...state.data, events: update(result.completed, result.completedAt) }, pendingCompletionIds: replaced(state.pendingCompletionIds, id, false) };
-        draw();
-        return;
-      }
-      const response = await postMutation(`/api/source-items/${encodeURIComponent(sourceItemId)}/completion`, { completed: target });
-      if (response.status === 409) {
-        const reloaded = await reloadAuthoritativeDashboard();
-        authoritativeReloaded = reloaded;
-        throw new Error(reloaded ? "This item changed elsewhere. Latest state reloaded; try again." : "This item changed elsewhere. Reload the page and try again.");
-      }
-      if (!response.ok) throw new Error(response.status === 403 ? "Could not save. The local session changed; reload the page and try again." : "Could not save. Existing completion state was restored.");
-      const body = record(await response.json());
-      state = { ...state, data: { ...state.data, events: update(body.completed === true, typeof body.completedAt === "number" ? body.completedAt : null) }, pendingCompletionIds: replaced(state.pendingCompletionIds, id, false) };
+      const result = await transport.setCompletion(sourceItemId, item.completed, target);
+      state = { ...state, data: { ...state.data, events: update(result.completed, result.completedAt) }, pendingCompletionIds: replaced(state.pendingCompletionIds, id, false) };
+      draw();
+      return;
     } catch (error) {
-      const nativeFailure = native === undefined ? undefined : await resolveNativeMutationConflict(error, reloadAuthoritativeDashboard, "item");
-      if (nativeFailure !== undefined) authoritativeReloaded = nativeFailure.reloaded;
-      state = { ...state, data: authoritativeReloaded ? state.data : { ...state.data, events: update(item.completed, item.completedAt ?? null) }, pendingCompletionIds: replaced(state.pendingCompletionIds, id, false), failedCompletionIds: replaced(state.failedCompletionIds, id, true), mutationError: { id, message: nativeFailure?.message ?? (error instanceof Error ? error.message : "Could not save. Existing completion state was restored.") } };
+      const failure = await resolveNativeMutationConflict(error, reloadAuthoritativeDashboard, "item");
+      state = { ...state, data: failure.reloaded ? state.data : { ...state.data, events: update(item.completed, item.completedAt ?? null) }, pendingCompletionIds: replaced(state.pendingCompletionIds, id, false), failedCompletionIds: replaced(state.failedCompletionIds, id, true), mutationError: { id, message: failure.message } };
     }
     draw();
   }
 
   async function toggleDiscussion(id: string, field: "post" | "replies"): Promise<void> {
-    if (state.readOnly === true) return;
     const item = state.data.events.find((event) => event.id === id); if (item === undefined || item.kind !== "discussion") return;
     const before = { post: item.discussionPostDone === true, replies: item.discussionRepliesDone === true };
     const target = { post: field === "post" ? !before.post : before.post, replies: field === "replies" ? !before.replies : before.replies };
     const update = (post: boolean, replies: boolean) => state.data.events.map((event) => event.id === id ? { ...event, discussionPostDone: post, discussionRepliesDone: replies } : event);
     state = { ...state, data: { ...state.data, events: update(target.post, target.replies) }, pendingDiscussionIds: replaced(state.pendingDiscussionIds, id, true), failedDiscussionIds: replaced(state.failedDiscussionIds, id, false), mutationError: undefined }; draw();
-    let authoritativeReloaded = false;
     try {
-      if (native !== undefined) {
-        const result = await native.setDiscussionField(item.sourceItemId ?? item.id, field, before[field], target[field]);
-        state = { ...state, data: { ...state.data, events: update(result.discussionPostDone, result.discussionRepliesDone) }, pendingDiscussionIds: replaced(state.pendingDiscussionIds, id, false) };
-        draw();
-        return;
-      }
-      const response = await postMutation(`/api/source-items/${encodeURIComponent(item.sourceItemId ?? item.id)}/discussion-progress`, { field, value: target[field] });
-      if (response.status === 409) {
-        const reloaded = await reloadAuthoritativeDashboard();
-        authoritativeReloaded = reloaded;
-        throw new Error(reloaded ? "This discussion changed elsewhere. Latest state reloaded; try again." : "This discussion changed elsewhere. Reload the page and try again.");
-      }
-      if (!response.ok) throw new Error(response.status === 403 ? "Could not save discussion progress. The local session changed; reload the page and try again." : "Could not save discussion progress. Existing marks were restored.");
-      const body = record(await response.json());
-      state = { ...state, data: { ...state.data, events: update(body.discussionPostDone === true, body.discussionRepliesDone === true) }, pendingDiscussionIds: replaced(state.pendingDiscussionIds, id, false) };
+      const result = await transport.setDiscussionField(item.sourceItemId ?? item.id, field, before[field], target[field]);
+      state = { ...state, data: { ...state.data, events: update(result.discussionPostDone, result.discussionRepliesDone) }, pendingDiscussionIds: replaced(state.pendingDiscussionIds, id, false) };
+      draw();
+      return;
     } catch (error) {
-      const nativeFailure = native === undefined ? undefined : await resolveNativeMutationConflict(error, reloadAuthoritativeDashboard, "discussion");
-      if (nativeFailure !== undefined) authoritativeReloaded = nativeFailure.reloaded;
-      state = { ...state, data: authoritativeReloaded ? state.data : { ...state.data, events: update(before.post, before.replies) }, pendingDiscussionIds: replaced(state.pendingDiscussionIds, id, false), failedDiscussionIds: replaced(state.failedDiscussionIds, id, true), mutationError: { id, message: nativeFailure?.message ?? (error instanceof Error ? error.message : "Could not save discussion progress. Existing marks were restored.") } };
+      const failure = await resolveNativeMutationConflict(error, reloadAuthoritativeDashboard, "discussion");
+      state = { ...state, data: failure.reloaded ? state.data : { ...state.data, events: update(before.post, before.replies) }, pendingDiscussionIds: replaced(state.pendingDiscussionIds, id, false), failedDiscussionIds: replaced(state.failedDiscussionIds, id, true), mutationError: { id, message: failure.message } };
     }
     draw();
   }
 
-  async function saveManualGrade(id: string, source: "manual" | "pdf" = "manual"): Promise<void> {
-    if (state.readOnly === true) return;
+  async function saveManualGrade(id: string): Promise<void> {
     const item = state.data.events.find((event) => event.id === id);
     const editing = state.editingManualGrade;
     if (item === undefined || item.kind === "class" || editing?.id !== id || state.pendingManualGradeIds.has(id)) return;
@@ -475,163 +367,81 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
     const update = (manualGrade: string | null, manualGradeVersion: 1 | null, manualGradeSource: "manual" | "pdf" | null) => state.data.events.map((event) => event.id === id ? { ...event, manualGrade, manualGradeVersion, manualGradeSource } : event);
     state = {
       ...state,
-      data: { ...state.data, events: update(value, value === null ? null : 1, value === null ? null : source) },
+      data: { ...state.data, events: update(value, value === null ? null : 1, value === null ? null : "manual") },
       pendingManualGradeIds: replaced(state.pendingManualGradeIds, id, true),
       failedManualGradeIds: replaced(state.failedManualGradeIds, id, false),
       mutationError: undefined,
     };
     draw();
-    let authoritativeReloaded = false;
     try {
-      if (native !== undefined) {
-        const result = await native.setManualGrade(item.sourceItemId ?? item.id, value, state.data.version);
-        state = { ...state, data: { ...state.data, version: result.version, events: update(result.manualGrade, result.manualGradeVersion, result.manualGrade === null ? null : "manual") }, pendingManualGradeIds: replaced(state.pendingManualGradeIds, id, false), editingManualGrade: undefined };
-        draw();
-        return;
-      }
-      const response = await postMutation(`/api/source-items/${encodeURIComponent(item.sourceItemId ?? item.id)}/manual-grade`, { version: state.data.version, value, source });
-      if (response.status === 409) {
-        const reloaded = await reloadAuthoritativeDashboard();
-        authoritativeReloaded = reloaded;
-        throw new Error(reloaded ? "This local grade changed elsewhere. Latest state reloaded; try again." : "This local grade changed elsewhere. Reload the page and try again.");
-      }
-      if (!response.ok) throw new Error(response.status === 403 ? "Could not save local grade. The local session changed; reload the page and try again." : "Could not save local grade. The previous value was restored.");
-      const body = record(await response.json());
-      const manualGrade = typeof body.manualGrade === "string" ? body.manualGrade : null;
-      const manualGradeVersion = body.manualGradeVersion === 1 ? 1 : null;
-      const manualGradeSource = manualGrade === null ? null : body.manualGradeSource === "pdf" ? "pdf" : "manual";
+      const result = await transport.setManualGrade(item.sourceItemId ?? item.id, value, state.data.version);
       state = {
         ...state,
-        data: { ...state.data, version: typeof body.version === "string" ? body.version : state.data.version, events: update(manualGrade, manualGradeVersion, manualGradeSource) },
+        data: { ...state.data, version: result.version, events: update(result.manualGrade, result.manualGradeVersion, result.manualGrade === null ? null : "manual") },
         pendingManualGradeIds: replaced(state.pendingManualGradeIds, id, false),
         editingManualGrade: undefined,
       };
+      draw();
+      return;
     } catch (error) {
       state = {
         ...state,
-        data: authoritativeReloaded ? state.data : { ...state.data, events: update(item.manualGrade ?? null, item.manualGradeVersion ?? null, item.manualGradeSource ?? null) },
+        data: { ...state.data, events: update(item.manualGrade ?? null, item.manualGradeVersion ?? null, item.manualGradeSource ?? null) },
         pendingManualGradeIds: replaced(state.pendingManualGradeIds, id, false),
         failedManualGradeIds: replaced(state.failedManualGradeIds, id, true),
-        ...(authoritativeReloaded ? { editingManualGrade: undefined } : {}),
         mutationError: { id, message: error instanceof Error ? error.message : "Could not save local grade. The previous value was restored." },
       };
     }
     draw();
   }
 
-  async function previewGradePdf(file: File | null): Promise<void> {
-    if (native !== undefined || state.readOnly === true || file === null) return;
-    state = { ...state, gradePreview: { phase: "parsing", proposals: [], selectedIds: new Set() } };
-    draw();
-    const token = readCsrfToken();
-    if (token === undefined) { state = { ...state, gradePreview: { phase: "failed", proposals: [], selectedIds: new Set(), error: "This report needs manual entry." } }; draw(); return; }
-    const request = (csrf: string) => fetch("/api/local/grade-preview", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/pdf", [CSRF_HEADER_NAME]: csrf }, body: file });
-    try {
-      let response = await request(token);
-      if (response.status === 403) {
-        const refreshed = await refreshLocalCsrf(token);
-        if (refreshed !== undefined) response = await request(refreshed);
-      }
-      if (!response.ok) throw new Error();
-      const value = record(await response.json());
-      const proposals: DashboardGradePreviewProposal[] = rows(value.proposals).flatMap((entry) => {
-        const proposal = record(entry);
-        const id = optionalText(proposal.id); const course = optionalText(proposal.course); const item = optionalText(proposal.item); const grade = optionalText(proposal.grade);
-        const sourceItemId = proposal.sourceItemId === null ? null : optionalText(proposal.sourceItemId) ?? null;
-        if (id === undefined || course === undefined || item === undefined || grade === undefined || (proposal.status !== "ready" && proposal.status !== "manual")) return [];
-        return [{ id, course, item, grade, source: "User-confirmed PDF", sourceItemId, status: proposal.status }];
-      });
-      state = { ...state, gradePreview: { phase: "ready", proposals, selectedIds: new Set() } };
-    } catch {
-      state = { ...state, gradePreview: { phase: "failed", proposals: [], selectedIds: new Set(), error: "This report needs manual entry." } };
-    }
-    draw();
-  }
-
-  async function confirmGradePreview(): Promise<void> {
-    const preview = state.gradePreview;
-    if (preview?.phase !== "ready" || preview.selectedIds.size !== 1) return;
-    const selected = preview.proposals.filter((proposal) => preview.selectedIds.has(proposal.id) && proposal.status === "ready" && proposal.sourceItemId !== null);
-    if (selected.length !== 1) return;
-    state = { ...state, gradePreview: { ...preview, phase: "confirming" } };
-    draw();
-    const proposal = selected[0]!;
-    state = { ...state, editingManualGrade: { id: proposal.sourceItemId!, draft: proposal.grade } };
-    await saveManualGrade(proposal.sourceItemId!, "pdf");
-    if (state.mutationError !== undefined) {
-      state = { ...state, gradePreview: { phase: "ready", proposals: preview.proposals, selectedIds: new Set(), error: "The grade was not saved. Review the latest local value." } };
-      draw();
-      return;
-    }
-    state = { ...state, gradePreview: undefined };
-    draw();
-  }
-
   async function refresh(): Promise<void> {
     if (!state.data.refreshAvailable || state.refreshState === "running") return;
-    if (native !== undefined) {
-      state = { ...state, refreshState: "running", refreshProgress: undefined, refreshDetail: undefined, refreshSettingError: undefined }; draw();
-      try {
-        const result = await native.startCanvasRefresh((progress: CanvasRefreshProgress) => {
-          if (state.refreshState !== "running") return;
-          state = { ...state, refreshProgress: progress };
-          draw();
-        });
-        let data = state.data;
-        let refreshDetail: string | undefined;
-        try {
-          const body = await transport.loadDashboardBody(true);
-          if (body === undefined) throw new Error("missing refresh result");
-          data = await withAvatar(parseDashboard(body));
-        } catch {
-          refreshDetail = "Refresh finished, but updated coursework could not be reloaded.";
-        }
-        const currentStatus = await native.storeStatus().catch(() => undefined);
-        const desktop = currentStatus === undefined
-          ? { ...state.desktop!, lastRefreshAt: result.updatedAt }
-          : currentStatus.availability === "ready" && (currentStatus.state === "preview" || currentStatus.state === "authoritative")
-            ? { ...state.desktop!, canvasRefreshEnabled: currentStatus.canvasRefreshEnabled, refreshAvailable: currentStatus.refreshAvailable, warning: currentStatus.problem, lastRefreshAt: result.updatedAt }
-            : { ...state.desktop!, canvasRefreshEnabled: currentStatus.canvasRefreshEnabled, refreshAvailable: false, warning: currentStatus.problem, lastRefreshAt: result.updatedAt };
-        const refreshState = result.status === "incomplete" ? "partial" : "complete";
-        const refreshAvailable = currentStatus === undefined ? desktop.refreshAvailable === true : currentStatus.availability === "ready" && currentStatus.refreshAvailable;
-        state = {
-          ...state,
-          desktop,
-          data: { ...data, refreshAvailable },
-          refreshState,
-          refreshProgress: undefined,
-          refreshDetail,
-          selectedRefreshId: data.refreshes[0]?.id,
-        };
-      } catch {
-        state = { ...state, refreshState: "failed", refreshProgress: undefined, refreshDetail: undefined };
-      }
-      draw();
-      return;
-    }
-    const csrfToken = readCsrfToken(); if (csrfToken === undefined) { state = { ...state, refreshState: "failed" }; draw(); return; }
-    state = { ...state, refreshState: "running" }; draw();
+    state = { ...state, refreshState: "running", refreshProgress: undefined, refreshDetail: undefined, refreshSettingError: undefined }; draw();
     try {
-      const response = await postMutation("/api/local/refresh");
-      if (!response.ok) throw new Error("refresh failed");
-      const result = record(await response.json());
-      const body = await transport.loadDashboardBody(false); if (body === undefined) throw new Error("reload failed");
-      const data = parseDashboard(body);
-      const refreshState = result.status === "partial" ? "partial" : "complete";
-      state = { ...state, data: { ...data, refreshAvailable: data.refreshAvailable || authRefreshAvailable }, refreshState, selectedRefreshId: data.refreshes[0]?.id };
-    } catch { state = { ...state, refreshState: "failed" }; }
+      const useCalendar = state.desktop?.refreshAvailable !== true && state.desktop?.icalRefreshAvailable === true;
+      const result = useCalendar
+        ? await transport.startIcalRefresh((progress: IcalRefreshProgress) => {
+            if (state.refreshState !== "running") return;
+            state = { ...state, refreshProgress: { phase: progress.phase, completed: 0, total: null, bytesDone: null } };
+            draw();
+          })
+        : await transport.startCanvasRefresh((progress: CanvasRefreshProgress) => {
+            if (state.refreshState !== "running") return;
+            state = { ...state, refreshProgress: progress };
+            draw();
+          });
+      let data = state.data;
+      let refreshDetail: string | undefined = useCalendar ? `Calendar refresh complete · ${String((result as IcalRefreshResult).added)} added · ${String((result as IcalRefreshResult).updated)} updated · ${String((result as IcalRefreshResult).held)} held` : undefined;
+      try {
+        data = await withAvatar(parseDashboard(await transport.loadDashboardBody(true)));
+      } catch {
+        refreshDetail = "Refresh finished, but updated coursework could not be reloaded.";
+      }
+      const currentStatus = await transport.storeStatus().catch(() => undefined);
+      const desktopInfo = currentStatus === undefined
+        ? { ...state.desktop!, lastRefreshAt: result.updatedAt }
+        : currentStatus.availability === "ready" && (currentStatus.state === "preview" || currentStatus.state === "authoritative")
+          ? { ...state.desktop!, canvasRefreshEnabled: currentStatus.canvasRefreshEnabled, refreshAvailable: currentStatus.refreshAvailable, icalRefreshAvailable: currentStatus.icalRefreshAvailable, warning: currentStatus.problem, lastRefreshAt: result.updatedAt }
+          : { ...state.desktop!, canvasRefreshEnabled: currentStatus.canvasRefreshEnabled, refreshAvailable: false, icalRefreshAvailable: false, warning: currentStatus.problem, lastRefreshAt: result.updatedAt };
+      const refreshState = result.status === "incomplete" ? "partial" : "complete";
+      const refreshAvailable = currentStatus === undefined ? desktopRefreshAvailable(desktopInfo) : currentStatus.availability === "ready" && (currentStatus.refreshAvailable || currentStatus.icalRefreshAvailable);
+      state = { ...state, desktop: desktopInfo, data: { ...data, refreshAvailable }, refreshState, refreshProgress: undefined, refreshDetail, selectedRefreshId: data.refreshes[0]?.id };
+    } catch {
+      state = { ...state, refreshState: "failed", refreshProgress: undefined, refreshDetail: undefined };
+    }
     draw();
   }
 
   async function toggleCanvasRefresh(enabled: boolean): Promise<void> {
-    if (native === undefined || state.desktop?.storeState !== "authoritative" || state.refreshSettingPending === true || state.refreshState === "running") return;
+    if (state.desktop?.storeState !== "authoritative" || state.refreshSettingPending === true || state.refreshState === "running") return;
     state = { ...state, refreshSettingPending: true, refreshSettingError: undefined }; draw();
     try {
-      const setting = await native.setCanvasRefreshEnabled(enabled);
+      const setting = await transport.setCanvasRefreshEnabled(enabled);
       if (state.desktop !== undefined) state = {
         ...state,
         desktop: { ...state.desktop, canvasRefreshEnabled: setting.canvasRefreshEnabled, refreshAvailable: setting.refreshAvailable },
-        data: { ...state.data, refreshAvailable: setting.refreshAvailable },
+        data: { ...state.data, refreshAvailable: setting.refreshAvailable || state.desktop.icalRefreshAvailable === true },
       };
     } catch {
       state = { ...state, refreshSettingError: "The Canvas refresh setting could not be saved." };
@@ -654,15 +464,15 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
   }
 
   async function refreshStoreAfterTransition(expected: "preview" | "authoritative"): Promise<void> {
-    if (native === undefined || state.desktop === undefined) return;
+    if (state.desktop === undefined) return;
     let desktop: DesktopStoreInfo = {
       ...state.desktop,
       storeState: expected,
-      ...(expected === "preview" ? { canvasRefreshEnabled: false, refreshAvailable: false } : { refreshAvailable: false }),
+      ...(expected === "preview" ? { canvasRefreshEnabled: false, refreshAvailable: false, icalRefreshAvailable: false } : { refreshAvailable: false, icalRefreshAvailable: false }),
       warning: "The store changed, but its current status could not be verified. Reopen the app before relying on refresh.",
     };
     try {
-      const status = await native.storeStatus();
+      const status = await transport.storeStatus();
       if (status.availability === "ready" && status.state === expected) {
         desktop = {
           storeState: expected,
@@ -670,21 +480,22 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
           importedAt: status.importedAt,
           canvasRefreshEnabled: status.canvasRefreshEnabled,
           refreshAvailable: status.refreshAvailable,
+          icalRefreshAvailable: status.icalRefreshAvailable,
           snapshotInProgress: status.snapshotInProgress,
           snapshotProgress: status.snapshotProgress,
           warning: status.problem,
         };
       }
     } catch { /* retain the command's reported state and fail refresh availability closed */ }
-    state = { ...state, desktop, data: { ...state.data, refreshAvailable: desktop.refreshAvailable === true } };
+    state = { ...state, desktop, data: { ...state.data, refreshAvailable: desktopRefreshAvailable(desktop) } };
     await reloadAuthoritativeDashboard();
   }
 
   async function prepareStorePromotion(): Promise<void> {
-    if (native === undefined || state.desktop?.storeState !== "preview" || state.storeTransition?.phase === "preparing" || state.storeTransition?.phase === "promoting") return;
+    if (state.desktop?.storeState !== "preview" || state.storeTransition?.phase === "preparing" || state.storeTransition?.phase === "promoting") return;
     state = { ...state, storeTransition: { phase: "preparing" } }; draw();
     try {
-      const proof = await native.prepareStorePromotion(onStoreTransitionProgress("preparing"));
+      const proof = await transport.prepareStorePromotion(onStoreTransitionProgress("preparing"));
       state = { ...state, storeTransition: { phase: "ready", proof } };
     } catch (error) {
       const failure = transitionFailure(error, "Backup selection cancelled. The app store remains a preview copy.");
@@ -694,11 +505,11 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
   }
 
   async function confirmStorePromotion(proofId: string): Promise<void> {
-    if (native === undefined || state.desktop?.storeState !== "preview" || state.storeTransition?.phase !== "ready" || state.storeTransition.proof?.proofId !== proofId) return;
+    if (state.desktop?.storeState !== "preview" || state.storeTransition?.phase !== "ready" || state.storeTransition.proof?.proofId !== proofId) return;
     // Clear the proof before IPC; it cannot be retried in the webview after any outcome.
     state = { ...state, storeTransition: { phase: "promoting" } }; draw();
     try {
-      const result = await native.confirmStorePromotion(proofId, onStoreTransitionProgress("promoting"));
+      const result = await transport.confirmStorePromotion(proofId, onStoreTransitionProgress("promoting"));
       await refreshStoreAfterTransition(result.state);
       state = { ...state, storeTransition: { phase: "idle", message: `Promotion complete. ${String(result.files)} files · ${result.bytes} bytes are now in the authoritative app store.` } };
     } catch (error) {
@@ -709,10 +520,10 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
   }
 
   async function demoteStoreForRollback(): Promise<void> {
-    if (native === undefined || state.desktop?.storeState !== "authoritative" || state.refreshState === "running" || state.refreshSettingPending === true || ["preparing", "promoting", "demoting", "exporting"].includes(state.storeTransition?.phase ?? "idle")) return;
+    if (state.desktop?.storeState !== "authoritative" || state.refreshState === "running" || state.refreshSettingPending === true || ["preparing", "promoting", "demoting", "exporting"].includes(state.storeTransition?.phase ?? "idle")) return;
     state = { ...state, storeTransition: { phase: "demoting" } }; draw();
     try {
-      const result = await native.demoteStoreForRollback(onStoreTransitionProgress("demoting"));
+      const result = await transport.demoteStoreForRollback(onStoreTransitionProgress("demoting"));
       await refreshStoreAfterTransition(result.state);
       state = { ...state, storeTransition: { phase: "idle", rollbackExportVerified: false, message: `App store returned to preview. ${String(result.recoveryFiles)} recovery files · ${result.recoveryBytes} bytes were retained. Canvas refresh is off. Export the frozen legacy source next.` } };
     } catch (error) {
@@ -723,12 +534,12 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
   }
 
   async function exportFrozenRollback(): Promise<void> {
-    if (native === undefined || state.desktop?.storeState !== "preview" || ["preparing", "promoting", "demoting", "exporting"].includes(state.storeTransition?.phase ?? "idle")) return;
+    if (state.desktop?.storeState !== "preview" || ["preparing", "promoting", "demoting", "exporting"].includes(state.storeTransition?.phase ?? "idle")) return;
     state = { ...state, storeTransition: { phase: "exporting", rollbackExportVerified: false } }; draw();
     try {
-      const result = await native.exportFrozenForRollback(onStoreTransitionProgress("exporting"));
+      const result = await transport.exportFrozenForRollback(onStoreTransitionProgress("exporting"));
       if (!result.equal) throw new DesktopCommandError("export-mismatch", "The exported copy did not match the frozen source. Do not use it for rollback.");
-      state = { ...state, storeTransition: { phase: "idle", rollbackExportVerified: true, message: `Frozen rollback copy verified: ${String(result.files)} files · ${result.bytes} bytes. Use this copy when restoring the legacy browser source.` } };
+      state = { ...state, storeTransition: { phase: "idle", rollbackExportVerified: true, message: `Frozen rollback copy verified: ${String(result.files)} files · ${result.bytes} bytes. Use this copy when restoring the legacy local source.` } };
     } catch (error) {
       const failure = transitionFailure(error, "Export cancelled. No rollback copy was completed.");
       state = { ...state, storeTransition: { phase: "idle", rollbackExportVerified: false, ...failure } };
@@ -747,7 +558,7 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
     if (previous !== undefined) { clearTimeout(previous); copyTimeouts.delete(id); }
     state = { ...state, copyFeedback: { ...state.copyFeedback, [id]: "pending" } };
     draw();
-    const success = native === undefined ? await copyTextToClipboard(copyText).catch(() => false) : await native.copyText(copyText).then(() => true, () => false);
+    const success = await transport.copyText(copyText).then(() => true, () => false);
     const status: "copied" | "failed" = success ? "copied" : "failed";
 
     state = {
@@ -785,7 +596,7 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
     onToggleCompletion(id) { void toggleCompletion(id); },
     onToggleDiscussion(id, field) { void toggleDiscussion(id, field); },
     onEditManualGrade(id) {
-      if (state.readOnly === true || state.pendingManualGradeIds.has(id)) return;
+      if (state.pendingManualGradeIds.has(id)) return;
       const item = state.data.events.find((event) => event.id === id);
       if (item === undefined || item.kind === "class") return;
       state = { ...state, editingManualGrade: { id, draft: item.manualGrade ?? "" }, failedManualGradeIds: replaced(state.failedManualGradeIds, id, false), mutationError: undefined };
@@ -796,15 +607,6 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
     },
     onSaveManualGrade(id) { void saveManualGrade(id); },
     onCancelManualGrade() { if (state.editingManualGrade !== undefined) { state = { ...state, editingManualGrade: undefined }; draw(); } },
-    onGradePreviewFile(file) { void previewGradePdf(file); },
-    onToggleGradePreviewProposal(id) {
-      const preview = state.gradePreview;
-      if (preview?.phase !== "ready") return;
-      state = { ...state, gradePreview: { ...preview, selectedIds: new Set([id]) } };
-      draw();
-    },
-    onConfirmGradePreview() { void confirmGradePreview(); },
-    onCancelGradePreview() { if (state.gradePreview?.phase !== "confirming") { state = { ...state, gradePreview: undefined }; draw(); } },
     onSelectConversation(selectedConversationId) { state = { ...state, selectedConversationId }; draw(); },
     onSelectRefresh(selectedRefreshId) { state = { ...state, selectedRefreshId }; draw(); },
     onRefresh() { void refresh(); },
@@ -815,17 +617,15 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
     onOpenPendingLinkDecision(decision) { openPendingLinkDecision(decision); },
     onCancelPendingLinkDecision() { cancelPendingLinkDecision(); },
     onResolvePendingLink() { void resolvePendingLink(); },
-    ...(native === undefined ? {} : { onOpenResource(id: string) {
+    onOpenResource(id: string) {
       state = { ...state, resourceNotice: "Opening the saved library file…" }; draw();
-      void native.openResource(id).then((action) => { state = { ...state, resourceNotice: action === "downloaded" ? "File saved." : action === "opened" ? "File opened." : "Save cancelled." }; draw(); }, () => { state = { ...state, resourceNotice: "The saved file could not be opened." }; draw(); });
-    } }),
-    ...(native === undefined ? {} : {
-      onPreparePromotion() { void prepareStorePromotion(); },
-      onConfirmPromotion(proofId: string) { void confirmStorePromotion(proofId); },
-      onCancelPromotion() { if (state.storeTransition?.phase === "ready") { state = { ...state, storeTransition: { phase: "idle", message: "Comparison discarded. The app store remains a preview copy." } }; draw(); } },
-      onDemoteStore() { void demoteStoreForRollback(); },
-      onExportFrozenRollback() { void exportFrozenRollback(); },
-    }),
+      void transport.openResource(id).then((action) => { state = { ...state, resourceNotice: action === "downloaded" ? "File saved." : action === "opened" ? "File opened." : "Save cancelled." }; draw(); }, () => { state = { ...state, resourceNotice: "The saved file could not be opened." }; draw(); });
+    },
+    onPreparePromotion() { void prepareStorePromotion(); },
+    onConfirmPromotion(proofId: string) { void confirmStorePromotion(proofId); },
+    onCancelPromotion() { if (state.storeTransition?.phase === "ready") { state = { ...state, storeTransition: { phase: "idle", message: "Comparison discarded. The app store remains a preview copy." } }; draw(); } },
+    onDemoteStore() { void demoteStoreForRollback(); },
+    onExportFrozenRollback() { void exportFrozenRollback(); },
     ...(desktop?.onReplacePreview === undefined ? {} : { onReplacePreview: desktop.onReplacePreview }),
     ...(desktop?.onRecovery === undefined ? {} : { onRecovery: desktop.onRecovery }),
     ...(desktop?.onExport === undefined ? {} : { onExport: desktop.onExport }),
@@ -846,7 +646,6 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
     else if (event.key.toLowerCase() === "r") { event.preventDefault(); openPendingLinkDecision("reject"); }
   }, { signal: listeners.signal });
   draw(); void load(); void pollStartupSnapshot();
-  if (transport.mode === "browser" && window.isSecureContext && "serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js").catch(() => undefined);
   return () => {
     disposed = true;
     listeners.abort();
@@ -859,185 +658,6 @@ function mountDashboard(mount: HTMLElement, authRefreshAvailable: boolean, trans
 
 // --- Desktop first run, recovery, and import ---------------------------------------------------
 
-const REFUSAL_LABELS: Readonly<Record<string, string>> = {
-  missingCourseworkDocument: "coursework.json is missing",
-  unsupportedRootEntries: "Unrecognized items at the top level",
-  unsupportedCourseEntries: "Unrecognized items in course folders",
-  unsupportedExportEntries: "Unrecognized items in Canvas exports",
-  invalidCourseFolderNames: "Course folders with unsupported names",
-  symlinksOutsideMaterials: "Links outside a materials folder",
-  escapingMaterialSymlinks: "Material links that leave the materials folder",
-  brokenMaterialSymlinks: "Broken material links",
-  materialSymlinksToNonFiles: "Material links to folders or special files",
-  specialFiles: "Special files (sockets, devices, pipes)",
-  leftoverTemporaryFiles: "Leftover temporary files",
-  staleLockRemnants: "Leftover lock folders",
-  filesOverPerFileCap: "Files over the per-file cap",
-  jsonDocumentsOverCap: "JSON documents over the JSON cap",
-  totalBytesOverCap: "Total size over the cap",
-  entriesOverCap: "More files and folders than the cap",
-  materialsNestedTooDeep: "Materials nested deeper than the cap",
-  malformedJson: "Malformed JSON documents",
-  duplicateJsonKeys: "JSON documents with duplicate keys",
-  invalidCourseworkDocument: "Invalid coursework document",
-  duplicateCourseKeys: "Duplicate course keys",
-  duplicateItemIds: "Duplicate item IDs",
-  nonUtf8Names: "Names that are not valid UTF-8",
-  unreadableEntries: "Unreadable items",
-};
-
-const INVENTORY_LABELS: readonly (readonly [string, string])[] = [
-  ["courseworkDocuments", "Coursework documents"],
-  ["courseFolders", "Course folders"],
-  ["exportDocuments", "Canvas export documents"],
-  ["materialFiles", "Material files"],
-  ["historyDocuments", "Refresh history documents"],
-  ["inboxDocuments", "Inbox documents"],
-  ["profileDocuments", "Profile documents"],
-  ["files", "Files in total"],
-  ["directories", "Folders in total"],
-];
-
-const PHASE_LABELS: Readonly<Record<ImportProgress["phase"], string>> = {
-  locking: "Waiting for the browser app's lock",
-  scanning: "Checking the legacy folder",
-  hashing: "Fingerprinting files",
-  copying: "Copying files",
-  rechecking: "Confirming nothing changed during the copy",
-  validating: "Validating the copy",
-  adopting: "Adopting the preview copy",
-  complete: "Import complete",
-};
-
-/** The first-run / recovery screen state. The legacy folder path never reaches the webview. */
-export interface DesktopSetupState {
-  readonly status: DesktopStoreStatus;
-  readonly replacePreview: boolean;
-  readonly step: "idle" | "choosing" | "checking" | "ready" | "importing";
-  readonly report?: DryRunReport;
-  readonly progress?: ImportProgress;
-  readonly error?: { readonly message: string; readonly refusals: Readonly<Record<string, number>>; readonly unsupportedTypes: Readonly<Record<string, number>> };
-  readonly recoveryMode?: boolean;
-  readonly snapshots?: readonly DesktopSnapshot[];
-  readonly recoveryBusy?: boolean;
-  readonly recoveryMessage?: string;
-  readonly recoveryFilesDone?: number;
-}
-
-export interface DesktopSetupHandlers {
-  readonly onChoose: () => void;
-  readonly onRecheck: () => void;
-  readonly onImport: () => void;
-  readonly onCancel?: () => void;
-  readonly onRestoreSnapshot?: (id: string) => void;
-  readonly onExport?: () => void;
-}
-
-function byteSize(bytes: number): string {
-  if (bytes < 1024) return `${String(bytes)} bytes`;
-  const units = ["KB", "MB", "GB", "TB"] as const;
-  let value = bytes / 1024; let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
-  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unit] ?? "TB"}`;
-}
-
-function countRows(counts: Readonly<Record<string, number>>, labels: Readonly<Record<string, string>>, className: string): ElementDescriptor {
-  return { tag: "ul", attrs: { class: className }, children: Object.entries(counts).map(([name, total]) => ({ tag: "li", children: [element("span", {}, labels[name] ?? name), element("strong", {}, String(total))] })) };
-}
-
-function setupPanel(eyebrow: string, title: string, children: readonly ElementDescriptor[]): ElementDescriptor {
-  return { tag: "div", attrs: { class: "shell desktop-setup" }, children: [{ tag: "main", attrs: { id: "main", class: "panel setup-card", tabindex: "-1" }, children: [element("p", { class: "eyebrow" }, eyebrow), element("h1", {}, title), ...children] }] };
-}
-
-function folderBox(label: string, note: string, folder: string): ElementDescriptor {
-  return { tag: "div", attrs: { class: "setup-choice" }, children: [element("strong", {}, label), element("small", {}, note), element("code", { class: "setup-path" }, folder.length > 0 ? folder : "Unavailable")] };
-}
-
-/** Renders the desktop first-run, replace-preview, and recovery screens as a pure descriptor. */
-export function renderDesktopSetup(state: DesktopSetupState, handlers: DesktopSetupHandlers): ElementDescriptor {
-  const { status } = state;
-  const dataFolder = folderBox("App data folder", "Fixed for this app on this computer. It cannot be changed.", status.dataFolder);
-  if (status.availability === "another-instance") {
-    return setupPanel("Desktop app", "Due Good is already open", [element("p", {}, "Another Due Good window owns the app store. Use that window; this one reads and changes nothing."), dataFolder]);
-  }
-  if (status.availability === "unavailable") {
-    return setupPanel("Desktop app", "App data folder unavailable", [element("p", { role: "alert" }, status.problem ?? "The app data folder could not be opened."), dataFolder]);
-  }
-  if (state.recoveryMode === true) {
-    return setupPanel("Recovery", "Recover or export coursework", [
-      desktopRecoveryPanel({ snapshots: state.snapshots ?? [], importedAt: status.importedAt, busy: state.recoveryBusy === true, message: state.recoveryMessage, filesDone: state.recoveryFilesDone }, {
-        onRestore: (id) => handlers.onRestoreSnapshot?.(id),
-        onExport: () => handlers.onExport?.(),
-        ...(status.state === "preview" || status.state === "authoritative" ? { onBack: () => handlers.onCancel?.() } : {}),
-      }),
-      ...(state.error === undefined ? [] : [element("p", { role: "alert" }, state.error.message)]),
-    ]);
-  }
-  if (status.state === "damaged" || status.state === "unknown") {
-    return setupPanel("Recovery", "The app store needs recovery", [
-      element("p", {}, "Due Good found its app store but could not read it safely. Nothing was changed, and nothing will be imported over it."),
-      ...(status.problem === null ? [] : [element("p", { class: "status", role: "status" }, status.problem)]),
-      dataFolder,
-    ]);
-  }
-  const busy = state.step === "choosing" || state.step === "checking" || state.step === "importing";
-  const report = state.report;
-  const progress = state.progress;
-  const disabled = (flag: boolean): Record<string, string> => flag ? { disabled: "" } : {};
-  const stepNote = state.step === "choosing" ? "Waiting for the folder picker…" : state.step === "checking" ? "Running a dry run. Nothing is copied." : status.legacyRootSelected ? "Folder selected. Its location is never shown or stored." : "No folder selected.";
-  const children: ElementDescriptor[] = [
-    element("p", {}, state.replacePreview
-      ? "Import the legacy folder again. The current preview copy is first archived into a private, timestamped backup that is never deleted."
-      : "Import your existing Due Good folder once. Due Good copies it into its own app store and never changes the original folder."),
-    { tag: "p", attrs: { class: "preview-label" }, children: [element("span", { class: "preview-badge" }, "Preview copy"), element("span", {}, " It never refreshes or follows later changes in the browser app. Personal progress edits stay in this copy.")] },
-    dataFolder,
-    { tag: "div", attrs: { class: "setup-choice" }, children: [
-      element("strong", {}, "Legacy folder"),
-      element("small", {}, "The folder that holds coursework.json and the classes folder. Chosen with the system folder picker."),
-      element("span", { class: "setup-step", role: "status", "aria-live": "polite" }, stepNote),
-      { tag: "div", attrs: { class: "setup-actions" }, children: [
-        { tag: "button", attrs: { type: "button", class: "more-action", ...disabled(busy) }, text: "Choose legacy folder…", on: { click: handlers.onChoose } },
-        ...(status.legacyRootSelected && !busy ? [{ tag: "button", attrs: { type: "button", class: "setup-secondary" }, text: "Check again", on: { click: handlers.onRecheck } }] : []),
-      ] },
-    ] },
-  ];
-  if (report !== undefined) {
-    const inventory = Object.fromEntries(INVENTORY_LABELS.filter(([name]) => name in report.inventory).map(([name]) => [name, report.inventory[name] ?? 0]));
-    children.push({ tag: "section", attrs: { class: "setup-report", "aria-label": "Dry run" }, children: [
-      element("h2", {}, "Dry run"),
-      element("p", {}, `Counts only; nothing was copied. ${byteSize(report.inventory.bytes ?? 0)} in total.`),
-      countRows(inventory, Object.fromEntries(INVENTORY_LABELS), "setup-counts"),
-      ...(report.legacyLockPresent ? [element("p", { class: "status", role: "status" }, "The browser app is writing right now. The import waits for it to finish.")] : []),
-      ...(Object.keys(report.refusals).length === 0 ? [] : [element("p", { class: "inline-error" }, "The folder cannot be imported as it is. Nothing is dropped silently:"), countRows(report.refusals, REFUSAL_LABELS, "setup-counts setup-refusals")]),
-      ...(Object.keys(report.unsupportedTypes).length === 0 ? [] : [element("p", {}, "Unsupported items by type:"), countRows(report.unsupportedTypes, {}, "setup-counts")]),
-    ] });
-  }
-  if (state.step === "importing") {
-    const total = progress?.filesTotal ?? 0;
-    children.push({ tag: "div", attrs: { class: "setup-progress", role: "status", "aria-live": "polite" }, children: [
-      element("strong", {}, progress === undefined ? "Starting the import…" : PHASE_LABELS[progress.phase]),
-      { tag: "progress", attrs: { max: String(Math.max(total, 1)), value: String(progress?.filesDone ?? 0), "aria-label": "Import progress" } },
-      element("span", {}, progress === undefined ? "" : `${String(progress.filesDone)} of ${String(progress.filesTotal)} files · ${byteSize(progress.bytesDone)} of ${byteSize(progress.bytesTotal)}`),
-    ] });
-  }
-  if (state.error !== undefined) {
-    children.push({ tag: "div", attrs: { class: "load-error", role: "alert" }, children: [
-      element("strong", {}, state.error.message),
-      ...(Object.keys(state.error.refusals).length === 0 ? [] : [countRows(state.error.refusals, REFUSAL_LABELS, "setup-counts setup-refusals")]),
-      ...(Object.keys(state.error.unsupportedTypes).length === 0 ? [] : [countRows(state.error.unsupportedTypes, {}, "setup-counts")]),
-    ] });
-  }
-  children.push({ tag: "div", attrs: { class: "setup-actions" }, children: [
-    { tag: "button", attrs: { type: "button", class: "sync-button", ...disabled(busy || report?.wouldImport !== true) }, text: state.replacePreview ? "Archive and replace preview copy" : "Import as preview copy", on: { click: handlers.onImport } },
-    ...(!state.replacePreview || handlers.onCancel === undefined ? [] : [{ tag: "button", attrs: { type: "button", class: "setup-secondary", ...disabled(state.step === "importing") }, text: "Keep current preview copy", on: { click: handlers.onCancel } }]),
-  ] });
-  return setupPanel(state.replacePreview ? "Replace preview copy" : "One-time setup", state.replacePreview ? "Replace the preview copy" : "Set up local storage", children);
-}
-
-function setupError(error: unknown): NonNullable<DesktopSetupState["error"]> {
-  if (error instanceof DesktopCommandError) return { message: error.message, refusals: error.refusals, unsupportedTypes: error.unsupportedTypes };
-  return { message: "The desktop command failed. Nothing was changed.", refusals: {}, unsupportedTypes: {} };
-}
 
 /** Desktop shell: store status first, then the dashboard or the first-run/recovery screen. */
 function mountDesktop(mount: HTMLElement, transport: NativeTransport): void {
@@ -1054,10 +674,10 @@ function mountDesktop(mount: HTMLElement, transport: NativeTransport): void {
 
   function showDashboard(status: DesktopStoreStatus): void {
     const storeState = status.state === "authoritative" ? "authoritative" : "preview";
-    const info: DesktopStoreInfo = { storeState, dataFolder: status.dataFolder, importedAt: status.importedAt, canvasRefreshEnabled: status.canvasRefreshEnabled, refreshAvailable: status.refreshAvailable, snapshotInProgress: status.snapshotInProgress, snapshotProgress: status.snapshotProgress, warning: status.problem };
+    const info: DesktopStoreInfo = { storeState, dataFolder: status.dataFolder, importedAt: status.importedAt, canvasRefreshEnabled: status.canvasRefreshEnabled, refreshAvailable: status.refreshAvailable, icalRefreshAvailable: status.icalRefreshAvailable, snapshotInProgress: status.snapshotInProgress, snapshotProgress: status.snapshotProgress, warning: status.problem };
     setup = undefined;
     // An authoritative store is never replaced by import, so only a preview offers replacement.
-    disposeDashboard = mountDashboard(mount, false, transport, { info, onRecovery: () => startRecovery(status), onExport: () => { startRecovery(status); void runExport(); }, ...(storeState === "preview" ? { onReplacePreview: () => startSetup(status, true) } : {}) });
+    disposeDashboard = mountDashboard(mount, transport, { info, onRecovery: () => startRecovery(status), onExport: () => { startRecovery(status); void runExport(); }, ...(storeState === "preview" ? { onReplacePreview: () => startSetup(status, true) } : {}) });
   }
 
   function startRecovery(status: DesktopStoreStatus): void {
@@ -1165,10 +785,9 @@ function mountDesktop(mount: HTMLElement, transport: NativeTransport): void {
 
 export function mount(): void {
   const mountEl = document.querySelector<HTMLElement>("#app"); if (!mountEl) throw new Error("Missing application mount point.");
-  if (isTauri()) {
-    mountDesktop(mountEl, createNativeTransport((command, args) => invoke(command, args), (onMessage) => new Channel<unknown>(onMessage)));
+  if (!isTauri()) {
+    mountEl.replaceChildren(render(setupPanel("Desktop app", "Due Good requires the desktop app", [element("p", {}, "Open Due Good in its Tauri desktop app to view or import coursework.")])));
     return;
   }
-  const transport = createBrowserTransport();
-  fetch("/api/auth/status", { credentials: "same-origin" }).then((response) => response.ok ? response.json() : { available: false }).then((body: unknown) => { const status = record(body); if (status.available === true) mountDashboard(mountEl, status.refreshAvailable === true, transport); else renderDisabledShell(mountEl); }).catch(() => renderDisabledShell(mountEl));
+  mountDesktop(mountEl, createNativeTransport((command, args) => invoke(command, args), (onMessage) => new Channel<unknown>(onMessage)));
 }

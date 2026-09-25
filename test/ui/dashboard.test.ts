@@ -1,17 +1,12 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dashboardEventKind, parseDashboard, postMutation, renderDesktopSetup, resolveNativeMutationConflict, type DesktopSetupHandlers, type DesktopSetupState } from "../../src/ui/app";
-import { CourseworkStore } from "../../src/local/coursework-store";
-import type { SourceObservation } from "../../src/local/acquisition";
+import { dashboardEventKind, parseDashboard, renderDesktopSetup, resolveNativeMutationConflict, type DesktopSetupHandlers, type DesktopSetupState } from "../../src/ui/app";
 import type { ElementDescriptor } from "../../src/ui/dom";
-import { copyTextToClipboard, countdownText, formatAssignmentCopyText, gradeProgress, renderDashboard, type DashboardData, type DashboardEvent, type DashboardHandlers, type DashboardState } from "../../src/ui/pages/dashboard";
+import { countdownText, formatAssignmentCopyText, gradeProgress, renderDashboard, type DashboardData, type DashboardEvent, type DashboardHandlers, type DashboardState } from "../../src/ui/pages/dashboard";
 import { DASHBOARD_ROUTES } from "../../src/ui/routes";
 import { projectDashboardDocuments } from "../../src/shared/dashboard-projection";
-import { createBrowserTransport, createNativeTransport, DesktopCommandError, nativeProjectionOptions, parseDocumentBundle, type CanvasRefreshProgress, type DesktopStoreStatus, type DryRunReport, type ImportProgress } from "../../src/ui/transport";
+import { createNativeTransport, DesktopCommandError, nativeProjectionOptions, parseDocumentBundle, type CanvasRefreshProgress, type DesktopStoreStatus, type DryRunReport, type ImportProgress } from "../../src/ui/transport";
 import { desktopRecoveryPanel } from "../../src/ui/components/recovery-panel";
 
 function findAll(descriptor: ElementDescriptor, predicate: (item: ElementDescriptor) => boolean): ElementDescriptor[] {
@@ -50,7 +45,7 @@ const handlers: DashboardHandlers = {
   onNavigate: vi.fn(), onEventMode: vi.fn(), onCourseFilter: vi.fn(), onGradeCourseFilter: vi.fn(), onGradeMode: vi.fn(), onResourceFilter: vi.fn(), onToggleEvent: vi.fn(), onToggleCompletion: vi.fn(), onToggleDiscussion: vi.fn(), onEditManualGrade: vi.fn(), onManualGradeDraft: vi.fn(), onSaveManualGrade: vi.fn(), onCancelManualGrade: vi.fn(), onSelectConversation: vi.fn(), onSelectRefresh: vi.fn(), onRefresh: vi.fn(), onCopyAssignment: vi.fn(),
 };
 function state(page: DashboardState["page"]): DashboardState {
-  return { page, loading: false, data: DATA, now: NOW, eventMode: "all", courseFilter: "all", gradeCourseFilter: "all", gradeMode: "all", resourceFilter: "all", expandedEventIds: new Set(), pendingCompletionIds: new Set(), failedCompletionIds: new Set(), pendingDiscussionIds: new Set(), failedDiscussionIds: new Set(), pendingManualGradeIds: new Set(), failedManualGradeIds: new Set(), selectedConversationId: "message", selectedRefreshId: "refresh", refreshState: "idle" };
+  return { page, loading: false, data: DATA, now: NOW, eventMode: "all", courseFilter: "all", gradeCourseFilter: "all", gradeMode: "all", resourceFilter: "all", expandedEventIds: new Set(), pendingCompletionIds: new Set(), failedCompletionIds: new Set(), pendingDiscussionIds: new Set(), failedDiscussionIds: new Set(), pendingManualGradeIds: new Set(), failedManualGradeIds: new Set(), selectedConversationId: "message", selectedRefreshId: "refresh", refreshState: "idle", desktop: { storeState: "preview", dataFolder: "~/Library/Application Support/com.zerodelta.duegood", importedAt: null } };
 }
 
 describe("dashboard production UI contract", () => {
@@ -164,82 +159,6 @@ describe("dashboard production UI contract", () => {
     expect(parseDashboard({ pendingSourceLinks: [{ ...link, course: link.courseId, candidateIds: [] }] }).pendingSourceLinks).toHaveLength(1);
   });
 
-  it("refreshes a pending observation, fences stale decisions, and keeps a distinct source item separate", async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "duegood-pending-link-"));
-    try {
-      const file = path.join(directory, "coursework.json");
-      await writeFile(file, await readFile(path.resolve("fixtures/local-coursework-contract.json")));
-      const store = new CourseworkStore(file);
-      const initial: SourceObservation = {
-        localId: "canvas-api-8421", course: "course-a",
-        reference: { institution: "synthetic.institution.invalid", course: "course-a", source: "canvas", id: "8421" },
-        fields: { title: "Initial API title", at: "2030-02-01T12:00:00Z" }, observedAt: "2030-01-01T00:00:00Z",
-        possibleLocalIds: ["course-a-canvas-910001", "course-a-canvas-910002"],
-      };
-      const first = await store.applySourceObservations("synthetic.institution.invalid", [initial]);
-      const refreshed = await store.applySourceObservations("synthetic.institution.invalid", [{
-        ...initial, fields: { title: "Refreshed API title", at: "2030-02-02T12:00:00Z" }, observedAt: "2030-01-02T00:00:00Z", possibleLocalIds: [],
-      }]);
-      expect(refreshed.changed).toBe(true);
-      expect(refreshed.version).not.toBe(first.version);
-      const afterRefresh = await readFile(file, "utf8");
-      const document = JSON.parse(afterRefresh) as { items: Array<{ id: string }>; pendingSourceLinks: Array<{ fields: { title: string }; observedAt: string; candidateIds: string[] }> };
-      expect(document.items.some((item) => item.id === initial.localId)).toBe(false);
-      expect(document.pendingSourceLinks[0]).toMatchObject({ fields: { title: "Refreshed API title" }, observedAt: "2030-01-02T00:00:00Z", candidateIds: [] });
-      await expect(store.resolvePendingSourceLink("synthetic.institution.invalid", JSON.stringify(["synthetic.institution.invalid", "course-a", "canvas", "8421", null]), "course-a-canvas-910001", "confirm", first.version)).rejects.toThrow("changed");
-      expect(await readFile(file, "utf8")).toBe(afterRefresh);
-
-      const rejected = await store.resolvePendingSourceLink("synthetic.institution.invalid", JSON.stringify(["synthetic.institution.invalid", "course-a", "canvas", "8421", null]), "", "reject", refreshed.version);
-      expect(rejected.added).toBe(1);
-      const afterReject = JSON.parse(await readFile(file, "utf8")) as { items: Array<{ id: string; sourceReferences?: unknown[] }>; pendingSourceLinks: unknown[] };
-      expect(afterReject.pendingSourceLinks).toHaveLength(0);
-      expect(afterReject.items.find((item) => item.id === "course-a-canvas-910001")?.sourceReferences).not.toContainEqual(initial.reference);
-      expect(afterReject.items.find((item) => item.id === initial.localId)).toBeDefined();
-
-      const confirmFile = path.join(directory, "confirm-coursework.json");
-      await writeFile(confirmFile, await readFile(path.resolve("fixtures/local-coursework-contract.json")));
-      const confirmStore = new CourseworkStore(confirmFile);
-      const confirmation: SourceObservation = {
-        ...initial, localId: "canvas-api-8423", reference: { ...initial.reference, id: "8423" },
-        possibleLocalIds: ["course-a-canvas-910001"],
-      };
-      const held = await confirmStore.applySourceObservations("synthetic.institution.invalid", [confirmation]);
-      await confirmStore.resolvePendingSourceLink("synthetic.institution.invalid", JSON.stringify(["synthetic.institution.invalid", "course-a", "canvas", "8423", null]), "course-a-canvas-910001", "confirm", held.version);
-      const afterConfirm = JSON.parse(await readFile(confirmFile, "utf8")) as { items: Array<{ id: string; done: boolean; syntheticItemExtension?: unknown; sourceReferences?: unknown[] }> };
-      expect(afterConfirm.items.find((item) => item.id === "course-a-canvas-910001")).toMatchObject({
-        id: "course-a-canvas-910001", done: true, syntheticItemExtension: { preserve: "graded-item" },
-      });
-      expect(afterConfirm.items.find((item) => item.id === "course-a-canvas-910001")?.sourceReferences).toContainEqual(confirmation.reference);
-      expect(afterConfirm.items.some((item) => item.id === confirmation.localId)).toBe(false);
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
-
-  it("renews the local CSRF token once and retries refresh through the mutation helper", async () => {
-    let cookie = "duegood_local_csrf=stale-token";
-    Object.defineProperty(globalThis, "document", { configurable: true, value: { get cookie() { return cookie; } } });
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response("", { status: 403 }))
-      .mockImplementationOnce(async () => { cookie = "duegood_local_csrf=renewed-token"; return new Response("", { status: 200 }); })
-      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    try {
-      const response = await postMutation("/api/local/refresh");
-      expect(response.status).toBe(200);
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-      expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/local/refresh");
-      expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ "X-DueGood-CSRF-Token": "stale-token" });
-      expect(fetchMock.mock.calls[1]?.[0]).toBe("/");
-      expect(fetchMock.mock.calls[2]?.[0]).toBe("/api/local/refresh");
-      expect(fetchMock.mock.calls[2]?.[1]?.headers).toMatchObject({ "X-DueGood-CSRF-Token": "renewed-token" });
-    } finally {
-      vi.unstubAllGlobals();
-      Reflect.deleteProperty(globalThis, "document");
-    }
-  });
-
   it("renders consecutive day slots beyond September 25 and stable IT530/IT540/IT570 lanes", () => {
     const dashboard = renderDashboard(state("timeline"), handlers);
     const labels = findAll(dashboard, (item) => item.attrs?.class === "lane-label").map(words);
@@ -350,29 +269,6 @@ describe("dashboard production UI contract", () => {
     const form = findAll(editing, (item) => item.tag === "form" && item.attrs?.class === "grade-editor")[0];
     form?.on?.submit?.({ preventDefault: vi.fn() } as unknown as Event);
     expect(handlers.onSaveManualGrade).toHaveBeenCalledWith("a");
-    expect(findAll(renderDashboard({ ...state("grades"), readOnly: true }, handlers), (item) => item.attrs?.["aria-label"]?.startsWith("Edit local grade") === true)).toHaveLength(0);
-  });
-
-  it("keeps PDF grade proposals local, selectable, and manual-only when unmatched", () => {
-    const previewHandlers: DashboardHandlers = { ...handlers, onGradePreviewFile: vi.fn(), onToggleGradePreviewProposal: vi.fn(), onConfirmGradePreview: vi.fn(), onCancelGradePreview: vi.fn() };
-    const chooser = renderDashboard(state("grades"), previewHandlers);
-    expect(words(chooser)).toContain("The PDF stays on this device and is not stored.");
-    expect(findAll(chooser, (item) => item.attrs?.["aria-label"] === "Choose local PDF grade report")).toHaveLength(1);
-    const dialog = renderDashboard({ ...state("grades"), gradePreview: {
-      phase: "ready", selectedIds: new Set(["pdf-1"]), proposals: [
-        { id: "pdf-1", course: "IT530", item: "Lab report", grade: "A-", source: "User-confirmed PDF", sourceItemId: "a", status: "ready" },
-        { id: "pdf-2", course: "IT530", item: "Unmatched row", grade: "B", source: "User-confirmed PDF", sourceItemId: null, status: "manual" },
-      ],
-    } }, previewHandlers);
-    expect(findAll(dialog, (item) => item.attrs?.role === "dialog")).toHaveLength(1);
-    expect(words(dialog)).toContain("Manual entry required");
-    expect(findAll(dialog, (item) => item.attrs?.["aria-label"] === "Confirm PDF grade for Lab report")).toHaveLength(1);
-    expect(findAll(dialog, (item) => item.attrs?.["aria-label"] === "Confirm PDF grade for Unmatched row")).toHaveLength(0);
-    expect(findAll(dialog, (item) => item.attrs?.["aria-label"] === "Confirm PDF grade for Lab report")[0]?.attrs?.type).toBe("radio");
-    findAll(dialog, (item) => item.text === "Confirm grade")[0]?.on?.click?.(new Event("click"));
-    expect(previewHandlers.onConfirmGradePreview).toHaveBeenCalledOnce();
-    findAll(dialog, (item) => item.text === "Cancel").at(-1)?.on?.click?.(new Event("click"));
-    expect(previewHandlers.onCancelGradePreview).toHaveBeenCalledOnce();
   });
 
   it("shows direct completion and discussion checklist controls on timeline cards", () => {
@@ -483,62 +379,6 @@ describe("dashboard production UI contract", () => {
     ].join("\n"));
   });
 
-  it("copies via navigator.clipboard.writeText when available and falls back to textarea execCommand", async () => {
-    const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
-    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
-    const writeTextMock = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(globalThis, "navigator", {
-      configurable: true,
-      value: { clipboard: { writeText: writeTextMock } },
-    });
-
-    const success = await copyTextToClipboard("Test copy text");
-    expect(success).toBe(true);
-    expect(writeTextMock).toHaveBeenCalledWith("Test copy text");
-
-    writeTextMock.mockRejectedValue(new Error("permission denied"));
-    expect(await copyTextToClipboard("Rejected text")).toBe(false);
-
-    Reflect.deleteProperty(globalThis, "navigator");
-    const appendChild = vi.fn();
-    const removeChild = vi.fn();
-    const execCommand = vi.fn().mockReturnValue(true);
-    const fakeTextarea = {
-      value: "",
-      setAttribute: vi.fn(),
-      style: {},
-      focus: vi.fn(),
-      select: vi.fn(),
-      setSelectionRange: vi.fn(),
-      parentNode: { removeChild },
-    };
-    const mockDoc = {
-      body: { appendChild, removeChild },
-      createElement: vi.fn().mockReturnValue(fakeTextarea),
-      execCommand,
-    };
-    Object.defineProperty(globalThis, "document", { configurable: true, value: mockDoc });
-
-    try {
-      const fallbackSuccess = await copyTextToClipboard("Fallback text");
-      expect(fallbackSuccess).toBe(true);
-      expect(mockDoc.createElement).toHaveBeenCalledWith("textarea");
-      expect(fakeTextarea.value).toBe("Fallback text");
-      expect(execCommand).toHaveBeenCalledWith("copy");
-      expect(appendChild).toHaveBeenCalledWith(fakeTextarea);
-      expect(removeChild).toHaveBeenCalledWith(fakeTextarea);
-
-      execCommand.mockReturnValueOnce(false);
-      const failed = await copyTextToClipboard("Failing text");
-      expect(failed).toBe(false);
-    } finally {
-      if (originalDocument === undefined) Reflect.deleteProperty(globalThis, "document");
-      else Object.defineProperty(globalThis, "document", originalDocument);
-      if (originalNavigator === undefined) Reflect.deleteProperty(globalThis, "navigator");
-      else Object.defineProperty(globalThis, "navigator", originalNavigator);
-    }
-  });
-
   it("renders the Copy assignment action on deadline and discussion cards and rail items, excluding class meetings", () => {
     vi.clearAllMocks();
     const dashboard = renderDashboard(state("timeline"), handlers);
@@ -613,7 +453,7 @@ function nativeTransport() {
 }
 
 function storeStatus(overrides: Partial<DesktopStoreStatus> = {}): DesktopStoreStatus {
-  return { availability: "ready", state: "empty", dataFolder: DATA_FOLDER, legacyRootSelected: false, importedAt: null, files: null, bytes: null, refreshAvailable: false, canvasRefreshEnabled: false, snapshotInProgress: false, snapshotProgress: null, problem: null, ...overrides };
+  return { availability: "ready", state: "empty", dataFolder: DATA_FOLDER, legacyRootSelected: false, importedAt: null, files: null, bytes: null, refreshAvailable: false, icalRefreshAvailable: false, canvasRefreshEnabled: false, snapshotInProgress: false, snapshotProgress: null, problem: null, ...overrides };
 }
 
 function dryRun(overrides: Partial<DryRunReport> = {}): DryRunReport {
@@ -666,17 +506,6 @@ describe("desktop transport and first-run screen", () => {
     expect(parseDashboard({}).version).toBe("");
   });
 
-  it("keeps the browser transport on the same-origin loopback API", async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ version: DIGEST }), { status: 200 }));
-    const transport = createBrowserTransport(fetchImpl);
-    expect(transport.mode).toBe("browser");
-    await expect(transport.loadDashboardBody(false)).resolves.toEqual({ version: DIGEST });
-    await expect(transport.loadDashboardBody(true)).resolves.toEqual({ version: DIGEST });
-    expect(fetchImpl.mock.calls).toEqual([["/api/dashboard", { credentials: "same-origin" }], ["/api/dashboard", { credentials: "same-origin", cache: "no-store" }]]);
-    fetchImpl.mockResolvedValueOnce(new Response("{}", { status: 404 }));
-    await expect(transport.loadDashboardBody(false)).resolves.toBeUndefined();
-  });
-
   it("calls only the fixed read commands through mocked Tauri IPC and never sends a path", async () => {
     withMockWindow();
     const calls: [string, unknown][] = [];
@@ -689,7 +518,6 @@ describe("desktop transport and first-run screen", () => {
       throw new Error(`unexpected command ${command}`);
     });
     const transport = nativeTransport();
-    expect(transport.mode).toBe("native");
     await expect(transport.storeStatus()).resolves.toMatchObject({ availability: "ready", state: "preview", dataFolder: DATA_FOLDER, refreshAvailable: false });
     await expect(transport.chooseLegacyRoot()).resolves.toBe(true);
     await expect(transport.dryRunImport()).resolves.toEqual(dryRun());
@@ -706,7 +534,7 @@ describe("desktop transport and first-run screen", () => {
     expect(parsed.version).toBe(DIGEST);
     expect(parsed.resources.find((item) => item.title === "Syllabus")).toMatchObject({ savedLocally: true });
     expect(parsed.resources.every((item) => item.localUrl === undefined)).toBe(true);
-    const library = renderDashboard({ ...state("library"), data: parsed, desktop: { storeState: "preview", dataFolder: DATA_FOLDER, importedAt: null }, readOnly: true }, handlers);
+    const library = renderDashboard({ ...state("library"), data: parsed, desktop: { storeState: "preview", dataFolder: DATA_FOLDER, importedAt: null } }, handlers);
     expect(words(library)).toContain("Saved locally");
     expect(findAll(library, (item) => item.tag === "a" && item.attrs?.class === "more-action")).toHaveLength(0);
   });
@@ -737,6 +565,24 @@ describe("desktop transport and first-run screen", () => {
       ["set_canvas_refresh_enabled", { enabled: false }],
       ["start_canvas_refresh", { onProgress: channel }],
     ]);
+  });
+
+  it("validates the native calendar refresh result and keeps calendar progress content-free", async () => {
+    const calls: [string, Record<string, unknown> | undefined][] = [];
+    let receiveProgress: ((message: unknown) => void) | undefined;
+    const phases: string[] = [];
+    const transport = createNativeTransport(async (command, args) => {
+      calls.push([command, args]);
+      if (command === "start_ical_refresh") {
+        receiveProgress?.({ phase: "waiting-for-calendar" });
+        receiveProgress?.({ phase: "private coursework title" });
+        return { status: "complete", updatedAt: "2026-09-25T12:00:00Z", added: 2, updated: 1, held: 3, removed: 0 };
+      }
+      throw new Error(`unexpected ${command}`);
+    }, (onMessage) => { receiveProgress = onMessage; return { channel: "calendar" }; });
+    await expect(transport.startIcalRefresh((progress) => phases.push(progress.phase))).resolves.toMatchObject({ added: 2, updated: 1, held: 3, removed: 0 });
+    expect(phases).toEqual(["waiting-for-calendar"]);
+    expect(calls).toEqual([["start_ical_refresh", { onProgress: { channel: "calendar" } }]]);
   });
 
   it("validates native promotion, demotion, and frozen-export commands without accepting paths or confirmation shortcuts", async () => {
@@ -776,7 +622,7 @@ describe("desktop transport and first-run screen", () => {
     await expect(malformed.prepareStorePromotion(() => undefined)).rejects.toMatchObject({ code: "malformed-response" });
   });
 
-  it("never claims the imported desktop copy is synced, while the live browser source still may", () => {
+  it("never claims the imported desktop copy is synced", () => {
     const inbox = (complete: boolean): string => JSON.stringify({ complete, generatedAt: "2026-09-20T12:05:00Z", conversations: [] });
     const project = (conversations: string | null, options = nativeProjectionOptions("preview")) => projectDashboardDocuments(parseDocumentBundle(nativeBundle({ conversations })), options);
 
@@ -788,13 +634,9 @@ describe("desktop transport and first-run screen", () => {
       expect(status.label).not.toMatch(/synced/i);
       expect(status.detail).not.toMatch(/synced/i);
     }
-    const more = renderDashboard({ ...state("more"), data: parseDashboard(imported), desktop: { storeState: "preview", dataFolder: DATA_FOLDER, importedAt: null }, readOnly: true }, handlers);
+    const more = renderDashboard({ ...state("more"), data: parseDashboard(imported), desktop: { storeState: "preview", dataFolder: DATA_FOLDER, importedAt: null } }, handlers);
     expect(words(more)).toContain("Inbox imported");
     expect(words(more)).not.toMatch(/synced/i);
-
-    const live = { ...nativeProjectionOptions("preview"), dataOrigin: "live" as const };
-    expect(project(inbox(true), live).sourceStatus.detail).toContain("Inbox synced");
-    expect(project(null, live).sourceStatus.detail).toContain("Inbox not synced");
   });
 
   it("streams validated, content-free import progress through a mocked Tauri channel", async () => {
@@ -862,11 +704,11 @@ describe("desktop transport and first-run screen", () => {
     const actions = setupHandlers();
     const screen = renderDesktopSetup(setup(), actions);
     const text = words(screen);
-    expect(text).toContain("Set up local storage");
+    expect(text).toContain("Import existing coursework");
     expect(text).toContain(DATA_FOLDER);
     expect(text).toContain("It cannot be changed.");
     expect(text).toContain("Preview copy");
-    expect(text).toContain("It never refreshes or follows later changes in the browser app. Personal progress edits stay in this copy.");
+    expect(text).toContain("It does not follow later changes in the legacy local source. Personal progress edits stay in this copy.");
     expect(text).not.toMatch(/change storage location/i);
     expect(findAll(screen, (item) => item.attrs?.class === "preview-badge")).toHaveLength(1);
     const choose = button(screen, "Choose legacy folder…");
@@ -895,7 +737,7 @@ describe("desktop transport and first-run screen", () => {
     const refusalRows = findAll(refused, (item) => item.attrs?.class === "setup-counts setup-refusals")[0];
     expect(words(refusalRows!).replace(/\s+/g, " ").trim()).toBe("Material links that leave the materials folder 2");
     expect(words(refused)).toContain("Nothing is dropped silently");
-    expect(words(refused)).toContain("The browser app is writing right now.");
+    expect(words(refused)).toContain("The legacy local source is being written right now. The import waits for that write to finish.");
     expect(words(refused)).toContain("script");
   });
 
@@ -947,21 +789,21 @@ describe("desktop transport and first-run screen", () => {
     expect(words(findAll(timeline, (item) => item.attrs?.class === "top-actions")[0]!)).toContain("Preview copy");
     expect(findAll(timeline, (item) => item.attrs?.class === "sync-note")[0]?.text).toMatch(/^Imported /);
 
-    const more = renderDashboard({ ...state("more"), desktop, readOnly: true }, { ...handlers, onReplacePreview });
+    const more = renderDashboard({ ...state("more"), desktop }, { ...handlers, onReplacePreview });
     const card = findAll(more, (item) => item.attrs?.["data-desktop-store"] === "preview")[0];
-    expect(words(card!)).toContain("It never refreshes");
+    expect(words(card!)).toContain("It does not follow later source changes.");
     expect(words(card!)).toContain(DATA_FOLDER);
     expect(words(more)).not.toContain("remains the authoritative writable source");
     button(card!, "Replace preview copy…")?.on?.click?.(new Event("click"));
     expect(onReplacePreview).toHaveBeenCalledOnce();
 
-    const authoritative = renderDashboard({ ...state("more"), desktop: { ...desktop, storeState: "authoritative" }, readOnly: true }, handlers);
+    const authoritative = renderDashboard({ ...state("more"), desktop: { ...desktop, storeState: "authoritative" } }, handlers);
     expect(words(authoritative)).toContain("Import never replaces it.");
     expect(button(authoritative, "Replace preview copy…")).toBeUndefined();
     expect(words(findAll(renderDashboard({ ...state("timeline"), desktop: { ...desktop, storeState: "authoritative" } }, handlers), (item) => item.attrs?.class === "top-actions")[0]!)).not.toContain("Preview copy");
 
-    const browser = renderDashboard(state("timeline"), handlers);
-    expect(findAll(browser, (item) => item.tag === "input" && item.attrs?.type === "checkbox").some((item) => item.attrs?.disabled === undefined)).toBe(true);
+    const native = renderDashboard(state("timeline"), handlers);
+    expect(findAll(native, (item) => item.tag === "input" && item.attrs?.type === "checkbox").some((item) => item.attrs?.disabled === undefined)).toBe(true);
   });
 
   it("shows the preview promotion review counts without exposing the opaque proof and separates both confirmations", () => {
@@ -1029,6 +871,8 @@ describe("desktop transport and first-run screen", () => {
     }, handlers);
     expect(findAll(running, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Canvas refresh · Reading Canvas data · 2 of 4 completed · 4096 bytes received");
     expect(findAll(running, (item) => item.tag === "button" && item.attrs?.class?.includes("refresh-button") === true)[0]?.attrs).toMatchObject({ disabled: "", "aria-busy": "true" });
+    const calendar = renderDashboard({ ...state("timeline"), desktop: { ...desktop, icalRefreshAvailable: true }, data: { ...DATA, refreshAvailable: true }, refreshState: "running", refreshProgress: { phase: "waiting-for-calendar", completed: 0, total: null, bytesDone: null } }, handlers);
+    expect(findAll(calendar, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Calendar refresh · Waiting for calendar");
   });
 
   it("routes native mutations, avatar bytes, resource IDs, clipboard, and snapshots through narrow commands", async () => {

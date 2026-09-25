@@ -1,5 +1,5 @@
-.status, .recovery-panel, .load-error { margin: 1rem 0; padding: .85rem 1rem; border-left: 4px solid var(--gold); border-radius: 8px; background: var(--surface); }
-.status strong, .recovery-panel strong { display: block; color: var(--navy); }
+.status, .load-error { margin: 1rem 0; padding: .85rem 1rem; border-left: 4px solid var(--gold); border-radius: 8px; background: var(--surface); }
+.status strong { display: block; color: var(--navy); }
 .eyebrow { margin: 0 0 4px; color: var(--clay); font: 700 10px var(--utility); letter-spacing: .12em; text-transform: uppercase; }
 .sync-button, .jump-button, .more-action, .course-action, .complete-button {
   display: inline-flex; align-items: center; justify-content: center; min-height: 38px; padding: 0 14px; border: 1px solid var(--line); border-radius: 9px; color: var(--navy); background: var(--surface); cursor: pointer; font-weight: 700; text-decoration: none;
@@ -301,10 +301,6 @@ button:disabled { opacity: .6; cursor: wait; }
 }
 
 /* Kept for the disconnected token/OAuth recovery component. */
-.recovery-panel__action { display: inline-flex; align-items: center; min-height: 44px; margin-top: .5rem; padding: 0 1rem; border: 0; border-radius: 6px; color: var(--ink); background: var(--navy-deep); text-decoration: none; font-weight: 700; }
-.recovery-panel__token-form { display: flex; flex-direction: column; gap: .375rem; max-width: 24rem; margin-top: .5rem; }
-.recovery-panel__token-input { width: 100%; min-height: 44px; padding: 0 .75rem; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--surface-raised); }
-.recovery-panel__error { color: #ff9c8c; }
 
 @media (max-width: 860px) {
   .hero { display: block; }

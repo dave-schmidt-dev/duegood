@@ -36,7 +36,7 @@ use crate::{clipboard, export, resources, snapshots};
 /// Every command the webview may invoke; `capabilities/default.json` grants exactly these and
 /// `build.rs` generates one permission per name (tests assert all three agree).
 #[cfg(test)]
-pub const COMMAND_NAMES: [&str; 21] = [
+pub const COMMAND_NAMES: [&str; 22] = [
     "store_status",
     "choose_legacy_root",
     "dry_run_import",
@@ -54,6 +54,7 @@ pub const COMMAND_NAMES: [&str; 21] = [
     "export_legacy_folder",
     "set_canvas_refresh_enabled",
     "start_canvas_refresh",
+    "start_ical_refresh",
     "prepare_store_promotion",
     "confirm_store_promotion",
     "demote_store_for_rollback",
@@ -256,6 +257,23 @@ impl From<DocumentsError> for CommandError {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IcalRefreshProgress {
+    pub phase: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IcalRefreshResult {
+    pub status: &'static str,
+    pub updated_at: String,
+    pub added: u64,
+    pub updated: u64,
+    pub held: u64,
+    pub removed: u64,
+}
+
 /// Store availability and state for the first-run and recovery screens. No legacy path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -273,6 +291,8 @@ pub struct StoreStatus {
     /// True only when the store is authoritative, owner setting is on, and the bundled helper
     /// plus local store self-check are viable. This does not check BWS consumer or credentials.
     pub refresh_available: bool,
+    /// Fixed BWS iCal helper, authoritative store, and free loopback receiver are available.
+    pub ical_refresh_available: bool,
     /// Explicit owner preference, persisted separately from imported coursework. Defaults false.
     pub canvas_refresh_enabled: bool,
     /// A private daily recovery snapshot is currently being written in the background.
@@ -910,6 +930,7 @@ impl Inner {
             files: None,
             bytes: None,
             refresh_available: false,
+            ical_refresh_available: false,
             canvas_refresh_enabled: *lock(&self.canvas_refresh_enabled),
             snapshot_in_progress,
             snapshot_progress,
@@ -946,6 +967,7 @@ impl Inner {
                     }
                 }
                 status.refresh_available = self.refresh_available(store);
+                status.ical_refresh_available = self.ical_refresh_available(store);
             }
         }
         status
@@ -981,6 +1003,112 @@ impl Inner {
         {
             false
         }
+    }
+
+    fn ical_refresh_available(&self, store: &Store) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            let authoritative = matches!(
+                store.condition(),
+                Ok(StoreCondition::Ready(summary)) if summary.state == crate::store::StoreState::Authoritative
+            );
+            let broker = crate::config::bws_secret_exec_path()
+                .is_some_and(|path| is_executable_file(&path));
+            let receiver_free = std::net::TcpListener::bind(("127.0.0.1", 2137)).is_ok();
+            authoritative
+                && broker
+                && receiver_free
+                && crate::ical_apply::normalization_options(store).is_ok()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = store;
+            false
+        }
+    }
+
+    fn refresh_ical(
+        &self,
+        on_progress: &mut dyn FnMut(IcalRefreshProgress) -> bool,
+    ) -> Result<IcalRefreshResult, CommandError> {
+        if self.refresh_shutting_down.load(Ordering::SeqCst) {
+            return Err(CommandError::new("refresh-cancelled", "Calendar refresh is stopping with the app."));
+        }
+        let _running = self.refresh_running.try_lock().map_err(|_| {
+            CommandError::new("refresh-running", "A refresh is already running.")
+        })?;
+        let store = self.store()?;
+        if !matches!(store.condition(), Ok(StoreCondition::Ready(summary)) if summary.state == crate::store::StoreState::Authoritative) {
+            return Err(CommandError::new("setup-required", "Import and promote coursework before calendar refresh."));
+        }
+        let options = crate::ical_apply::normalization_options(store).map_err(|_| {
+            CommandError::new("calendar-scope", "The native course or institution scope needs review before calendar refresh.")
+        })?;
+        let progress_lost = AtomicBool::new(false);
+        let mut failure = None;
+        let mut outcome = None;
+        let received = crate::ical_receiver::run_ical_import(
+            |phase| {
+                let label = match phase {
+                    crate::ical_receiver::IcalImportPhase::BrokerStarting => "broker-starting",
+                    crate::ical_receiver::IcalImportPhase::WaitingForCalendar => "waiting-for-calendar",
+                    crate::ical_receiver::IcalImportPhase::Importing => "importing",
+                    crate::ical_receiver::IcalImportPhase::Completed => "complete",
+                };
+                if !on_progress(IcalRefreshProgress { phase: label }) {
+                    progress_lost.store(true, Ordering::SeqCst);
+                }
+            },
+            |bytes| {
+                if progress_lost.load(Ordering::SeqCst) {
+                    failure = Some("progress-lost");
+                    return Err(());
+                }
+                let normalized = match crate::ical::normalize_canvas_ical(bytes, &options) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        failure = Some("invalid-calendar");
+                        return Err(());
+                    }
+                };
+                let finished_at = crate::store::utc_stamp(std::time::SystemTime::now()).iso;
+                match crate::ical_apply::apply_normalization(store, &options, &finished_at, &normalized) {
+                    Ok(value) => {
+                        outcome = Some((value, finished_at));
+                        Ok(())
+                    }
+                    Err(_) => {
+                        failure = Some("store-changed");
+                        Err(())
+                    }
+                }
+            },
+        );
+        if let Some(reason) = failure {
+            return Err(CommandError::new(reason, "Calendar refresh could not be applied; existing coursework was kept."));
+        }
+        received.map_err(|error| {
+            let code = match error {
+                crate::ical_receiver::IcalReceiverError::AlreadyRunning => "receiver-in-use",
+                crate::ical_receiver::IcalReceiverError::BrokerUnavailable => "broker-unavailable",
+                crate::ical_receiver::IcalReceiverError::TimedOut => "calendar-timeout",
+                crate::ical_receiver::IcalReceiverError::HelperFailed => "calendar-fetch-failed",
+                crate::ical_receiver::IcalReceiverError::RequestRejected => "calendar-request-rejected",
+                crate::ical_receiver::IcalReceiverError::ImportRejected => "calendar-import-rejected",
+            };
+            CommandError::new(code, "Calendar refresh did not complete; existing coursework was kept.")
+        })?;
+        let (applied, updated_at) = outcome.ok_or_else(|| {
+            CommandError::new("calendar-import-rejected", "Calendar refresh returned no import result.")
+        })?;
+        Ok(IcalRefreshResult {
+            status: "complete",
+            updated_at,
+            added: applied.added as u64,
+            updated: applied.updated as u64,
+            held: (applied.held + applied.parser_held) as u64,
+            removed: applied.removed as u64,
+        })
     }
 
     fn refresh(
@@ -1941,6 +2069,17 @@ async fn start_canvas_refresh(
     .await
 }
 
+#[tauri::command]
+async fn start_ical_refresh(
+    state: State<'_, AppState>,
+    on_progress: Channel<IcalRefreshProgress>,
+) -> Result<IcalRefreshResult, CommandError> {
+    blocking_arc(state.inner(), move |inner| {
+        inner.refresh_ical(&mut |progress| on_progress.send(progress).is_ok())
+    })
+    .await
+}
+
 /// Registers exactly the commands in [`COMMAND_NAMES`]. The caller manages an [`AppState`].
 pub fn register_handlers<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder.invoke_handler(tauri::generate_handler![
@@ -1961,6 +2100,7 @@ pub fn register_handlers<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Build
         export_legacy_folder,
         set_canvas_refresh_enabled,
         start_canvas_refresh,
+        start_ical_refresh,
         prepare_store_promotion,
         confirm_store_promotion,
         demote_store_for_rollback,

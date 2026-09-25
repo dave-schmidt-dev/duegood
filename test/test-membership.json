@@ -1,75 +1,8 @@
 {
-  "worker": {
-    "focusedRunner": "test:worker",
-    "fullRunner": "test:unit",
-    "tests": [
-      "test/worker/assignment-list.test.ts",
-      "test/worker/assignment-override.test.ts",
-      "test/worker/asset-boundary.test.ts",
-      "test/worker/auth-rate-limit.test.ts",
-      "test/worker/auth-state.test.ts",
-      "test/worker/config-template.test.ts",
-      "test/worker/canvas-conversations.test.ts",
-      "test/worker/canvas-conversation-sync.test.ts",
-      "test/worker/canvas-profile-sync.test.ts",
-      "test/worker/connect-token-route.test.ts",
-      "test/worker/connection-fence.test.ts",
-      "test/worker/course-discovery.test.ts",
-      "test/worker/course-import.test.ts",
-      "test/worker/course-list.test.ts",
-      "test/worker/credential-envelope.test.ts",
-      "test/worker/csrf.test.ts",
-      "test/worker/health.test.ts",
-      "test/worker/identity-migration.test.ts",
-      "test/worker/import-atomic-swap.test.ts",
-      "test/worker/import-delete-fence.test.ts",
-      "test/worker/import-feasibility.test.ts",
-      "test/worker/import-lease-reclaim.test.ts",
-      "test/worker/import-limits.test.ts",
-      "test/worker/import-ownership.test.ts",
-      "test/worker/institution-identity.test.ts",
-      "test/worker/inventory-anomaly.test.ts",
-      "test/worker/migration-harness.test.ts",
-      "test/worker/mutation-route-security.test.ts",
-      "test/worker/oauth-profile.test.ts",
-      "test/worker/pagination-failure.test.ts",
-      "test/worker/personal-completion-phase1.test.ts",
-      "test/worker/personal-completion-security.test.ts",
-      "test/worker/personal-token.test.ts",
-      "test/worker/response-headers.test.ts",
-      "test/worker/revocation-order.test.ts",
-      "test/worker/session-lifecycle.test.ts",
-      "test/worker/session-ownership.test.ts",
-      "test/worker/submission-state.test.ts"
-    ]
-  },
   "ui": {
     "focusedRunner": "test:ui",
     "tests": [
-      "test/ui/phase1-trust-interface.test.ts",
       "test/ui/dashboard.test.ts"
-    ]
-  },
-  "browser": {
-    "inclusiveRunner": "test:all",
-    "componentRunner": "test:browser",
-    "forbiddenRunners": [
-      "test:unit",
-      "test:worker",
-      "test:phase1"
-    ],
-    "tests": [
-      "test/browser/test-origin.spec.ts",
-      "test/browser/shell.spec.ts",
-      "test/browser/csrf-cookie.spec.ts",
-      "test/browser/session-seed.spec.ts",
-      "test/browser/phase1-this-week.spec.ts",
-      "test/browser/phase1-completion.spec.ts",
-      "test/browser/phase1-desktop.spec.ts",
-      "test/browser/phase1-mobile.spec.ts",
-      "test/browser/accessibility-phase1.spec.ts",
-      "test/browser/local-dashboard.spec.ts",
-      "test/browser/desktop-first-run.spec.ts"
     ]
   },
   "container": {
@@ -140,6 +73,8 @@
       "src-tauri/src/downloads.rs": 5,
       "src-tauri/src/export.rs": 5,
       "src-tauri/src/history.rs": 7,
+      "src-tauri/src/ical.rs": 9,
+      "src-tauri/src/ical_apply.rs": 6,
       "src-tauri/src/import.rs": 14,
       "src-tauri/src/locking.rs": 12,
       "src-tauri/src/phase4_smoke.rs": 1,
@@ -148,7 +83,8 @@
       "src-tauri/src/resources.rs": 1,
       "src-tauri/src/snapshots.rs": 1,
       "src-tauri/src/store.rs": 21,
-      "src-tauri/src/embedded_asset_tests.rs": 1
+      "src-tauri/src/embedded_asset_tests.rs": 1,
+      "src-tauri/src/ical_receiver.rs": 6
     }
   },
   "fixtures": [
@@ -157,5 +93,12 @@
     "test/fixtures/refresh-canvas-mock.json",
     "test/fixtures/refresh-expected-store.json",
     "test/fixtures/tauri-legacy-source.json"
-  ]
+  ],
+  "desktopUi": {
+    "runner": "test:desktop-ui",
+    "inclusiveRunner": "test:all",
+    "tests": [
+      "test/native/playwright/desktop-first-run.spec.ts"
+    ]
+  }
 }

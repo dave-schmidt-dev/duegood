@@ -21,6 +21,7 @@ function feed(...events: string[]): string {
 }
 const assignment = `${origin}/courses/42/assignments/5`;
 const calendarEvent = (id: string) => `${origin}/courses/42/calendar_events/${id}`;
+const calendarView = (query = "include_contexts=course_42&month=09&year=2030", fragment = "assignment_5") => `${origin}/calendar?${query}#${fragment}`;
 
  describe("bounded Canvas iCal normalizer", () => {
   it("uses verified assignment identity across changed override UIDs and keeps checkpoints separate", async () => {
@@ -55,6 +56,24 @@ const calendarEvent = (id: string) => `${origin}/courses/42/calendar_events/${id
     expect(floating).toMatchObject({ observations: [], held: [{ reason: "floating-time" }], deletions: 0 });
   });
 
+  it("canonicalizes a repeated all-day DATE parameter without changing date semantics", async () => {
+    const result = await normalizeCanvasIcal(feed(
+      event("duplicate-date", assignment, "", "Synthetic duplicate date", "DTSTART;VALUE=DATE;VALUE=DATE:20300120"),
+    ), options);
+    expect(result.events[0]?.at).toEqual({ kind: "date", value: "2030-01-20" });
+  });
+
+  it("rejects excessive, mixed, unknown, and malformed DTSTART DATE parameters", async () => {
+    const rejects = async (start: string) => {
+      await expect(normalizeCanvasIcal(feed(event("invalid-date-parameter", assignment, "", "Synthetic invalid date", start)), options))
+        .rejects.toMatchObject({ code: "MALFORMED_CALENDAR" });
+    };
+    await rejects("DTSTART;VALUE=DATE;VALUE=DATE;VALUE=DATE:20300120");
+    await rejects("DTSTART;VALUE=DATE;VALUE=DATE-TIME:20300120");
+    await rejects("DTSTART;VALUE=DATE;X-SYNTHETIC=DATE:20300120");
+    await rejects("DTSTART;VALUE=DATE;VALUE=DATE:20300230");
+  });
+
   it("unfolds lines and unescapes calendar text", async () => {
     const input = feed(event("folded", assignment, "", "Synthetic\\, folded\\; title\\nline\r\n continuation"));
     const result = await normalizeCanvasIcal(input, options);
@@ -71,6 +90,58 @@ const calendarEvent = (id: string) => `${origin}/courses/42/calendar_events/${id
       ...options, courses: [{ key: "course-a", canvasCourseId: "42" }, { key: "course-b", canvasCourseId: "42" }],
     });
     expect(ambiguous.held).toMatchObject([{ reason: "ambiguous-course", candidateCourses: ["course-a", "course-b"] }]);
+  });
+
+  it("derives assignment identity from an exact Canvas calendar-view URL and matching UID", async () => {
+    const input = feed(event("event-assignment-5", calendarView()).replace("URL:", "URL;VALUE=URI:"));
+    const result = await normalizeCanvasIcal(input, options);
+    expect(result.held).toEqual([]);
+    expect(result.events[0]).toMatchObject({
+      kind: "assignment-parent", canvasCourseId: "42", calendarIdentity: "assignment:5",
+    });
+    expect(result.observations[0]?.fields).toMatchObject({ url: assignment });
+  });
+
+  it("holds calendar-view events until their canonical event identity is verified", async () => {
+    const input = feed(event("event-calendar-event-104", calendarView(undefined, "calendar_event_104")));
+    const held = await normalizeCanvasIcal(input, options);
+    expect(held).toMatchObject({ observations: [], held: [{ reason: "ambiguous-event", canvasCourseId: "42" }] });
+    const accepted = await normalizeCanvasIcal(input, {
+      ...options,
+      verifiedEvents: { ...options.verifiedEvents, "104": { kind: "other-event", courseId: "42" } },
+    });
+    expect(accepted.events[0]).toMatchObject({ kind: "other-event", calendarIdentity: "event:104" });
+    expect(accepted.observations[0]?.fields).toMatchObject({ url: calendarEvent("104") });
+  });
+
+  it("holds malformed calendar-view identity near-misses", async () => {
+    const invalid = [
+      ["event-assignment-5", "https://foreign.synthetic.invalid/calendar?include_contexts=course_42&month=1&year=2030"],
+      ["event-assignment-5", "https://synthetic:synthetic@canvas.synthetic.invalid/calendar?include_contexts=course_42&month=1&year=2030"],
+      ["event-assignment-5", `${calendarView()}#fragment`],
+      ["event-assignment-5", calendarView().split("#")[0]!],
+      ["event-assignment-5", calendarView(undefined, "assignment_6")],
+      ["event-assignment-5", calendarView("include_contexts=course_42&include_contexts=course_42&month=1&year=2030")],
+      ["event-assignment-5", calendarView("include_contexts=course_42&month=1&year=2030&extra=1")],
+      ["event-assignment-5", calendarView("include_contexts=course_42&month=1")],
+      ["event-assignment-5", calendarView("include_contexts=course_0&month=1&year=2030")],
+      ["event-assignment-0", calendarView()],
+      ["event-unexpected-5", calendarView()],
+      ["event-assignment-5-extra", calendarView()],
+      ["event-assignment-5", calendarView("include_contexts=course_42&month=00&year=2030")],
+      ["event-assignment-5", calendarView("include_contexts=course_42&month=1&year=0000")],
+    ] as const;
+    for (const [uid, url] of invalid) {
+      const result = await normalizeCanvasIcal(feed(event(uid, url)), options);
+      expect(result.observations).toEqual([]);
+      expect(result.held).toMatchObject([{ reason: "unsupported-event" }]);
+    }
+  });
+
+  it("keeps direct Canvas resource links independent of calendar-view UID syntax", async () => {
+    const result = await normalizeCanvasIcal(feed(event("not-a-calendar-view-uid", assignment)), options);
+    expect(result.events[0]).toMatchObject({ kind: "assignment-parent", calendarIdentity: "assignment:5" });
+    expect(result.observations[0]?.fields).toMatchObject({ url: assignment });
   });
 
   it("accepts an explicit owner mapping for a missing course link and holds a changed unmapped UID", async () => {

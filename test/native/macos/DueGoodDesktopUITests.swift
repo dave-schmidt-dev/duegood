@@ -18,7 +18,7 @@ final class DueGoodDesktopUITests: XCTestCase {
         app.launch()
         defer { if app.state != .notRunning { app.terminate() } }
 
-        XCTAssertTrue(app.staticTexts["Set up local storage"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.staticTexts["Import existing coursework"].waitForExistence(timeout: 30))
         XCTAssertTrue(app.buttons["Choose legacy folder…"].exists)
         XCTAssertFalse(app.buttons["Refresh"].exists)
 
@@ -87,7 +87,7 @@ final class DueGoodDesktopUITests: XCTestCase {
         app.activate()
         defer { if app.state != .notRunning { app.terminate() } }
 
-        XCTAssertTrue(app.staticTexts["Set up local storage"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.staticTexts["Import existing coursework"].waitForExistence(timeout: 30))
         XCTAssertTrue(app.buttons["Choose legacy folder…"].exists)
         XCTAssertFalse(app.buttons["Refresh"].exists)
         // WebKit exposes setup copy as AX values and truncates this path visually.

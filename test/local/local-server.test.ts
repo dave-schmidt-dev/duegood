@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { IcalFetchError, run as runIcalFetcher, validateCanvasIcalUrl } from "../../scripts/sync-canvas-ical.mjs";
 
 const children: ChildProcess[] = [];
 const directories: string[] = [];
@@ -102,6 +103,72 @@ async function postCalendar(origin: string, token: string, input: string, suffix
 }
 
 describe("local server", () => {
+  it("keeps feed acquisition opt-in and confines synthetic failure injections before the byte importer", async () => {
+    const defaultServer = await start();
+    const defaultStatus = await fetch(`${defaultServer.origin}/api/auth/status`).then((response) => response.json()) as { icalFetchAvailable: boolean };
+    expect(defaultStatus.icalFetchAvailable).toBe(false);
+    expect(() => validateCanvasIcalUrl("https://elsewhere.invalid/feeds/calendars/private-sentinel")).toThrow(IcalFetchError);
+    expect(() => validateCanvasIcalUrl("https://marymount.instructure.com:444/feeds/calendars/private-sentinel")).toThrow(IcalFetchError);
+    expect(() => validateCanvasIcalUrl("https://marymount.instructure.com:443/feeds/calendars/private-sentinel")).toThrow(IcalFetchError);
+    expect(() => validateCanvasIcalUrl("https://marymount.instructure.com/feeds/calendars/private-sentinel?unexpected=query")).toThrow(IcalFetchError);
+
+    const feed = "https://marymount.instructure.com/feeds/calendars/synthetic-private-feed.ics";
+    const launch = new TextEncoder().encode(JSON.stringify({ origin: "http://127.0.0.1:43127", csrfToken: "a".repeat(43) }));
+    await expect(runIcalFetcher(["--loopback-origin", "http://127.0.0.1:43127"], {
+      DUEGOOD_CANVAS_ICAL_URL: feed, DUEGOOD_ICAL_IMPORT_ORIGIN: "http://127.0.0.1:43127",
+    }, { readLaunch: async () => launch, fetchImpl: async () => { throw new Error("must not fetch"); } })).rejects.toMatchObject({ code: "INVALID_IMPORT_TARGET" });
+    await expect(runIcalFetcher([], {
+      DUEGOOD_CANVAS_ICAL_URL: feed, DUEGOOD_ICAL_IMPORT_ORIGIN: "http://127.0.0.1:43127",
+    }, { readLaunch: async () => new TextEncoder().encode(JSON.stringify({ origin: "http://127.0.0.1:43128", csrfToken: "a".repeat(43) })),
+      fetchImpl: async () => { throw new Error("must not fetch"); } })).rejects.toMatchObject({ code: "INVALID_IMPORT_LAUNCH" });
+    const cases: Array<[string, () => Promise<Response>]> = [
+      ["REDIRECT_REJECTED", async () => new Response(null, { status: 302, headers: { Location: "https://elsewhere.invalid" } })],
+      ["TIMEOUT", async () => { const error = new Error("synthetic-private-timeout"); error.name = "AbortError"; throw error; }],
+      ["DNS_OR_TLS_FAILURE", async () => { throw new TypeError("getaddrinfo synthetic-private-dns"); }],
+      ["DNS_OR_TLS_FAILURE", async () => { throw new TypeError("TLS synthetic-private-certificate"); }],
+      ["OVERSIZE", async () => new Response("", { status: 200, headers: { "Content-Type": "text/calendar", "Content-Length": String(5 * 1024 * 1024 + 1) } })],
+    ];
+    for (const [code, response] of cases) {
+      let imports = 0;
+      const statuses: string[] = [];
+      await expect(runIcalFetcher([], { DUEGOOD_CANVAS_ICAL_URL: feed, DUEGOOD_ICAL_IMPORT_ORIGIN: "http://127.0.0.1:43127" }, {
+        readLaunch: async () => launch,
+        onStatus: (status: string) => statuses.push(status),
+        fetchImpl: async (input: RequestInfo | URL) => {
+          if (String(input).startsWith("https://marymount.instructure.com/")) return await response();
+          imports += 1;
+          return new Response(null, { status: 200 });
+        },
+      })).rejects.toMatchObject({ code });
+      expect(imports).toBe(0);
+      expect(statuses.join(" ")).not.toContain("synthetic-private-feed");
+      expect(statuses.join(" ")).not.toContain("synthetic-private");
+    }
+  });
+
+  it("posts only bounded calendar bytes to the fixed loopback importer", async () => {
+    const feed = "https://marymount.instructure.com/feeds/calendars/synthetic-private-feed.ics";
+    const input = new TextEncoder().encode(calendar(calendarEvent("synthetic-uid", "990123")));
+    let importRequest: RequestInit | undefined;
+    let importTarget = "";
+    const statuses: string[] = [];
+    await runIcalFetcher([], { DUEGOOD_CANVAS_ICAL_URL: feed, DUEGOOD_ICAL_IMPORT_ORIGIN: "http://127.0.0.1:43127" }, {
+      readLaunch: async () => new TextEncoder().encode(JSON.stringify({ origin: "http://127.0.0.1:43127", csrfToken: "a".repeat(43) })),
+      onStatus: (status: string) => statuses.push(status),
+      fetchImpl: async (request: RequestInfo | URL, init?: RequestInit) => {
+        if (String(request).startsWith("https://marymount.instructure.com/")) return new Response(input, { status: 200, headers: { "Content-Type": "text/calendar" } });
+        importTarget = String(request);
+        importRequest = init;
+        return new Response(null, { status: 200 });
+      },
+    });
+    expect(importRequest).toMatchObject({ method: "POST", redirect: "error", headers: { "Content-Type": "text/calendar; charset=utf-8" } });
+    expect(importTarget).toBe("http://127.0.0.1:43127/api/local/ical-import");
+    expect(importRequest?.body).toBeInstanceOf(Uint8Array);
+    expect(statuses).toEqual(["started", `downloaded ${input.byteLength} bytes`, "completed"]);
+    expect(statuses.join(" ")).not.toContain("synthetic-private-feed");
+  });
+
   it("serves the local projection and protects completion writes", async () => {
     const { origin, file } = await start();
     const page = await fetch(origin);

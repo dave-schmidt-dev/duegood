@@ -23,13 +23,10 @@ export interface DashboardPendingSourceLink {
   readonly reason: "ambiguous-match" | "conflicting-match";
   readonly needsRefresh?: true;
 }
-/** Desktop mode: which app store the data came from. Absent in browser mode. */
-export interface DesktopStoreInfo { readonly storeState: "preview" | "authoritative"; readonly dataFolder: string; readonly importedAt: string | null; readonly lastRefreshAt?: string | null; readonly canvasRefreshEnabled?: boolean; readonly refreshAvailable?: boolean; readonly snapshotInProgress?: boolean; readonly snapshotProgress?: { readonly filesDone: number; readonly bytesDone: number } | null; readonly warning?: string | null }
+/** The app store and source state owned by the Tauri desktop app. */
+export interface DesktopStoreInfo { readonly storeState: "preview" | "authoritative"; readonly dataFolder: string; readonly importedAt: string | null; readonly lastRefreshAt?: string | null; readonly canvasRefreshEnabled?: boolean; readonly refreshAvailable?: boolean; readonly icalRefreshAvailable?: boolean; readonly snapshotInProgress?: boolean; readonly snapshotProgress?: { readonly filesDone: number; readonly bytesDone: number } | null; readonly warning?: string | null }
 /** `version` is the opaque exact-byte digest of the coursework document (empty when unknown). */
 export interface DashboardData { readonly version: string; readonly courses: readonly DashboardCourse[]; readonly events: readonly DashboardEvent[]; readonly pendingSourceLinks: readonly DashboardPendingSourceLink[]; readonly resources: readonly DashboardResource[]; readonly conversations: readonly DashboardConversation[]; readonly refreshes: readonly DashboardRefresh[]; readonly profile: DashboardProfile | null; readonly refreshAvailable: boolean; readonly sourceStatus: DashboardSourceStatus }
-export interface DashboardGradePreviewProposal { readonly id: string; readonly course: string; readonly item: string; readonly grade: string; readonly source: "User-confirmed PDF"; readonly sourceItemId: string | null; readonly status: "ready" | "manual" }
-interface DashboardGradePreview { readonly phase: "parsing" | "ready" | "confirming" | "failed"; readonly proposals: readonly DashboardGradePreviewProposal[]; readonly selectedIds: ReadonlySet<string>; readonly error?: string }
-
 export interface DashboardState {
   readonly page: DashboardPage;
   readonly loading: boolean;
@@ -49,7 +46,6 @@ export interface DashboardState {
   readonly pendingManualGradeIds: ReadonlySet<string>;
   readonly failedManualGradeIds: ReadonlySet<string>;
   readonly editingManualGrade?: { readonly id: string; readonly draft: string };
-  readonly gradePreview?: DashboardGradePreview;
   readonly mutationError?: { readonly id: string; readonly message: string };
   readonly selectedConversationId?: string;
   readonly selectedRefreshId?: string;
@@ -64,10 +60,7 @@ export interface DashboardState {
   readonly pendingLinkDecision?: "confirm" | "reject";
   readonly pendingLinkSaving?: boolean;
   readonly pendingLinkNotice?: string;
-  /** Desktop mode only. */
-  readonly desktop?: DesktopStoreInfo;
-  /** Completion and discussion controls render disabled only when explicitly requested. */
-  readonly readOnly?: boolean;
+  readonly desktop: DesktopStoreInfo;
   readonly resourceNotice?: string;
   /** Native cutover/rollback operation state. The proof is opaque and memory-only. */
   readonly storeTransition?: {
@@ -94,10 +87,6 @@ export interface DashboardHandlers {
   readonly onManualGradeDraft: (value: string) => void;
   readonly onSaveManualGrade: (id: string) => void;
   readonly onCancelManualGrade: () => void;
-  readonly onGradePreviewFile?: (file: File | null) => void;
-  readonly onToggleGradePreviewProposal?: (id: string) => void;
-  readonly onConfirmGradePreview?: () => void;
-  readonly onCancelGradePreview?: () => void;
   readonly onSelectConversation: (id: string) => void;
   readonly onSelectRefresh: (id: string) => void;
   readonly onRefresh: () => void;
@@ -146,24 +135,24 @@ export function safeLocalHref(value: string | null | undefined): string | undefi
 function empty(text: string): ElementDescriptor { return el("div", text, { class: "empty-state", role: "status" }); }
 function heading(eyebrow: string, title: string, copy: string, count?: string): ElementDescriptor { return el("header", undefined, { class: "subpage-heading" }, [el("div", undefined, undefined, [el("p", eyebrow, { class: "eyebrow" }), el("h1", title), el("p", copy)]), ...(count === undefined ? [] : [el("div", count, { class: "page-count" })])]); }
 
-function locked(state: DashboardState, id: string, pendingIds: ReadonlySet<string>): boolean {
-  return pendingIds.has(id) || state.readOnly === true;
+function locked(id: string, pendingIds: ReadonlySet<string>): boolean {
+  return pendingIds.has(id);
 }
 
 function completionButton(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   const pending = state.pendingCompletionIds.has(event.id);
-  const disabled = locked(state, event.id, state.pendingCompletionIds);
+  const disabled = locked(event.id, state.pendingCompletionIds);
   return { tag: "button", attrs: { type: "button", class: "complete-button", ...(disabled ? { disabled: "" } : {}) }, text: pending ? "Saving…" : event.completed ? "Mark not done" : "Mark complete", on: { click: () => handlers.onToggleCompletion(event.id) } };
 }
 
 function completionCheckbox(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
-  const disabled = locked(state, event.id, state.pendingCompletionIds);
+  const disabled = locked(event.id, state.pendingCompletionIds);
   return el("label", undefined, { class: "event-check" }, [{ tag: "input", attrs: { type: "checkbox", "aria-label": "Done", ...(event.completed ? { checked: "" } : {}), ...(disabled ? { disabled: "" } : {}) }, on: { change: () => handlers.onToggleCompletion(event.id) } }, el("span", "Done")]);
 }
 
 function discussionCheckboxes(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): readonly ElementDescriptor[] {
   if (event.kind !== "discussion") return [];
-  const disabled = locked(state, event.id, state.pendingDiscussionIds);
+  const disabled = locked(event.id, state.pendingDiscussionIds);
   const checkbox = (field: "post" | "replies", ariaLabel: string, title: string, hint: string, checked: boolean): ElementDescriptor => el("label", undefined, { class: "event-check discussion-step", "data-discussion-step": field }, [
     { tag: "input", attrs: { type: "checkbox", "aria-label": ariaLabel, ...(checked ? { checked: "" } : {}), ...(disabled ? { disabled: "" } : {}) }, on: { change: () => handlers.onToggleDiscussion(event.id, field) } },
     el("span", undefined, { class: "discussion-step__copy" }, [el("strong", title), el("small", hint)]),
@@ -214,43 +203,6 @@ export function formatAssignmentCopyText(event: DashboardEvent): string {
   return lines.join("\n");
 }
 
-export async function copyTextToClipboard(text: string): Promise<boolean> {
-  if (typeof navigator !== "undefined" && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch {
-      // User activation may expire across the awaited rejection, so a legacy
-      // fallback cannot be attempted reliably after this point.
-      return false;
-    }
-  }
-
-  if (typeof document === "undefined" || !document.body) return false;
-  let textarea: HTMLTextAreaElement | null = null;
-  try {
-    textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.setAttribute("readonly", "");
-    textarea.style.position = "fixed";
-    textarea.style.top = "-9999px";
-    textarea.style.left = "-9999px";
-    textarea.style.opacity = "0";
-    document.body.appendChild(textarea);
-    textarea.focus();
-    textarea.select();
-    textarea.setSelectionRange(0, textarea.value.length);
-    const success = document.execCommand("copy");
-    return success;
-  } catch {
-    return false;
-  } finally {
-    if (textarea && textarea.parentNode) {
-      textarea.parentNode.removeChild(textarea);
-    }
-  }
-}
-
 function copyButton(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   const feedback = state.copyFeedback?.[event.id];
   const label = feedback === "pending" ? "Copying…" : feedback === "copied" ? "Copied" : feedback === "failed" ? "Could not copy" : "Copy assignment";
@@ -293,15 +245,15 @@ function eventCard(event: DashboardEvent, state: DashboardState, handlers: Dashb
 
 function railCompletionCheckbox(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   const pending = state.pendingCompletionIds.has(event.id);
-  const disabled = locked(state, event.id, state.pendingCompletionIds);
-  return el("label", undefined, { class: "rail-done", title: pending ? "Saving completion state" : state.readOnly === true ? "Read-only preview copy" : "Mark assignment done" }, [
+  const disabled = locked(event.id, state.pendingCompletionIds);
+  return el("label", undefined, { class: "rail-done", title: pending ? "Saving completion state" : "Mark assignment done" }, [
     { tag: "input", attrs: { type: "checkbox", "aria-label": `Mark ${event.title} done`, ...(event.completed ? { checked: "" } : {}), ...(disabled ? { disabled: "" } : {}) }, on: { change: () => handlers.onToggleCompletion(event.id) } },
     el("span", pending ? "Saving…" : "Done", { class: "rail-done__label" }),
   ]);
 }
 
 function railDiscussionCheckboxes(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
-  const disabled = locked(state, event.id, state.pendingDiscussionIds);
+  const disabled = locked(event.id, state.pendingDiscussionIds);
   const checkbox = (field: "post" | "replies", ariaLabel: string, label: string, checked: boolean): ElementDescriptor => el("label", undefined, { class: "rail-subcheck", "data-discussion-step": field }, [
     { tag: "input", attrs: { type: "checkbox", "aria-label": ariaLabel, ...(checked ? { checked: "" } : {}), ...(disabled ? { disabled: "" } : {}) }, on: { change: () => handlers.onToggleDiscussion(event.id, field) } },
     el("span", label),
@@ -501,7 +453,7 @@ function gradeEditor(event: DashboardEvent, state: DashboardState, handlers: Das
 }
 
 function gradeEditorCell(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
-  if (state.readOnly === true || state.desktop !== undefined || !/^[a-f0-9]{64}$/.test(state.data.version)) return el("td", "Local editing unavailable");
+  if (!/^[a-f0-9]{64}$/.test(state.data.version)) return el("td", "Local editing unavailable");
   const error = state.failedManualGradeIds.has(event.id) && state.mutationError?.id === event.id ? state.mutationError.message : undefined;
   return el("td", undefined, undefined, [gradeEditor(event, state, handlers), ...(error === undefined ? [] : [el("span", error, { role: "status", "aria-live": "polite", class: "inline-error" })])]);
 }
@@ -558,20 +510,6 @@ function gradebookPage(state: DashboardState, handlers: DashboardHandlers): Elem
       ] })) },
     ] },
   ]);
-  const previewAvailable = state.readOnly !== true && state.desktop === undefined && /^[a-f0-9]{64}$/.test(state.data.version) && handlers.onGradePreviewFile !== undefined;
-  const preview = state.gradePreview;
-  const previewMessage = preview === undefined ? undefined : preview.phase === "parsing" ? "Reading your PDF on this device. The report is not stored." : preview.phase === "confirming" ? "Saving confirmed local grade…" : preview.phase === "failed" ? (preview.error ?? "This report needs manual entry.") : preview.error ?? "Review an exact match before saving. Canvas-reported facts stay unchanged.";
-  const previewDialog = preview === undefined ? [] : [el("dialog", undefined, { open: "", role: "dialog", "aria-label": "Local PDF grade preview" }, [
-    el("h2", "Confirm proposed grade rows"),
-    el("p", previewMessage, preview.phase === "failed" ? { role: "alert" } : { role: "status", "aria-live": "polite" }),
-    ...(preview.phase === "ready" ? [el("div", undefined, { class: "grade-preview-rows" }, preview.proposals.map((proposal) => proposal.status === "ready"
-      ? el("label", undefined, { class: "grade-preview-row" }, [{ tag: "input", attrs: { type: "radio", name: "pdf-grade-proposal", "aria-label": `Confirm PDF grade for ${proposal.item}`, ...(preview.selectedIds.has(proposal.id) ? { checked: "" } : {}) }, on: { change: () => handlers.onToggleGradePreviewProposal?.(proposal.id) } }, el("span", undefined, undefined, [el("strong", proposal.item), el("span", `${proposal.course} · ${proposal.grade} · ${proposal.source}`)])])
-      : el("div", undefined, { class: "grade-preview-row", role: "note" }, [el("strong", proposal.item), el("span", `${proposal.course} · ${proposal.grade}`), el("span", "Manual entry required")])))] : []),
-    el("div", undefined, { class: "grade-preview-actions" }, [
-      { tag: "button", attrs: { type: "button", class: "more-action", ...(preview.phase === "confirming" ? { disabled: "" } : {}) }, text: "Cancel", on: { click: () => handlers.onCancelGradePreview?.() } },
-      { tag: "button", attrs: { type: "button", class: "more-action", ...(preview.phase !== "ready" || preview.selectedIds.size !== 1 ? { disabled: "" } : {}) }, text: "Confirm grade", on: { click: () => handlers.onConfirmGradePreview?.() } },
-    ]),
-  ])];
   return el("section", undefined, { class: "page", "data-page-panel": "grades" }, [
     heading("Coursework grade records", "Grades", "Canvas facts stay visible beside local observations. No official weighted or final course grade is inferred."),
     el("div", undefined, { class: "grade-honesty", role: "note" }, [el("strong", "Graded points are not a final course grade."), el("span", "A local observation is the selected value until you change or remove it; Canvas score and grade remain visible alongside it. Progress indicators use Canvas points only, and coverage and unknown group data stay visible.")]),
@@ -580,13 +518,7 @@ function gradebookPage(state: DashboardState, handlers: DashboardHandlers): Elem
       el("div", undefined, { class: "segmented", "aria-label": "Grade filters" }, (["all", "graded"] as const).map((mode) => ({ tag: "button", attrs: { type: "button", class: state.gradeMode === mode ? "active" : "", "aria-pressed": String(state.gradeMode === mode) }, text: mode === "all" ? "All records" : "Graded only", on: { click: () => handlers.onGradeMode(mode) } }))),
       el("div", undefined, { class: "filters", "aria-label": "Grade course filters" }, [{ tag: "button", attrs: { type: "button", class: `filter ${state.gradeCourseFilter === "all" ? "active" : ""}`, "aria-pressed": String(state.gradeCourseFilter === "all") }, text: "All courses", on: { click: () => handlers.onGradeCourseFilter("all") } }, ...courses.map((course) => ({ tag: "button", attrs: { type: "button", class: `filter ${key(state.gradeCourseFilter) === key(course.courseCode) ? "active" : ""}`, "aria-pressed": String(key(state.gradeCourseFilter) === key(course.courseCode)), style: `--course-color:${color(courses, course.courseCode)}` }, text: code(course.courseCode), on: { click: () => handlers.onGradeCourseFilter(course.courseCode) } }))]),
     ]),
-    ...(previewAvailable ? [el("section", undefined, { class: "grade-pdf-preview", "aria-label": "Local PDF grade preview" }, [
-      el("strong", "Local PDF grade preview"),
-      el("span", "Choose a report from this device to review exact matches. The PDF stays on this device and is not stored."),
-      { tag: "input", attrs: { type: "file", accept: "application/pdf", "aria-label": "Choose local PDF grade report" }, on: { change: (event) => handlers.onGradePreviewFile?.((event.currentTarget as HTMLInputElement).files?.item(0) ?? null) } },
-    ])] : []),
     table,
-    ...previewDialog,
   ]);
 }
 
@@ -611,7 +543,7 @@ function libraryPage(state: DashboardState, handlers: DashboardHandlers): Elemen
         el("span", resource.type, { class: "resource-type" }),
         el("div", undefined, undefined, [el("h2", resource.title, { class: "resource-title" }), el("p", `${code(resource.courseCode)}${resource.context ? ` · ${resource.context}` : ""}`, { class: "resource-meta" })]),
         el("time", formatted(resource.updatedAt, true), { class: "resource-updated" }),
-        ...(state.desktop !== undefined && resource.savedLocally === true && handlers.onOpenResource !== undefined
+        ...(resource.savedLocally === true && handlers.onOpenResource !== undefined
           ? [{ tag: "button", attrs: { type: "button", class: "more-action" }, text: "Open or save", on: { click: () => handlers.onOpenResource?.(resource.id) } }]
           : href !== undefined ? [el("a", "Open", { class: "more-action", href })] : resource.savedLocally === true ? [el("span", "Saved locally", { class: "resource-saved" })] : [el("span", "No local copy", { class: "resource-unavailable" })]),
       ]);
@@ -684,19 +616,19 @@ function desktopStoreCard(desktop: DesktopStoreInfo, state: DashboardState, hand
       ...(handlers.onExportFrozenRollback === undefined ? [] : [
         el("p", "After rollback demotion, export and verify a frozen copy of the legacy source before restoring or resuming it.", { class: "status" }),
         { tag: "button", attrs: { type: "button", class: "more-action", ...(busy ? { disabled: "" } : {}) }, text: transition.phase === "exporting" ? "Exporting frozen copy…" : "Export frozen rollback copy…", on: { click: handlers.onExportFrozenRollback } },
-        ...(transition.rollbackExportVerified === true ? [el("p", "Frozen rollback export verified. Use this copy when restoring the legacy browser source.", { class: "status", role: "status" })] : []),
+        ...(transition.rollbackExportVerified === true ? [el("p", "Frozen rollback export verified. Use this copy when restoring the legacy local source.", { class: "status", role: "status" })] : []),
       ]),
     ]
     : [
       el("p", "For rollback, first confirm demotion. Due Good keeps app recovery data, turns off Canvas refresh, and returns to preview; then export the frozen legacy source.", { class: "status" }),
       ...(handlers.onDemoteStore === undefined ? [] : [{ tag: "button", attrs: { type: "button", class: "setup-secondary", ...(busy ? { disabled: "" } : {}) }, text: transition.phase === "demoting" ? "Returning to preview…" : "Return app store to preview…", on: { click: handlers.onDemoteStore } }]),
-      ...(transition.rollbackExportVerified === true ? [el("p", "Frozen rollback export verified. Use this copy when restoring the legacy browser source.", { class: "status", role: "status" })] : []),
+      ...(transition.rollbackExportVerified === true ? [el("p", "Frozen rollback export verified. Use this copy when restoring the legacy local source.", { class: "status", role: "status" })] : []),
     ];
   const transitionFeedback = transition.message === undefined ? [] : [el("p", transition.message, { class: transition.error ? "inline-error" : "status", role: transition.error ? "alert" : "status", "aria-live": "polite" })];
   const transitionProgress = transition.progress === undefined ? [] : [el("p", `${String(transition.progress.filesDone)} files · ${transition.progress.bytesDone} bytes processed.`, { class: "status", role: "status", "aria-live": "polite" })];
   return el("section", undefined, { class: "settings-card", "data-desktop-store": desktop.storeState }, [
     el("h2", preview ? "Preview copy" : "App store"),
-    el("p", preview ? "A copy imported from the legacy folder. It never refreshes or follows later changes in the browser app. Personal progress edits stay here; the browser app's folder remains the source of truth until cutover." : "This app store is the authoritative copy. Import never replaces it."),
+    el("p", preview ? "A copy imported from the legacy local source. It does not follow later source changes. Personal progress edits stay here until cutover." : "This app store is the authoritative copy. Import never replaces it."),
     el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", source.label ?? "Desktop app store"), el("span", source.detail ?? "Status details were not supplied")]), el("span", preview ? "Preview" : "Authoritative", { class: preview ? "preview-badge" : "status-ok" })]),
     el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "App data folder"), el("code", desktop.dataFolder, { class: "setup-path" })])]),
     el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Imported"), el("span", formatted(desktop.importedAt, true))]), ...(preview && handlers.onReplacePreview !== undefined ? [{ tag: "button", attrs: { type: "button", class: "more-action" }, text: "Replace preview copy…", on: { click: handlers.onReplacePreview } }] : [])]),
@@ -708,7 +640,8 @@ function desktopStoreCard(desktop: DesktopStoreInfo, state: DashboardState, hand
         el("span", undefined, undefined, [el("strong", "Canvas refresh"), el("span", refreshEnabled ? (refreshAvailable ? "Canvas refresh can be attempted on this computer." : "Canvas refresh is unavailable on this computer.") : "Canvas refresh is off.")]),
         { tag: "input", attrs: { type: "checkbox", "aria-label": "Enable Canvas refresh", ...(refreshEnabled ? { checked: "" } : {}), ...((state.refreshSettingPending === true || state.refreshState === "running") ? { disabled: "" } : {}) }, on: { change: (event: Event) => handlers.onToggleCanvasRefresh?.((event.currentTarget as HTMLInputElement).checked) } },
       ] },
-      ...(desktop.lastRefreshAt == null ? [] : [el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Last Canvas refresh"), el("span", formatted(desktop.lastRefreshAt, true))])])]),
+      el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Calendar feed"), el("span", desktop.icalRefreshAvailable ? "Available for native refresh." : "Unavailable until the app store is authoritative, the feed port is free, and course identity is known.")])]),
+      ...(desktop.lastRefreshAt == null ? [] : [el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Last refresh"), el("span", formatted(desktop.lastRefreshAt, true))])])]),
       ...(state.refreshSettingError === undefined ? [] : [el("p", state.refreshSettingError, { class: "inline-error", role: "status", "aria-live": "polite" })]),
     ] : [el("p", "Canvas refresh is unavailable for a preview copy.", { class: "status", role: "status" })]),
   ]);
@@ -735,7 +668,7 @@ function pendingLinkReview(state: DashboardState, handlers: DashboardHandlers): 
     el("div", undefined, { class: "settings-row" }, [el("strong", "Done"), el("span", local.completed ? "Completed" : "Not completed")]),
     el("div", undefined, { class: "settings-row" }, [el("strong", "Notes"), el("span", local.notes?.trim() || "No local note")]),
   ];
-  const canKeepDistinct = state.readOnly !== true && state.desktop === undefined && selected.needsRefresh !== true;
+  const canKeepDistinct = selected.needsRefresh !== true;
   const canConfirm = local !== undefined && selectedCandidateId !== undefined && canKeepDistinct;
   const decision = state.pendingLinkDecision;
   return el("section", undefined, { class: "settings-card pending-link-review", "data-pending-link-review": "true" }, [
@@ -785,10 +718,21 @@ function pendingLinkReview(state: DashboardState, handlers: DashboardHandlers): 
 }
 
 function morePage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
-  const source = state.data.sourceStatus;
-  const refreshing = state.refreshState === "running";
-  const refreshButton: ElementDescriptor = { tag: "button", attrs: { type: "button", class: `more-action refresh-button${refreshing ? " refreshing" : ""}`, "aria-busy": String(refreshing), ...(refreshing ? { disabled: "" } : {}) }, text: refreshing ? "Refreshing…" : "Refresh", on: { click: handlers.onRefresh } };
-  return el("section", undefined, { class: "page" }, [heading("Due Good", "More", "Source status, refresh controls, and local app information."), ...(state.pendingLinkNotice === undefined ? [] : [el("p", state.pendingLinkNotice, { class: "status", role: "status", "aria-live": "polite" })]), ...(pendingLinkReview(state, handlers) === undefined ? [] : [pendingLinkReview(state, handlers)!]), el("div", undefined, { class: "more-grid" }, [state.desktop !== undefined ? desktopStoreCard(state.desktop, state, handlers) : el("section", undefined, { class: "settings-card" }, [el("h2", "Coursework source"), el("p", "The local Marymount coursework document remains the authoritative writable source."), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", source.label ?? "Local source"), el("span", source.detail ?? "Status details were not supplied")]), el("span", source.state ?? "Unknown", { class: source.state === "connected" || source.state === "ready" ? "status-ok" : "" })]), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Last refresh"), el("span", formatted(source.lastRefreshAt, true))]), ...(state.data.refreshAvailable ? [refreshButton] : [])])]), el("section", undefined, { class: "settings-card" }, [el("h2", "Import behavior"), el("p", "Incomplete refreshes never remove existing coursework."), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Canvas items"), el("span", "Assignments, class meetings, files, pages, links, modules, announcements, and read-only inbox")])]), el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Privacy"), el("span", "Local app · no public coursework data")])])])])]);
+  const pendingReview = pendingLinkReview(state, handlers);
+  return el("section", undefined, { class: "page" }, [
+    heading("Due Good", "More", "Source status, refresh controls, and local app information."),
+    ...(state.pendingLinkNotice === undefined ? [] : [el("p", state.pendingLinkNotice, { class: "status", role: "status", "aria-live": "polite" })]),
+    ...(pendingReview === undefined ? [] : [pendingReview]),
+    el("div", undefined, { class: "more-grid" }, [
+      desktopStoreCard(state.desktop, state, handlers),
+      el("section", undefined, { class: "settings-card" }, [
+        el("h2", "Import behavior"),
+        el("p", "Incomplete refreshes never remove existing coursework."),
+        el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Canvas items"), el("span", "Assignments, class meetings, files, pages, links, modules, announcements, and read-only inbox")])]),
+        el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Privacy"), el("span", "Local app · no public coursework data")])]),
+      ]),
+    ]),
+  ]);
 }
 
 function pagePanel(pageName: DashboardPage, descriptor: ElementDescriptor): ElementDescriptor {
@@ -811,10 +755,11 @@ function page(state: DashboardState, handlers: DashboardHandlers): ElementDescri
 function refreshNote(state: DashboardState, latest: DashboardRefresh | undefined): string {
   if (state.refreshState === "running") {
     const progress = state.refreshProgress;
-    if (progress === undefined) return "Canvas refresh is in progress";
-    const phase = ({ starting: "Preparing", snapshot: "Saving safety copy", fetch: "Reading Canvas data", reconcile: "Reviewing changes", stage: "Preparing changes", publish: "Saving updates", complete: "Finishing" } as Readonly<Record<string, string>>)[progress.phase] ?? "Working";
+    const calendar = state.desktop?.refreshAvailable !== true && state.desktop?.icalRefreshAvailable === true;
+    if (progress === undefined) return `${calendar ? "Calendar" : "Canvas"} refresh is in progress`;
+    const phase = ({ starting: "Preparing", snapshot: "Saving safety copy", fetch: "Reading Canvas data", reconcile: "Reviewing changes", stage: "Preparing changes", publish: "Saving updates", "broker-starting": "Starting secure feed", "waiting-for-calendar": "Waiting for calendar", importing: "Importing calendar", complete: "Finishing" } as Readonly<Record<string, string>>)[progress.phase] ?? "Working";
     const count = progress.total === null ? `${String(progress.completed)} completed` : `${String(progress.completed)} of ${String(progress.total)} completed`;
-    return `Canvas refresh · ${phase} · ${count}${progress.bytesDone === null ? "" : ` · ${String(progress.bytesDone)} bytes received`}`;
+    return `${calendar ? "Calendar" : "Canvas"} refresh · ${phase}${calendar ? "" : ` · ${count}${progress.bytesDone === null ? "" : ` · ${String(progress.bytesDone)} bytes received`}`}`;
   }
   if (state.refreshDetail !== undefined) return state.refreshDetail;
   if (state.refreshState === "complete") return "Refresh complete.";

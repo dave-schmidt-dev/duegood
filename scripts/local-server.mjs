@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CourseworkStore } from "../src/local/coursework-store.ts";
 import { DashboardStore } from "../src/local/dashboard-store.ts";
-import { superviseRefresh } from "../src/local/refresh-supervisor.ts";
+import { superviseIcalFetch, superviseRefresh } from "../src/local/refresh-supervisor.ts";
 import { captureCanvasSnapshot, readIcalFeedStatus, recordRefreshFailure, recordRefreshSuccess, recoverMissedGradeHistory } from "../src/local/refresh-history.ts";
 import { IcalNormalizationError, MAX_ICAL_BYTES, normalizeCanvasIcal } from "../src/local/ical.ts";
 import { GradePreviewError, MAX_GRADE_PDF_BYTES, parseGradeReportPdf, proposePdfGrades } from "../src/local/grades.ts";
@@ -22,6 +22,7 @@ function options(argv) {
   let readOnly = false;
   let enableRefresh = false;
   let enableIcalImport = false;
+  let enableIcalFetch = false;
   for (let index = 0; index < argv.length;) {
     const key = argv[index];
     if (key === "--read-only") {
@@ -39,6 +40,11 @@ function options(argv) {
       index += 1;
       continue;
     }
+    if (key === "--enable-ical-fetch") {
+      enableIcalFetch = true;
+      index += 1;
+      continue;
+    }
     const value = argv[index + 1];
     if (!key?.startsWith("--") || value === undefined) fail("expected --coursework PATH --port PORT");
     result[key.slice(2)] = value;
@@ -47,7 +53,8 @@ function options(argv) {
   if (!result.coursework || !result.port) fail("--coursework and --port are required");
   const port = Number(result.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) fail("--port must be 1..65535");
-  return { coursework: path.resolve(result.coursework), port, readOnly, enableRefresh, enableIcalImport };
+  if (enableIcalFetch && !enableIcalImport) fail("calendar fetch requires --enable-ical-import");
+  return { coursework: path.resolve(result.coursework), port, readOnly, enableRefresh, enableIcalImport, enableIcalFetch };
 }
 
 const config = options(process.argv.slice(2));
@@ -72,6 +79,7 @@ const store = new CourseworkStore(config.coursework);
 const dashboardStore = new DashboardStore(config.coursework);
 let version = (await store.read()).version;
 let refreshing = false;
+let icalFetching = false;
 
 async function runRefresh() {
   if (refreshing) throw new Error("refresh already running");
@@ -111,6 +119,21 @@ async function runRefresh() {
     return outcome;
   } finally {
     refreshing = false;
+  }
+}
+
+async function runIcalFetch() {
+  if (icalFetching) throw new Error("calendar fetch already running");
+  icalFetching = true;
+  try {
+    process.stderr.write("duegood-local: calendar fetch started\n");
+    const result = await superviseIcalFetch(path.dirname(config.coursework), origin, csrf, 30_000, (capturedBytes) => {
+      process.stderr.write(`duegood-local: calendar fetch progress ${capturedBytes} bytes\n`);
+    });
+    process.stderr.write("duegood-local: calendar fetch finished\n");
+    return result;
+  } finally {
+    icalFetching = false;
   }
 }
 
@@ -184,7 +207,7 @@ const server = createServer(async (request, response) => {
     if (!safeRequest(request)) return json(response, 403, { error: "request boundary rejected" });
     const url = new URL(request.url ?? "/", origin);
     if (request.method === "GET" && url.pathname === "/health") return json(response, 200, { ok: true });
-    if (request.method === "GET" && url.pathname === "/api/auth/status") return json(response, 200, { available: true, oauthConfigured: true, mode: "local", refreshAvailable: config.enableRefresh && !config.readOnly, icalImportAvailable: icalOptions !== null && !config.readOnly });
+    if (request.method === "GET" && url.pathname === "/api/auth/status") return json(response, 200, { available: true, oauthConfigured: true, mode: "local", refreshAvailable: config.enableRefresh && !config.readOnly, icalImportAvailable: icalOptions !== null && !config.readOnly, icalFetchAvailable: config.enableIcalFetch && icalOptions !== null && !config.readOnly });
     if (request.method === "GET" && url.pathname === "/api/connections") return json(response, 200, { connections: [{ id: "local", status: "active", createdAt: 0 }] });
     if (request.method === "GET" && (url.pathname === "/api/courses" || url.pathname === "/api/assignments")) {
       const snapshot = await store.read();
@@ -292,6 +315,18 @@ const server = createServer(async (request, response) => {
         if (error instanceof IcalRequestTooLarge) return json(response, 413, { error: "calendar input too large" });
         if (error instanceof IcalNormalizationError) return json(response, 422, { error: "calendar import rejected", code: error.code });
         return json(response, 500, { error: "calendar import failed" });
+      }
+    }
+    if (request.method === "POST" && url.pathname === "/api/local/ical-refresh") {
+      if (!config.enableIcalFetch || icalOptions === null || config.readOnly) return json(response, 405, { error: "calendar fetch unavailable" });
+      if (request.headers["x-duegood-csrf-token"] !== csrf) return json(response, 403, { error: "csrf rejected" });
+      if (url.search || request.headers["content-type"] || request.headers["content-encoding"]) return json(response, 400, { error: "calendar fetch request rejected" });
+      if (refreshing || icalFetching) return json(response, 409, { error: "calendar fetch already running" });
+      try {
+        await runIcalFetch();
+        return json(response, 200, { status: "imported" });
+      } catch {
+        return json(response, 502, { error: "calendar fetch failed" });
       }
     }
     if (request.method === "POST" && url.pathname === "/api/local/grade-preview") {

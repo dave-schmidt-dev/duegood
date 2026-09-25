@@ -3,16 +3,14 @@
   "entry": [
     "src/ui/router.ts",
     "scripts/*.mjs",
-    "test/worker/**/*.test.ts",
-    "test/browser/**/*.spec.ts"
+    "test/ui/**/*.test.ts",
+    "test/local/**/*.test.ts",
+    "test/native/playwright/**/*.spec.ts"
   ],
   "project": [
     "src/**/*.ts",
     "scripts/**/*.mjs",
     "test/**/*.ts",
     "*.config.ts"
-  ],
-  "ignoreDependencies": [
-    "cloudflare"
   ]
 }

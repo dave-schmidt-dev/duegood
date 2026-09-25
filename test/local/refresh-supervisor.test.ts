@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { CourseworkStore } from "../../src/local/coursework-store";
-import { superviseRefresh } from "../../src/local/refresh-supervisor";
+import { superviseIcalFetch, superviseRefresh } from "../../src/local/refresh-supervisor";
 
 describe("refresh supervisor", () => {
   it("runs a fixed noninteractive child and reports bounded progress", async () => {
@@ -57,5 +57,17 @@ describe("refresh supervisor", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it("runs only the dedicated iCal consumer and supplies its capability over stdin", async () => {
+    const result = await superviseIcalFetch(process.cwd(), "http://127.0.0.1:43127", "a".repeat(43), 2_000, undefined, {
+      executable: process.execPath,
+      args: ["-e", [
+        "if (process.argv.length !== 1) process.exit(2);",
+        "let input = ''; process.stdin.on('data', (chunk) => input += chunk);",
+        "process.stdin.once('end', () => { const launch = JSON.parse(input); process.exit(launch.origin === 'http://127.0.0.1:43127' && launch.csrfToken === 'a'.repeat(43) ? 0 : 3); });",
+      ].join(" "), "--"],
+    });
+    expect(result.capturedBytes).toBe(0);
   });
 });

@@ -1,13 +1,17 @@
 # Due Good — Implementation status
 
-Durable, factual record of what has actually been built and verified, phase by phase, against
-`docs/IMPLEMENTATION-PLAN.md`. This file is append-only across phases — a later phase adds its own
-section rather than rewriting an earlier one — and every claim here must be backed by a check
-someone can actually run locally (`npm run test:phase1` / `npm run test:all`), never a description
-of intended behavior. `npm run check:implementation-status -- --phase <n>` enforces the two things
-most likely to silently drift: that a phase's task list has no unfinished item left checked off
-early, and that the test counts quoted below match what the test-membership manifest actually
-lists — so this document cannot go stale next to the suite without the check catching it.
+## Current Tauri-only direction (2026-09-25)
+
+The sections below preserve historical implementation evidence and mention retired Worker and
+browser files. They are not current build or launch instructions. The sole product surface is the
+macOS Tauri app; `README.md`, `INVARIANTS.md`, and the top of `docs/IMPLEMENTATION-PLAN.md` define
+the active workflow. The production native store is still empty at the last content-free check,
+and the existing Node listener still owns the live feed port during migration. A private staged
+candidate passed 159 Rust tests with 3 ignored; 44 native UI contract tests, typecheck, lint,
+and dead-code checks also passed. All 46 desktop Playwright cases then passed against the staged
+Tauri UI, along with 175 legacy/local rollback tests. These are synthetic/source checks, not an installed native feed
+refresh or owner acceptance. The old `check:implementation-status` command has been retired with
+the Worker lane.
 
 ## Phase 1 — OAuth and Cloudflare foundation
 
@@ -105,14 +109,36 @@ remain owner/admin or human-review boundaries.
       parents, explicitly verified discussion checkpoints, and other calendar events. It maps
       courses through validated numeric Canvas course IDs or a bounded owner-supplied UID-to-course
       and stable-identity mapping. Unmapped changed UIDs stay held. Exact-origin resource links give
-      stable identity across changed feed UIDs. It never assigns `canvasId` or fetches a URL.
+      stable identity across changed feed UIDs. The observed Canvas calendar-view form requires
+      a matching course context, numeric resource UID, and resource fragment before constructing
+      a canonical assignment or event link. It never assigns `canvasId` or fetches a URL.
 - [x] Unknown or duplicate course identities, uncertain events, floating times, cancellations,
       and recurrence overrides are held. The result explicitly authorizes zero deletions;
       missing feed entries never imply removed coursework. Invalid timezones and incomplete or
-      oversized calendars fail with content-free errors. Only synthetic fixture data was tested.
-- [ ] `owner:ical-feed-shape` remains an acceptance gate. A content-free local shape check or an
-      explicit owner mapping must verify actual link and checkpoint forms before live use.
-      The private feed and any credential-bearing URL stay outside this repository and its logs.
+      oversized calendars fail with content-free errors. The final parser passed synthetic tests
+      and a disposable-copy live feed probe.
+- [x] A content-free local shape check verified the live assignment UID, calendar-view URL,
+      fragment, date, and course-context forms. The first live import accepted 57 assignments.
+      One calendar event remains held because its classification was not independently verified.
+      The private feed and credential-bearing URL stayed outside this repository and its logs.
+
+### Canvas iCal fallback — Task 1.4 (guarded host fetcher)
+
+- [x] A separate, disabled-by-default local trigger runs only the fixed
+      `duegood-canvas-ical` BWS consumer. The executable rejects caller arguments,
+      accepts the feed URL only in its injected environment, confines it to the
+      expected HTTPS Canvas calendar path, rejects redirects, and bounds time and
+      response bytes. Its broker-fixed loopback origin must match the service's
+      launch origin before it fetches. Errors and progress contain codes/counts only.
+- [x] Synthetic local tests passed in a private staged candidate. The same stage
+      passed native, membership, lint, type, integrity, and other pre-browser gates;
+      Playwright passed 76/76 with the host permissions Chromium needs.
+- [x] The owner granted the exact hash-pinned BWS consumer. The private launchd service now
+      has the iCal flags and three verified course mappings. A 2026-09-25 attended live fetch
+      succeeded: 57 assignments persisted with iCal references, one unverified event stayed
+      held, and the service remained healthy. The serving checkout required `npm ci` for its
+      pinned runtime dependency before activation. Same-user loopback port occupation remains
+      outside this local service's isolation boundary.
 
 ### Canvas iCal fallback — Task 2.1 (synthetic staged validation)
 

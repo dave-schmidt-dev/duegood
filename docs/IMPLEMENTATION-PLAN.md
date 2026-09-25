@@ -1,5 +1,24 @@
 # Due Good local Marymount replacement plan
 
+## 2026-09-25 owner pivot: Tauri-only daily application
+
+The owner has now selected the Tauri desktop application as the sole product surface and asked to remove the browser/Worker lanes and the normal-path one-time setup screen. This supersedes earlier browser and Cloudflare delivery goals below. Preserve the running local service until a verified native cutover because it currently holds the only live iCal fetch/import path and the production Tauri store is empty. A desktop WebView and `dist/public` are required Tauri assets; they are not a separate browser product.
+
+### Reconciled findings
+
+- **Confirmed:** the installed production bundle runs as `com.zerodelta.duegood`; its fixed app-data folder has no `store` directory, so Tauri shows first-run setup. Tauri embeds `dist/public` and uses native IPC for dashboard reads and writes. The loopback service owns current live iCal fetch/import and a distinct coursework file.
+- **Changed:** the earlier local server and Cloudflare Worker product lanes are retired goals. Native coursework and calendar parity now precede deletion of those lanes. Setup should be a recovery or migration action only, not the default daily screen.
+- **Not applicable:** public browser onboarding, Worker/D1 deployment, Cloudflare OAuth, and browser service release gates.
+- **Not verifiable yet:** installed Tauri acceptance with live coursework, repeat iCal refresh into the native store, and safe termination of the old writer. No claim of those outcomes is made from tests or source review.
+
+### Implementation phases and gates
+
+1. **Native parity:** add a narrow `127.0.0.1:2137` POST receiver inside Tauri for the existing SHA-pinned BWS helper. Give each helper launch a fresh CSRF token; reject all other requests before reading bounded calendar bytes. Normalize and reconcile in Rust, then write only through the native store lock. Keep the existing Node listener running until the attended port handoff. Test recurrence, time zones, duplicate IDs, malformed feeds, pending links, repeat imports, and preservation of personal progress. Provide content-free progress and error states in the desktop interface. If the existing helper cannot run from Tauri or a faithful Rust normalization proves disproportionately large, prepare a new hash-pinned native IPC consumer for explicit owner approval rather than allowing a second writer.
+   - Native parsing deliberately holds ambiguous and nonexistent local times at daylight saving transitions instead of choosing an instant. The former Node normalizer resolves those cases, so this is a reviewed fail-closed cutover difference; held events require source review rather than a guessed due time.
+2. **Migration and setup:** rehearse import from the current private coursework root into a preview native store, prove exact source preservation and a rollback export, then make the daily dashboard the launch view once native data exists. Preserve a recovery/migration route for empty or damaged stores until an owner-attended cutover verifies the real data. Do not auto-promote a preview to authoritative or silently adopt a private source.
+3. **Remove browser lanes:** after parity and cutover, stop the browser service and its writer; remove the Worker entry/config/migrations, local HTTP dashboard, browser transport, browser-only tests, scripts, and unused dependencies. Keep `src/ui`, `dist/public`, native UI tests, and any shared code they need. Revise README, status, invariants, task/history records, test membership, and public-tree inventory to match.
+4. **Exact-candidate gate:** run focused source/security tests, TypeScript and Rust checks, desktop UI coverage, asset verification, staged Tauri build, installation through the project installer, bundle-ID launch, and content-free native status checks. Report mocked, staged, installed, and live-feed results separately. No public push, cloud deletion, secret grant change, or irreversible production-store operation is authorized by this pivot.
+
 ## Outcome
 
 Replace the private Marymount coursework page with a local Due Good app. The immediate sequence is: capture the private contract read-only, build and verify the local source/server against public synthetic tests and the private document read-only, add the daily interface and fixed refresh control, then rehearse and perform a reversible launcher cutover. Cloud UI, OAuth, Cloudflare, and a separate Due Good model credential path are deferred and do not block the local replacement.

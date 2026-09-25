@@ -1,16 +1,11 @@
-# Offline utilities
+# Desktop utilities
 
-Run from the package root:
+Run from the repository root. Build and test Tauri in a private staged candidate so the installed app and the still-running legacy listener are untouched:
 
 ```sh
-python3 scripts/check_package.py
-python3 -m unittest discover -s tests -v
-python3 scripts/estimate_usage.py --students 100 --syncs 4
-python3 scripts/estimate_usage.py --students 1000 --syncs 4 --staging-writes-per-sync 200 --json
+npm run stage:tauri -- --skip-preflight --test test:tauri
 ```
 
-`estimate_usage.py --help` lists every assumption. Canvas page size is the effective returned size in the model, not a promise that Canvas honors a requested value. Every selected course requires at least one assignment-list request even when empty. Set course-page and refresh-token calls to zero for a warm refresh that does not perform those operations.
+`scripts/build-tauri.mjs` prepares the embedded desktop assets and refresh sidecar. `scripts/install-desktop-app.mjs` verifies the staged app and installs it by the project workflow. `scripts/sync-canvas-ical.mjs` is the SHA-pinned, BWS-launched calendar fetch helper; never run it with a URL argument or print its injected environment.
 
-Incoming Worker requests are modeled independently of outgoing Canvas calls. `row_write_multiplier` is an explicit estimate for index/change-history amplification on changed assignments; metadata and staging/cleanup writes are additional. Count reads from staging and other SQL in `rows_read_per_sync`. Non-sync per-student operations and other account workloads have separate daily inputs. No formula estimates CPU time, payload size, storage growth, burst traffic, or the number of D1 queries per invocation.
-
-Defaults are illustrative, not measured performance. The package checker only validates known filenames, fixture structure, JSON, internal documentation links, and preserved reference hashes. It does not certify arbitrary additions as safe for public release.
+The Python package checker validates synthetic fixtures and public-source hygiene. It does not establish live-feed, installed-app, or private-data acceptance.

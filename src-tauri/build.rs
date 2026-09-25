@@ -28,6 +28,7 @@ const COMMANDS: &[&str] = &[
     "export_legacy_folder",
     "set_canvas_refresh_enabled",
     "start_canvas_refresh",
+    "start_ical_refresh",
     "prepare_store_promotion",
     "confirm_store_promotion",
     "demote_store_for_rollback",

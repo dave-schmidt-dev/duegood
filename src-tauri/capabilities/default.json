@@ -22,6 +22,7 @@
     "allow-export-legacy-folder",
     "allow-set-canvas-refresh-enabled",
     "allow-start-canvas-refresh",
+    "allow-start-ical-refresh",
     "allow-prepare-store-promotion",
     "allow-confirm-store-promotion",
     "allow-demote-store-for-rollback",

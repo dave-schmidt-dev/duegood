@@ -24,8 +24,6 @@ const html = `<!doctype html>
 </html>
 `;
 
-const serviceWorker = `self.addEventListener("install",event=>{event.waitUntil(self.skipWaiting())});self.addEventListener("activate",event=>{event.waitUntil(self.clients.claim())});`;
-
 // Concatenated in token/shell/component order so later rules (component-specific) can override
 // earlier ones (shell-generic) at equal specificity, same as the source layout under src/ui/styles/.
 const css = (
@@ -50,7 +48,6 @@ await build({
 await Promise.all([
   writeFile(path.join(outputDirectory, "index.html"), html, "utf8"),
   writeFile(path.join(outputDirectory, "app.css"), css, "utf8"),
-  writeFile(path.join(outputDirectory, "sw.js"), serviceWorker, "utf8"),
 ]);
 
-console.log(`Built static browser shell in ${path.relative(root, outputDirectory)}.`);
+console.log(`Built Tauri WebView assets in ${path.relative(root, outputDirectory)}.`);

@@ -1,9 +1,7 @@
 /**
- * Plain-data description of one DOM element, returned by every component in `src/ui/components/`
- * and `src/ui/pages/`. Kept separate from `render()`'s DOM conversion so `test/ui/
- * phase1-trust-interface.test.ts` can assert on route/control/state/accessibility structure by
- * inspecting the returned object directly — no `document`/jsdom needed for that test at all, only
- * the real browser entry point (`src/ui/app.ts`) ever calls `render()`.
+ * Plain-data description of one DOM element, returned by components and pages. Kept separate from
+ * `render()`'s DOM conversion so desktop view contracts can be checked without a DOM; only the
+ * Tauri app entry point (`src/ui/app.ts`) turns descriptors into WebView elements.
  */
 export interface ElementDescriptor {
   readonly tag: string;

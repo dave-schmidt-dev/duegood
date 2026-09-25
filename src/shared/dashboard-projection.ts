@@ -1,15 +1,11 @@
 /**
- * Pure dashboard projection shared by the loopback server (browser mode) and the desktop webview
- * (native mode). Every function takes already-parsed JSON values and performs no I/O, so the Node
- * server can feed it files it reads and the webview can feed it the raw, bounded documents the
- * Rust store returns. Both modes therefore project identical data; the documented differences are
- * the injected options (resource open prefix, avatar path, refresh availability, source label,
- * and data origin, which changes only the visible Inbox wording in the source detail).
+ * Pure dashboard projection for documents returned by the native Tauri store. Every function
+ * takes already-parsed, bounded JSON values and performs no I/O.
  */
 import type { ConversationAttachment, ConversationMessage, NormalizedConversation } from "../canvas/conversations";
 import type { AssignmentListItem } from "../db/types";
-import type { LocalCourse, LocalSnapshot } from "../local/coursework-store";
-import { pendingSourceLinks } from "../local/acquisition";
+import type { LocalCourse, LocalSnapshot } from "./coursework-types";
+import { pendingSourceLinks } from "./pending-links";
 
 type JsonObject = Record<string, unknown>;
 type LocalGradeGroup = NonNullable<LocalCourse["gradeGroups"]>[number];

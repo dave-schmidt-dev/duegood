@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 
-export const CANVAS_PROFILE_ENDPOINT = "https://marymount.instructure.com/api/v1/users/self/profile";
+const CANVAS_PROFILE_ENDPOINT = "https://marymount.instructure.com/api/v1/users/self/profile";
 export const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
 const AVATAR_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"] as const;
 
