@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { chmodSync, lstatSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
-import os from "node:os";
+import { chmodSync, closeSync, lstatSync, openSync, realpathSync, writeSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createOwnedScratchRoot, preserveScratchEvidence } from "./owned-scratch-root.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TEST_BUNDLE_ID = "com.zerodelta.duegood.test";
@@ -55,6 +55,33 @@ export function installSignalHandlers() {
 
 function rejectIfInterrupted() {
   if (requestedSignal && !cleanupStarted) throw new Error(`Interrupted by ${requestedSignal}.`);
+}
+
+function processGroupExists(pid) {
+  try { process.kill(-pid, 0); return true; }
+  catch (error) {
+    if (error?.code === "ESRCH") return false;
+    if (error?.code === "EPERM") return true;
+    throw error;
+  }
+}
+
+async function waitForProcessGroupExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (processGroupExists(pid)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return true;
+}
+
+async function stopLingeringProcessGroup(child) {
+  if (child.pid === undefined || !processGroupExists(child.pid)) return true;
+  progress("Stopping a remaining child process from the isolated command.");
+  signalChild(child, "SIGTERM");
+  if (await waitForProcessGroupExit(child.pid, 2_000)) return true;
+  signalChild(child, "SIGKILL");
+  return waitForProcessGroupExit(child.pid, 3_000);
 }
 
 function safeWrite(stream, message) {
@@ -146,10 +173,10 @@ function progress(message) {
 }
 
 export function runCapture(command, args, options = {}) {
-  const { input, maxBytes = 32 * 1024 * 1024, timeoutMs = 60_000, ...spawnOptions } = options;
+  const { input, maxBytes = 32 * 1024 * 1024, timeoutMs = 60_000, onProcessGroupStopped = () => {}, ...spawnOptions } = options;
   return new Promise((resolve, reject) => {
     try { rejectIfInterrupted(); }
-    catch (error) { reject(error); return; }
+    catch (error) { onProcessGroupStopped(); reject(error); return; }
     const child = spawn(command, args, { ...spawnOptions, detached: true, stdio: ["pipe", "pipe", "pipe"] });
     activeChildren.add(child);
     const stdout = [];
@@ -157,6 +184,7 @@ export function runCapture(command, args, options = {}) {
     let size = 0;
     let timedOut = false;
     let oversized = false;
+    let spawnError = false;
     let forceKillTimer;
     const deadline = setTimeout(() => {
       timedOut = true;
@@ -179,16 +207,22 @@ export function runCapture(command, args, options = {}) {
     });
     child.stderr.on("data", (chunk) => stderr.push(chunk));
     child.on("error", (error) => {
+      spawnError = true;
       childEnded(child);
       clearTimeout(deadline);
       if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
+      onProcessGroupStopped();
       reject(error);
     });
-    child.on("close", (code, signal) => {
-      childEnded(child);
+    child.on("close", async (code, signal) => {
+      if (spawnError) return;
       clearTimeout(deadline);
       if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
-      if (timedOut) reject(new Error(`${path.basename(command)} timed out after ${timeoutMs / 1000} seconds.`));
+      const groupStopped = await stopLingeringProcessGroup(child).catch(() => false);
+      if (groupStopped) onProcessGroupStopped();
+      childEnded(child);
+      if (!groupStopped) reject(new Error(`${path.basename(command)} left an active child process.`));
+      else if (timedOut) reject(new Error(`${path.basename(command)} timed out after ${timeoutMs / 1000} seconds.`));
       else if (oversized) reject(new Error(`${path.basename(command)} output exceeded its safety limit.`));
       else if (code !== 0) {
         const diagnostic = Buffer.concat(stderr).toString("utf8").slice(-2000);
@@ -204,17 +238,49 @@ function runSwift(code, tempRoot, options = {}) {
   return runCapture("/usr/bin/swift", ["-module-cache-path", path.join(tempRoot, "SwiftModuleCache"), "-e", code], options);
 }
 
-function runStreaming(command, args, options = {}) {
+export function runStreaming(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const { timeoutMs = 15 * 60 * 1000, ...spawnOptions } = options;
+    const { timeoutMs = 15 * 60 * 1000, logPath, onProcessGroupStopped = () => {}, ...spawnOptions } = options;
     try { rejectIfInterrupted(); }
-    catch (error) { reject(error); return; }
+    catch (error) { onProcessGroupStopped(); reject(error); return; }
+    const maxLogBytes = 8 * 1024 * 1024;
+    let logFd;
+    try { if (logPath) logFd = openSync(logPath, "wx", 0o600); }
+    catch (error) { onProcessGroupStopped(); reject(error); return; }
     const child = spawn(command, args, { ...spawnOptions, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     activeChildren.add(child);
-    let pendingOut = "";
-    let pendingErr = "";
+    let loggedBytes = 0;
+    let logTruncated = false;
+    let logFailure;
     let timedOut = false;
+    let spawnError = false;
     let forceKillTimer;
+    const closeLog = () => {
+      if (logFd === undefined) return;
+      try {
+        if (logTruncated) writeSync(logFd, Buffer.from("\n[output truncated at 8 MiB]\n"));
+        closeSync(logFd);
+      } catch (error) { logFailure ??= error; }
+      logFd = undefined;
+    };
+    const capture = (label, chunk) => {
+      if (logFd === undefined || logFailure) return;
+      try {
+        const prefix = Buffer.from(`[${label}] `);
+        const remaining = maxLogBytes - loggedBytes;
+        if (remaining <= 0) { logTruncated = true; return; }
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        const prefixBytes = prefix.subarray(0, remaining);
+        writeSync(logFd, prefixBytes);
+        loggedBytes += prefixBytes.length;
+        const content = bytes.subarray(0, Math.max(0, remaining - prefixBytes.length));
+        if (content.length > 0) { writeSync(logFd, content); loggedBytes += content.length; }
+        if (content.length < bytes.length || prefixBytes.length < prefix.length) logTruncated = true;
+      } catch (error) {
+        logFailure = error;
+        signalChild(child, "SIGTERM");
+      }
+    };
     const deadline = setTimeout(() => {
       timedOut = true;
       progress("Xcode UI test exceeded its 15 minute deadline; stopping it.");
@@ -225,28 +291,32 @@ function runStreaming(command, args, options = {}) {
         catch { child.kill("SIGKILL"); }
       }, 10_000);
     }, timeoutMs);
-    const flush = (buffer, label, final = false) => {
-      const lines = buffer.split(/\r?\n/);
-      const rest = final ? "" : (lines.pop() ?? "");
-      for (const line of lines) if (line.trim()) safeWrite(process.stdout, `${label}${line}\n`);
-      if (final && lines.at(-1) === undefined && buffer.trim()) safeWrite(process.stdout, `${label}${buffer.trim()}\n`);
-      return rest;
+    const progressTimer = setInterval(() => progress("Xcode UI test is still running; command output is retained privately."), 30_000);
+    const clearTimers = () => {
+      clearTimeout(deadline);
+      clearInterval(progressTimer);
+      if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
     };
-    child.stdout.on("data", (chunk) => { pendingOut = flush(pendingOut + chunk.toString(), "[xcodebuild] "); });
-    child.stderr.on("data", (chunk) => { pendingErr = flush(pendingErr + chunk.toString(), "[xcodebuild] "); });
+    child.stdout.on("data", (chunk) => capture("stdout", chunk));
+    child.stderr.on("data", (chunk) => capture("stderr", chunk));
     child.on("error", (error) => {
+      spawnError = true;
       childEnded(child);
-      clearTimeout(deadline);
-      if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
-      reject(error);
+      clearTimers();
+      closeLog();
+      onProcessGroupStopped();
+      reject(logFailure ?? error);
     });
-    child.on("close", (code, signal) => {
+    child.on("close", async (code, signal) => {
+      if (spawnError) return;
+      clearTimers();
+      closeLog();
+      const groupStopped = await stopLingeringProcessGroup(child).catch(() => false);
+      if (groupStopped) onProcessGroupStopped();
       childEnded(child);
-      clearTimeout(deadline);
-      if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
-      if (pendingOut) flush(pendingOut, "[xcodebuild] ", true);
-      if (pendingErr) flush(pendingErr, "[xcodebuild] ", true);
-      if (timedOut) reject(new Error("xcodebuild timed out after 15 minutes."));
+      if (!groupStopped) reject(new Error("xcodebuild left an active child process; its scratch root was preserved."));
+      else if (logFailure) reject(logFailure);
+      else if (timedOut) reject(new Error("xcodebuild timed out after 15 minutes."));
       else if (code === 0) resolve();
       else reject(new Error(`xcodebuild exited ${code ?? signal}`));
     });
@@ -260,12 +330,14 @@ function assertPrivateDirectory(directory) {
 
 export async function withSmokeTempRoot(work, {
   cleanup = async () => {},
-  createTempRoot = () => mkdtempSync(path.join(os.tmpdir(), "duegood-tauri-ui-smoke-")),
+  projectRoot = ROOT,
+  evidenceEntries = ["DueGoodDesktopUITests.xcresult", "xcodebuild.log"],
 } = {}) {
-  const tempRoot = createTempRoot();
+  const scratch = createOwnedScratchRoot("tauri-ui-smoke");
+  const tempRoot = scratch.root;
   let failure;
   try {
-    await work(tempRoot);
+    await work(tempRoot, scratch);
   } catch (error) {
     failure = error;
   } finally {
@@ -274,10 +346,21 @@ export async function withSmokeTempRoot(work, {
       clearTimeout(interruptKillTimer);
       interruptKillTimer = undefined;
     }
-    try { await cleanup(tempRoot); }
+    try { await cleanup(tempRoot, scratch); }
     catch (error) { failure ??= error; }
-    try { rmSync(tempRoot, { recursive: true, force: true }); }
-    catch (error) { failure ??= new Error(`Could not remove isolated test files: ${error.message}`); }
+    try {
+      if (failure && !scratch.isActive()) {
+        const saved = preserveScratchEvidence({ scratch, projectRoot, entries: evidenceEntries });
+        if (saved) progress("Private failed UI-smoke evidence was saved under project .logs.");
+      } else if (failure && scratch.isActive()) {
+        progress("An isolated child or app remains active; its scratch root and evidence were preserved in place.");
+      }
+    } catch (error) { failure ??= new Error(`Could not preserve private UI-smoke evidence: ${error.message}`); }
+    if (scratch.isActive()) progress("The isolated app is still active; its scratch root was preserved.");
+    else {
+      try { scratch.cleanup(); }
+      catch (error) { failure ??= new Error(`Could not remove isolated test files: ${error.message}`); }
+    }
     cleanupStarted = false;
   }
   if (failure) throw failure;
@@ -301,7 +384,8 @@ async function main() {
   let registrationAttempted = false;
   let uiRunStarted = false;
   let testAppStopped = true;
-  await withSmokeTempRoot(async (tempRoot) => {
+  let xcodeGroupStopped = true;
+  await withSmokeTempRoot(async (tempRoot, scratch) => {
     const dataRoot = path.join(tempRoot, TEST_BUNDLE_ID);
     chmodSync(tempRoot, 0o700);
     progress("Checking that no test-identifier app instance is already running.");
@@ -327,6 +411,9 @@ async function main() {
     };
     progress("Running the isolated calendar first-run and relaunch smoke.");
     uiRunStarted = true;
+    testAppStopped = false;
+    xcodeGroupStopped = false;
+    scratch.setActive(true);
     await runStreaming("/usr/bin/xcodebuild", [
       "test",
       "-project", PROJECT,
@@ -338,9 +425,17 @@ async function main() {
       `-only-testing:${TEST_CASE}`,
       "CODE_SIGN_IDENTITY=-",
       "CODE_SIGN_STYLE=Manual",
-    ], { cwd: ROOT, env });
+    ], {
+      cwd: ROOT,
+      env,
+      logPath: path.join(tempRoot, "xcodebuild.log"),
+      onProcessGroupStopped: () => {
+        xcodeGroupStopped = true;
+        scratch.setActive(!testAppStopped);
+      },
+    });
     progress("The isolated macOS UI smoke passed.");
-  }, { cleanup: async (tempRoot) => {
+  }, { projectRoot: ROOT, cleanup: async (tempRoot, scratch) => {
     let failure;
     if (uiRunStarted) {
       progress("Stopping any test app instance before removing isolated data.");
@@ -373,10 +468,11 @@ async function main() {
       }
     }
     if (!testAppStopped) {
-      progress("The isolated test app may still be running; removing its test files after failed termination attempts.");
+      progress("The isolated test app may still be running; its scratch root will be preserved.");
       failure ??= new Error("Could not confirm the isolated test app stopped.");
     }
-    progress("Removing isolated test files.");
+    scratch.setActive(!testAppStopped || !xcodeGroupStopped);
+    progress(testAppStopped ? "The isolated test app stopped; scratch cleanup is safe." : "The isolated test app remains active; its scratch root will be preserved.");
     if (failure) throw failure;
   } });
 }

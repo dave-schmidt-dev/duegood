@@ -1,4 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,6 +12,7 @@ import {
   stageCandidate,
 } from "../../scripts/stage-tauri-candidate.mjs";
 import { runNpmPhase } from "../../scripts/stage-npm-process.mjs";
+import { consumeOwnedStageHandoff } from "../../scripts/owned-stage-root.mjs";
 
 const directories: string[] = [];
 
@@ -61,8 +63,9 @@ function runStageCli(source: string, temporaryDirectory: string, args: string[] 
   });
 }
 
-async function stageRoots(temporaryDirectory: string): Promise<string[]> {
-  return (await readdir(temporaryDirectory)).filter((name) => name.startsWith("duegood-tauri-stage-")).sort();
+async function stageRoots(source: string): Promise<string[]> {
+  try { return (await readdir(path.join(source, ".stage"))).filter((name) => name !== ".locks").sort(); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
 }
 
 /** Every entry under `root` except `.git`, with its type, mode, and (for files) bytes. */
@@ -129,6 +132,19 @@ describe("stageCandidate", () => {
     expect(stagedGitFiles).toEqual(expectedCandidates);
     expect(result.receipt.stagedMatchesCandidate).toBe(true);
     expect(Object.keys(result.receipt.files).sort()).toEqual(expectedCandidates);
+  });
+
+  it("does not stage the compatibility target symlink or shared Cargo cache", async () => {
+    const source = await makeSourceRepo();
+    const outside = await makeTempDir("duegood-cargo-cache-");
+    await mkdir(path.join(source, "src-tauri"), { recursive: true });
+    await writeFile(path.join(source, ".gitignore"), ".cache/\nsrc-tauri/target\n");
+    await symlink(outside, path.join(source, "src-tauri", "target"));
+    git(source, ["add", ".gitignore"]);
+    git(source, ["commit", "--quiet", "-m", "ignore generated caches"]);
+    const result = await stageCandidate({ source, destination: await freshDestination() });
+    expect(result.candidatePaths).not.toContain("src-tauri/target");
+    expect(result.candidatePaths.some((entry) => entry.startsWith(".cache/cargo-target"))).toBe(false);
   });
 
   it("yields the same tree digest across two stagings of the same source", async () => {
@@ -233,103 +249,84 @@ describe("stageCandidate", () => {
   });
 });
 
-describe("stage CLI temporary directory lifecycle", () => {
-  it("removes the generated temporary root after a successful default run", async () => {
+describe("stage CLI owned project-local lifecycle", () => {
+  it("cleans a successful default stage and leaves TMPDIR untouched", async () => {
     const source = await makeSourceRepo();
     const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
     const result = runStageCli(source, temporaryDirectory);
-
     expect(result.status).toBe(0);
-    expect(await stageRoots(temporaryDirectory)).toEqual([]);
+    expect(result.stderr).toContain("budget: 1 stage(s)");
+    expect(await stageRoots(source)).toEqual([]);
+    expect(await readdir(temporaryDirectory)).toEqual([]);
   });
 
-  it("retains the generated temporary root and logs its path with --keep", async () => {
+  it("keeps a default diagnostic stage and rejects concurrent use of its lock", async () => {
     const source = await makeSourceRepo();
     const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
     const result = runStageCli(source, temporaryDirectory, ["--keep"]);
-    const roots = await stageRoots(temporaryDirectory);
-
     expect(result.status).toBe(0);
-    expect(roots).toHaveLength(1);
-    expect(result.stderr).toContain(`stage: retained at ${path.join(temporaryDirectory, roots[0]!)}`);
-    expect(await readdir(path.join(temporaryDirectory, roots[0]!))).toEqual(["stage"]);
+    expect(await stageRoots(source)).toEqual(["tauri"]);
+    expect(result.stderr).toContain(`stage: retained at ${path.join(await realpath(source), ".stage", "tauri")}`);
+    expect(await readdir(temporaryDirectory)).toEqual([]);
+    const concurrent = runStageCli(source, temporaryDirectory);
+    expect(concurrent.status).not.toBe(0);
+    expect(concurrent.stderr).toContain("already locked");
   });
 
-  it("accepts --keep with a caller-owned destination and retains it", async () => {
+  it("retains a direct .stage destination as a receipt-backed installer handoff", async () => {
     const source = await makeSourceRepo();
     const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
-    const destination = path.join(temporaryDirectory, "caller-stage");
-    const result = runStageCli(source, temporaryDirectory, ["--destination", destination, "--keep"]);
-
+    const projectRoot = await realpath(source);
+    const destination = path.join(projectRoot, ".stage", "installer");
+    const result = runStageCli(source, temporaryDirectory, ["--destination", destination]);
     expect(result.status).toBe(0);
-    expect(await readdir(temporaryDirectory)).toEqual(["caller-stage"]);
     expect(await readFile(path.join(destination, "app.txt"), "utf8")).toBe("original\n");
-    expect(result.stderr).toContain(`stage: retained at ${destination}`);
+    const receipt = JSON.parse(await readFile(path.join(destination, "receipt.json"), "utf8"));
+    expect(receipt.stageOwnership).toMatchObject({ owner: "duegood-stage", projectRoot, stageRoot: destination, purpose: "installer", handoff: true, keep: false });
+    expect(await readdir(temporaryDirectory)).toEqual([]);
+    await consumeOwnedStageHandoff({ candidateRoot: destination, projectRoot, ownership: receipt.stageOwnership });
+    expect(await stageRoots(source)).toEqual([]);
   });
 
-  it("removes the generated root when an npm build phase fails", async () => {
+  it("rejects a /private/tmp handoff without creating it or touching TMPDIR", async () => {
+    const source = await makeSourceRepo();
+    const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
+    const destination = path.join("/private/tmp", `duegood-stage-rejected-${process.pid}`);
+    const result = runStageCli(source, temporaryDirectory, ["--destination", destination]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("direct child of");
+    expect(existsSync(destination)).toBe(false);
+    expect(await readdir(temporaryDirectory)).toEqual([]);
+  });
+
+  it("injects the one shared Cargo target into every npm phase", async () => {
+    const source = await makeSourceRepo();
+    await writeFile(path.join(source, "package.json"), JSON.stringify({ name: "fixture", scripts: { show: "node -e 'process.stdout.write(process.env.CARGO_TARGET_DIR + \"|\" + process.env.DUEGOOD_SOURCE_CHECKOUT)'" } }) + "\n");
+    git(source, ["add", "package.json"]);
+    git(source, ["commit", "--quiet", "-m", "add environment fixture"]);
+    const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
+    const result = spawnSync(process.execPath, [stageScript, "--source", source, "--skip-install", "--skip-preflight", "--build", "show"], {
+      encoding: "utf8", env: { ...process.env, TMPDIR: temporaryDirectory }, timeout: 30_000,
+    });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain(path.join(await realpath(source), ".cache", "cargo-target"));
+    expect(result.stderr).toContain(`|${await realpath(source)}`);
+    expect(await stageRoots(source)).toEqual([]);
+  });
+
+  it("cleans a failed npm phase and removes a failed explicit destination", async () => {
     const source = await makeSourceRepo();
     await writeFile(path.join(source, "package.json"), JSON.stringify({ name: "fixture", scripts: { fail: "node -e 'process.exit(17)'" } }) + "\n");
     git(source, ["add", "package.json"]);
     git(source, ["commit", "--quiet", "-m", "add failing fixture script"]);
     const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
-    const result = spawnSync(
-      process.execPath,
-      [stageScript, "--source", source, "--skip-install", "--skip-preflight", "--build", "fail"],
-      { encoding: "utf8", env: { ...process.env, TMPDIR: temporaryDirectory }, timeout: 30_000 },
-    );
-
+    const destination = path.join(await realpath(source), ".stage", "failed-installer");
+    const result = spawnSync(process.execPath, [stageScript, "--source", source, "--destination", destination, "--skip-install", "--skip-preflight", "--build", "fail"], {
+      encoding: "utf8", env: { ...process.env, TMPDIR: temporaryDirectory }, timeout: 30_000,
+    });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("build failed");
-    expect(await stageRoots(temporaryDirectory)).toEqual([]);
-  });
-
-  it("retains and logs the generated root when a failing npm phase uses --keep", async () => {
-    const source = await makeSourceRepo();
-    await writeFile(path.join(source, "package.json"), JSON.stringify({ name: "fixture", scripts: { fail: "node -e 'process.exit(17)'" } }) + "\n");
-    git(source, ["add", "package.json"]);
-    git(source, ["commit", "--quiet", "-m", "add failing fixture script"]);
-    const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
-    const result = spawnSync(
-      process.execPath,
-      [stageScript, "--source", source, "--skip-install", "--skip-preflight", "--build", "fail", "--keep"],
-      { encoding: "utf8", env: { ...process.env, TMPDIR: temporaryDirectory }, timeout: 30_000 },
-    );
-    const roots = await stageRoots(temporaryDirectory);
-
-    expect(result.status).not.toBe(0);
-    expect(roots).toHaveLength(1);
-    expect(result.stderr).toContain(`stage: retained at ${path.join(temporaryDirectory, roots[0]!)}`);
-  });
-
-  it("retains and logs the generated root when staging fails before creating its stage folder", async () => {
-    const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
-    const missingSource = path.join(temporaryDirectory, "missing-source");
-    const result = spawnSync(
-      process.execPath,
-      [stageScript, "--source", missingSource, "--skip-install", "--skip-preflight", "--keep"],
-      { encoding: "utf8", env: { ...process.env, TMPDIR: temporaryDirectory }, timeout: 30_000 },
-    );
-    const roots = await stageRoots(temporaryDirectory);
-
-    expect(result.status).not.toBe(0);
-    expect(roots).toHaveLength(1);
-    expect(await readdir(path.join(temporaryDirectory, roots[0]!))).toEqual([]);
-    expect(result.stderr).toContain(`stage: retained at ${path.join(temporaryDirectory, roots[0]!)}`);
-  });
-
-  it("leaves a missing explicit destination caller-owned when staging fails early without --keep", async () => {
-    const temporaryDirectory = await makeTempDir("duegood-stage-cli-tmp-");
-    const missingSource = path.join(temporaryDirectory, "missing-source");
-    const destination = path.join(temporaryDirectory, "caller-stage");
-    const result = spawnSync(
-      process.execPath,
-      [stageScript, "--source", missingSource, "--destination", destination, "--skip-install", "--skip-preflight"],
-      { encoding: "utf8", env: { ...process.env, TMPDIR: temporaryDirectory }, timeout: 30_000 },
-    );
-
-    expect(result.status).not.toBe(0);
-    await expect(lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await stageRoots(source)).toEqual([]);
     expect(await readdir(temporaryDirectory)).toEqual([]);
   });
 
@@ -384,7 +381,7 @@ describe("stage CLI temporary directory lifecycle", () => {
     expect(exit.signal).toBeNull();
     expect(Date.now() - startedAt).toBeLessThan(9000);
     expect(stderr).toContain(`interrupted by ${signal}`);
-    expect(await stageRoots(temporaryDirectory)).toEqual([]);
+    expect(await stageRoots(source)).toEqual([]);
   }, 15_000);
 
   it.skipIf(process.platform === "win32")("waits for an interrupted npm child tree before cleaning the stage", async () => {
@@ -417,7 +414,7 @@ describe("stage CLI temporary directory lifecycle", () => {
     expect(exit.code).toBe(143);
     expect(exit.signal).toBeNull();
     expect(stderr).toContain("interrupted by SIGTERM");
-    expect(await stageRoots(temporaryDirectory)).toEqual([]);
+    expect(await stageRoots(source)).toEqual([]);
   }, 30_000);
 });
 

@@ -1,5 +1,14 @@
 # Due Good local Marymount replacement plan
 
+## 2026-09-27 stage and temporary-root repair
+
+**Confirmed:** session commands repeatedly passed `--destination /private/tmp/duegood-...` to the stage CLI. That CLI removed only implicit `$TMPDIR` roots, so those explicit full-copy stages survived. The collector scanned only `$TMPDIR`, two prefixes, and a two-hour age window. The installer retains hidden backup app bundles inside `/Applications`. **Changed:** the owner now requires one fixed gitignored `.stage/<purpose>` namespace and a shared gitignored `.cache/cargo-target` for all Tauri stages, including helper builds. **Not verifiable from the bounded session audit:** the creator of every older named root; do not classify all of them as CLI output. **Not applicable:** a generic cloud or OAuth migration for this local storage defect.
+
+1. Add one project-owned stage/scratch lifecycle helper. Reset a validated fixed `.stage/<purpose>` path for each candidate, reject destinations outside it, use the shared Cargo target without copying it into a stage, and clean failed/interrupted runs. An installer handoff retains only a named stage until the installer consumes and removes it; `--keep` is the explicit diagnostic exception. Keep cached dependencies across runs and enforce a stage count/size budget.
+2. Update build, asset verification, installer, helper-build, and documentation paths for `CARGO_TARGET_DIR`. Preserve the install receipt and source identity checks. After verified install, remove stale owned backup bundles from `/Applications` or retain at most one rollback bundle outside that directory; test the failure/rollback path before changing live apps.
+3. Move the two live uv caches to a gitignored project cache. Extend the backlog sweep to `$TMPDIR` and `/private/tmp` with canonical direct-child checks, every-file 24-hour inactivity, no open handles, and explicit cache exclusions until migration. Preserve cited evidence in `.logs/`, dry-run, then apply the owner-authorized sweep.
+4. Run focused lifecycle, installer, and budget regressions; measure a representative stage before and after (elapsed time, allocated bytes, stage count), run the relevant integrated gate, and record actual filesystem free-space delta and remaining skips in `HISTORY.md`. Staged and synthetic results do not imply a live installed-app check.
+
 ## 2026-09-25 bounded temporary-stage cleanup
 
 **Confirmed:** the old stage command created an implicit `duegood-tauri-stage-*` root without reclaiming it; the macOS UI smoke also created a `duegood-tauri-ui-smoke-*` root. The smoke exit paths and backlog were inspected before remediation.

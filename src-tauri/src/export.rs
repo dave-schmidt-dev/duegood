@@ -382,11 +382,9 @@ pub fn ensure_legacy_refreshable_export_compatible(store: &Store) -> Result<(), 
         .ok_or(StoreError::Invalid("coursework items are malformed"))?;
     let archived = match root.get("archivedForecastItems") {
         None => None,
-        Some(value) => Some(
-            value
-                .as_array()
-                .ok_or(StoreError::Invalid("archived coursework items are malformed"))?,
-        ),
+        Some(value) => Some(value.as_array().ok_or(StoreError::Invalid(
+            "archived coursework items are malformed",
+        ))?),
     };
     let mut enriched_item = false;
     for value in items.iter().chain(archived.into_iter().flatten()) {
@@ -703,12 +701,14 @@ mod tests {
     fn export_fixture_helper() {
         let source = std::env::var_os("DUEGOOD_EXPORT_TEST_SOURCE").expect("source");
         let destination = std::env::var_os("DUEGOOD_EXPORT_TEST_DESTINATION").expect("destination");
+        let fixture_root = std::env::var_os("DUEGOOD_EXPORT_TEST_TEMP_ROOT").expect("fixture root");
         let source = Path::new(&source);
         let destination = Path::new(&destination);
-        assert!(source.is_absolute() && destination.is_absolute());
+        let fixture_root = Path::new(&fixture_root);
+        assert!(source.is_absolute() && destination.is_absolute() && fixture_root.is_absolute());
         assert!(
-            source.starts_with(std::env::temp_dir())
-                && destination.starts_with(std::env::temp_dir())
+            source.starts_with(fixture_root)
+                && destination.starts_with(fixture_root)
         );
         let store_root = destination.join(TEST_BUNDLE_IDENTIFIER);
         let store = Store::open(&store_root, Duration::from_millis(200)).unwrap();

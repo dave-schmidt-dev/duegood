@@ -1,14 +1,39 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { installDesktopApp } from "../../scripts/install-desktop-app.mjs";
+import { installDesktopApp as installDesktopAppImplementation } from "../../scripts/install-desktop-app.mjs";
+import { acquireOwnedStageRoot } from "../../scripts/owned-stage-root.mjs";
 
 const identityHash = "A".repeat(40);
 const identityName = "Developer ID Application: Zero Delta LLC (US) (4CJ49V6QHW)";
 const candidateTree = "1234567890abcdef1234567890abcdef12345678";
 const helperRelativePath = "Contents/MacOS/duegood-refresh";
+const captureHelperRelativePath = "Contents/MacOS/duegood-capture-download";
+const backupEntryName = ".Due Good.backup-01234567-89ab-cdef-0123-456789abcdef.app";
+
+type InstallResult = {
+  appPath: string;
+  buildMetadataPath: string;
+  rootMarkerPath: string;
+  productionDataRootExistedBeforeInstall: boolean;
+  productionDataRootExistsAfterOpen: boolean;
+  sourceRevision: string;
+  candidateTree: string;
+  helperDigest: string;
+  helperDigests: Record<string, string>;
+  backupPath?: string;
+  removedBackupPaths: string[];
+};
+
+const installDesktopApp = installDesktopAppImplementation as unknown as
+  (options?: Record<string, unknown>) => Promise<InstallResult>;
+const acquireOwnedStageRootForTest = acquireOwnedStageRoot as unknown as
+  (options: { source: string; destination?: string; keep?: boolean }) => Promise<{
+    ownership: Record<string, unknown>;
+    close: () => Promise<void>;
+  }>;
 
 let temporary = "";
 let app: string;
@@ -27,12 +52,15 @@ let bundleIds: Map<string, string>;
 let productionRunningAtCheck: number | undefined;
 let productionRunningChecks: number;
 let failedLaunchServicesRegistration: boolean;
+let failedOpen: boolean;
+let stageLockToCorrupt: string | undefined;
 
 async function makeApp(appPath: string, id = "com.zerodelta.duegood") {
   const helper = path.join(appPath, helperRelativePath);
   await mkdir(path.dirname(helper), { recursive: true });
   await writeFile(path.join(appPath, "Contents", "Info.plist"), "fixture plist");
   await writeFile(helper, "synthetic signed helper bytes");
+  await writeFile(path.join(appPath, captureHelperRelativePath), "synthetic signed capture helper bytes");
   await writeFile(path.join(appPath, "Contents", "MacOS", "duegood-desktop"), "synthetic desktop executable");
   await mkdir(path.join(appPath, "Contents", "Resources"), { recursive: true });
   await writeFile(path.join(appPath, "Contents", "Resources", "duegood-build.json"), `${JSON.stringify({
@@ -41,6 +69,84 @@ async function makeApp(appPath: string, id = "com.zerodelta.duegood") {
     candidateTree,
   })}\n`);
   bundleIds.set(await realpath(appPath), id);
+}
+
+async function exists(target: string): Promise<boolean> {
+  try {
+    await lstat(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function writeReceipt(directory: string, extra: Record<string, unknown> = {}) {
+  return writeFile(path.join(directory, "receipt.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    stagedMatchesCandidate: true,
+    treeDigest: candidateTree,
+    ...extra,
+  })}\n`);
+}
+
+/** Build a stage under `<sourceCheckout>/.stage` with an optional ownership receipt. */
+async function makeOwnedHandoffStage({
+  relative = ["candidate"],
+  stageRootOverride,
+  sourceRootOverride,
+  handoff = true,
+  keep = false,
+}: {
+  relative?: string[];
+  stageRootOverride?: string;
+  sourceRootOverride?: string;
+  handoff?: boolean;
+  keep?: boolean;
+} = {}): Promise<string> {
+  const stageRoot = path.join(sourceCheckout, ".stage", ...relative);
+  const actualHandoff = handoff && relative.length === 1 && !stageRootOverride && !sourceRootOverride;
+  const ownership = actualHandoff
+    ? (await acquireOwnedStageRootForTest({ source: sourceCheckout, destination: stageRoot, keep })).ownership
+    : {
+        schemaVersion: 1,
+        owner: "duegood-stage",
+        projectRoot: sourceRootOverride ?? sourceCheckout,
+        stageRoot: stageRootOverride ?? stageRoot,
+        lockPath: path.join(sourceCheckout, ".stage", ".locks", `${path.basename(stageRoot)}.lock`),
+        purpose: path.basename(stageRoot),
+        handoff,
+        keep,
+      };
+  await mkdir(path.join(stageRoot, ".git"), { recursive: true });
+  await makeApp(path.join(stageRoot, "build", "Due Good.app"));
+  await writeReceipt(stageRoot, {
+    stageOwnership: ownership,
+  });
+  return stageRoot;
+}
+
+function stageLockPath(stageRoot: string): string {
+  return path.join(sourceCheckout, ".stage", ".locks", `${path.basename(stageRoot)}.lock`);
+}
+
+async function expectStagePurposeReusable(stageRoot: string): Promise<void> {
+  const lifecycle = await acquireOwnedStageRootForTest({ source: sourceCheckout, destination: stageRoot });
+  await lifecycle.close();
+}
+
+function installFromStage(stageRoot: string, overrides: Record<string, unknown> = {}) {
+  return installDesktopApp({
+    candidateRoot: stageRoot,
+    sourceCheckout,
+    applicationsDirectory: applications,
+    homeDirectory,
+    rootMarkerPath: path.join(stageRoot, ".git", "phase4-root-marker.json"),
+    signingIdentity: identityName,
+    platform: "darwin",
+    run: fakeRun,
+    log: (message: string) => logs.push(message),
+    ...overrides,
+  });
 }
 
 async function fakeRun(command: string, args: string[], options?: { cwd?: string; timeoutMs?: number }) {
@@ -59,6 +165,10 @@ async function fakeRun(command: string, args: string[], options?: { cwd?: string
   if (command.endsWith("/security")) return Promise.resolve({ stdout: `  1 valid identities found\n     ${identityHash} "${identityName}"\n`, stderr: "" });
   if (command.endsWith("/duegood-desktop") && args[0] === "--verify-embedded-assets") {
     embeddedAssetChecks.push(command);
+    if (stageLockToCorrupt) {
+      await writeFile(path.join(stageLockToCorrupt, "owner.json"), "{}\n");
+      stageLockToCorrupt = undefined;
+    }
     if (embeddedAssetChecks.length === failedAssetCheckCall) return Promise.reject(new Error("asset check failed"));
     return Promise.resolve({ stdout: "", stderr: "" });
   }
@@ -76,6 +186,7 @@ async function fakeRun(command: string, args: string[], options?: { cwd?: string
     return Promise.resolve({ stdout: "", stderr: "" });
   }
   if (command.endsWith("/open")) {
+    if (failedOpen) return Promise.reject(new Error("open failed"));
     return mkdir(path.join(homeDirectory, "Library", "Application Support", "com.zerodelta.duegood"), { recursive: true })
       .then(() => ({ stdout: "", stderr: "" }));
   }
@@ -92,13 +203,10 @@ beforeEach(async () => {
   rootMarkerPath = path.join(candidateRoot, ".git", "phase4-root-marker.json");
   await mkdir(applications, { recursive: true });
   await mkdir(sourceCheckout, { recursive: true });
+  sourceCheckout = await realpath(sourceCheckout);
   await mkdir(path.dirname(rootMarkerPath), { recursive: true });
   await mkdir(homeDirectory, { recursive: true });
-  await writeFile(path.join(candidateRoot, "receipt.json"), `${JSON.stringify({
-    schemaVersion: 1,
-    stagedMatchesCandidate: true,
-    treeDigest: candidateTree,
-  })}\n`);
+  await writeReceipt(candidateRoot);
   commands = [];
   logs = [];
   embeddedAssetChecks = [];
@@ -109,6 +217,8 @@ beforeEach(async () => {
   productionRunningAtCheck = undefined;
   productionRunningChecks = 0;
   failedLaunchServicesRegistration = false;
+  failedOpen = false;
+  stageLockToCorrupt = undefined;
   await makeApp(app);
 });
 
@@ -120,6 +230,8 @@ describe("desktop app installer", () => {
   it("records both provenance stamps, prints the installed helper digest, then opens by bundle id", async () => {
     const helperBytes = await readFile(path.join(app, helperRelativePath));
     const expectedDigest = createHash("sha256").update(helperBytes).digest("hex");
+    const captureHelperBytes = await readFile(path.join(app, captureHelperRelativePath));
+    const expectedCaptureDigest = createHash("sha256").update(captureHelperBytes).digest("hex");
     const result = await installDesktopApp({
       appPath: app,
       candidateRoot,
@@ -130,13 +242,19 @@ describe("desktop app installer", () => {
       signingIdentity: identityName,
       platform: "darwin",
       run: fakeRun,
-      log: (message) => logs.push(message),
+      log: (message: string) => logs.push(message),
     });
 
     const stamp = JSON.parse(await readFile(result.buildMetadataPath, "utf8")) as { sourceRevision: string; candidateTree: string };
     expect(stamp).toStrictEqual({ schemaVersion: 1, sourceRevision: "v0.1.0-4-gabc1234-dirty", candidateTree });
     expect(result.helperDigest).toBe(expectedDigest);
+    expect(result.helperDigests).toStrictEqual({
+      "duegood-refresh": expectedDigest,
+      "duegood-capture-download": expectedCaptureDigest,
+    });
+    expect(result.removedBackupPaths).toStrictEqual([]);
     expect(logs).toContain(`Installed helper SHA-256: ${expectedDigest}`);
+    expect(logs).toContain(`Installed capture download helper SHA-256: ${expectedCaptureDigest}`);
     expect(result.productionDataRootExistedBeforeInstall).toBe(false);
     expect(result.productionDataRootExistsAfterOpen).toBe(true);
     const marker = JSON.parse(await readFile(rootMarkerPath, "utf8")) as { root: string; existedBeforePhase: boolean };
@@ -149,11 +267,29 @@ describe("desktop app installer", () => {
     expect(commands.findIndex(({ command, args }) => command.endsWith("/open") && args.join(" ") === "-b com.zerodelta.duegood"))
       .toBeGreaterThan(commands.findIndex(({ command, args }) => command.endsWith("/lsregister") && args[0] === "-f"));
     expect(commands.some(({ command, args }) => command.endsWith("/codesign") && args.includes("--strict"))).toBe(true);
+    expect(commands.some(({ command, args }) => command.endsWith("/codesign") && args.some((arg) => arg.endsWith("/duegood-capture-download")))).toBe(true);
     expect(embeddedAssetChecks).toHaveLength(3);
     expect(embeddedAssetChecks[0]).toContain("candidate/Due Good.app/Contents/MacOS/duegood-desktop");
     expect(embeddedAssetChecks[1]).toContain("Applications/.Due Good.staging-");
     expect(embeddedAssetChecks[2]).toContain("Applications/Due Good.app/Contents/MacOS/duegood-desktop");
     expect(await readdir(applications)).toContain("Due Good.app");
+  });
+
+  it("refuses an app bundle missing the fixed capture download helper", async () => {
+    await rm(path.join(app, captureHelperRelativePath));
+    await expect(installDesktopApp({
+      appPath: app,
+      candidateRoot,
+      sourceCheckout,
+      applicationsDirectory: applications,
+      homeDirectory,
+      rootMarkerPath,
+      signingIdentity: identityName,
+      platform: "darwin",
+      run: fakeRun,
+      log: (message: string) => logs.push(message),
+    })).rejects.toThrow("missing a required regular file");
+    expect(await readdir(applications)).toEqual([]);
   });
 
   it("refuses a candidate whose embedded-asset self-check fails before copying", async () => {
@@ -234,7 +370,7 @@ describe("desktop app installer", () => {
       signingIdentity: identityName,
       platform: "darwin",
       run: fakeRun,
-      log: (message) => logs.push(message),
+      log: (message: string) => logs.push(message),
     })).rejects.toThrow(/different installed app claims/u);
 
     expect(commands.some(({ command, args }) => command.endsWith("/lsregister") && args[0] === "-u" && args[1] === "/private/tmp/missing-old-duegood.app")).toBe(true);
@@ -243,7 +379,7 @@ describe("desktop app installer", () => {
     expect(await readdir(applications)).not.toContain("Due Good.app");
   });
 
-  it("upgrades in place while retaining the prior app bundle as a backup", async () => {
+  it("upgrades in place and removes the retained backup after a successful verification and open", async () => {
     const installed = path.join(applications, "Due Good.app");
     await makeApp(installed);
     const existingHelper = path.join(installed, helperRelativePath);
@@ -265,20 +401,24 @@ describe("desktop app installer", () => {
       log: () => undefined,
     });
 
-    const backupPath = result.backupPath;
-    if (!backupPath) throw new Error("The upgrade did not retain the previous app bundle.");
-    expect(backupPath).toMatch(/\.Due Good\.backup-[0-9a-f-]{36}\.app$/u);
-    expect(await readFile(path.join(backupPath, helperRelativePath), "utf8")).toBe("owner-installed bytes");
     expect(await readFile(path.join(installed, helperRelativePath), "utf8")).toBe("synthetic signed helper bytes");
     expect(await readFile(path.join(dataRoot, "owner-data-sentinel"), "utf8")).toBe("keep this data");
     expect(result.productionDataRootExistedBeforeInstall).toBe(true);
-    expect(await readdir(applications)).toContain(path.basename(backupPath));
+    expect(result.backupPath).toBeUndefined();
+    expect(result.removedBackupPaths).toHaveLength(1);
+    const removedUpgradeBackup = result.removedBackupPaths[0];
+    if (!removedUpgradeBackup) throw new Error("The upgrade backup was not recorded as removed.");
+    expect(removedUpgradeBackup).toMatch(/\.Due Good\.backup-[0-9a-f-]{36}\.app$/u);
+    expect(await exists(removedUpgradeBackup)).toBe(false);
+    expect(await readdir(applications)).toEqual(["Due Good.app"]);
+    expect(commands.some(({ command, args }) => command.endsWith("/lsregister")
+      && args[0] === "-u" && args[1] === removedUpgradeBackup)).toBe(true);
     expect(commands.filter(({ command }) => command.endsWith("/pgrep"))).toHaveLength(2);
   });
 
-  it("unregisters a previously retained backup instead of treating it as a competing app", async () => {
+  it("removes an older installer-owned backup and unregisters it after success", async () => {
     const installed = path.join(applications, "Due Good.app");
-    const priorBackup = path.join(applications, ".Due Good.backup-01234567-89ab-cdef-0123-456789abcdef.app");
+    const priorBackup = path.join(applications, backupEntryName);
     await makeApp(installed);
     await makeApp(priorBackup);
     registrations = [
@@ -286,7 +426,7 @@ describe("desktop app installer", () => {
       `path: ${priorBackup}`,
     ].join("\n");
 
-    await installDesktopApp({
+    const result = await installDesktopApp({
       appPath: app,
       candidateRoot,
       sourceCheckout,
@@ -301,7 +441,82 @@ describe("desktop app installer", () => {
 
     expect(commands.some(({ command, args }) => command.endsWith("/lsregister")
       && args[0] === "-u" && args[1] === priorBackup)).toBe(true);
-    expect(await readFile(path.join(priorBackup, helperRelativePath), "utf8")).toBe("synthetic signed helper bytes");
+    expect(await exists(priorBackup)).toBe(false);
+    expect(result.backupPath).toBeUndefined();
+    expect(result.removedBackupPaths).toHaveLength(2);
+    expect(result.removedBackupPaths).toContain(priorBackup);
+    expect(await readdir(applications)).toEqual(["Due Good.app"]);
+  });
+
+  it("leaves an unknown bundle with a backup-like name untouched on success", async () => {
+    const unknown = path.join(applications, backupEntryName);
+    await makeApp(unknown, "com.example.not-duegood");
+
+    const result = await installDesktopApp({
+      appPath: app,
+      candidateRoot,
+      sourceCheckout,
+      applicationsDirectory: applications,
+      homeDirectory,
+      rootMarkerPath,
+      signingIdentity: identityName,
+      platform: "darwin",
+      run: fakeRun,
+      log: () => undefined,
+    });
+
+    expect(await readFile(path.join(unknown, helperRelativePath), "utf8")).toBe("synthetic signed helper bytes");
+    expect(result.removedBackupPaths).toStrictEqual([]);
+    expect(commands.some(({ command, args }) => command.endsWith("/lsregister") && args[0] === "-u" && args[1] === unknown)).toBe(false);
+    expect(await readdir(applications).then((names) => names.sort())).toEqual(["Due Good.app", backupEntryName].sort());
+  });
+
+  it("leaves a symlinked backup-like entry untouched on success", async () => {
+    const target = path.join(temporary, "elsewhere", "Other.app");
+    await makeApp(target, "com.example.not-duegood");
+    const link = path.join(applications, backupEntryName);
+    await symlink(target, link);
+
+    const result = await installDesktopApp({
+      appPath: app,
+      candidateRoot,
+      sourceCheckout,
+      applicationsDirectory: applications,
+      homeDirectory,
+      rootMarkerPath,
+      signingIdentity: identityName,
+      platform: "darwin",
+      run: fakeRun,
+      log: () => undefined,
+    });
+
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await readFile(path.join(target, helperRelativePath), "utf8")).toBe("synthetic signed helper bytes");
+    expect(result.removedBackupPaths).toStrictEqual([]);
+  });
+
+  it("refuses a symlinked backup-like bundle that claims the Due Good identifier", async () => {
+    const target = path.join(temporary, "elsewhere", "Due Good.app");
+    await makeApp(target);
+    const link = path.join(applications, backupEntryName);
+    await symlink(target, link);
+
+    await expect(installDesktopApp({
+      appPath: app,
+      candidateRoot,
+      sourceCheckout,
+      applicationsDirectory: applications,
+      homeDirectory,
+      rootMarkerPath,
+      signingIdentity: identityName,
+      platform: "darwin",
+      run: fakeRun,
+      log: () => undefined,
+    })).rejects.toThrow(/different installed app claims/u);
+
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await readFile(path.join(target, helperRelativePath), "utf8")).toBe("synthetic signed helper bytes");
+    expect(commands.some(({ command, args }) => command.endsWith("/lsregister") && args[0] === "-f")).toBe(false);
   });
 
   it.each([1, 2])("refuses an upgrade if the production app is running at check %i", async (runningCheck) => {
@@ -377,5 +592,171 @@ describe("desktop app installer", () => {
     expect(await readFile(existingHelper, "utf8")).toBe("owner-installed bytes");
     expect(await readdir(applications)).toEqual(["Due Good.app"]);
     expect(commands.some(({ command }) => command.endsWith("/open"))).toBe(false);
+  });
+
+  it("restores the prior app when opening by bundle identifier fails", async () => {
+    const installed = path.join(applications, "Due Good.app");
+    await makeApp(installed);
+    const existingHelper = path.join(installed, helperRelativePath);
+    await writeFile(existingHelper, "owner-installed bytes");
+    failedOpen = true;
+
+    await expect(installDesktopApp({
+      appPath: app,
+      candidateRoot,
+      sourceCheckout,
+      applicationsDirectory: applications,
+      homeDirectory,
+      rootMarkerPath,
+      signingIdentity: identityName,
+      platform: "darwin",
+      run: fakeRun,
+      log: () => undefined,
+    })).rejects.toThrow(/previous app was restored/u);
+
+    expect(await readFile(existingHelper, "utf8")).toBe("owner-installed bytes");
+    expect(await readdir(applications)).toEqual(["Due Good.app"]);
+  });
+
+  it("consumes an owned stage handoff and removes the stage after a successful install", async () => {
+    const stageRoot = await makeOwnedHandoffStage();
+
+    const result = await installFromStage(stageRoot);
+
+    expect(result.appPath).toBe(path.join(applications, "Due Good.app"));
+    expect(await readFile(path.join(applications, "Due Good.app", helperRelativePath), "utf8")).toBe("synthetic signed helper bytes");
+    expect(await exists(stageRoot)).toBe(false);
+    expect(await exists(stageLockPath(stageRoot))).toBe(false);
+    await expectStagePurposeReusable(stageRoot);
+  });
+
+  it("defaults to the stage-local build/Due Good.app when the installer runs from the stage root", async () => {
+    const stageRoot = await makeOwnedHandoffStage();
+    const previousCwd = process.cwd();
+    process.chdir(stageRoot);
+    try {
+      const result = await installDesktopApp({
+        sourceCheckout,
+        applicationsDirectory: applications,
+        homeDirectory,
+        rootMarkerPath: path.join(stageRoot, ".git", "phase4-root-marker.json"),
+        signingIdentity: identityName,
+        platform: "darwin",
+        run: fakeRun,
+        log: () => undefined,
+      });
+      expect(result.appPath).toBe(path.join(applications, "Due Good.app"));
+    } finally {
+      process.chdir(previousCwd);
+    }
+    expect(await exists(stageRoot)).toBe(false);
+    expect(await exists(stageLockPath(stageRoot))).toBe(false);
+    expect(await exists(path.join(applications, "Due Good.app"))).toBe(true);
+  });
+
+  it("removes an owned stage after a failed install that restores the prior app", async () => {
+    const installed = path.join(applications, "Due Good.app");
+    await makeApp(installed);
+    const existingHelper = path.join(installed, helperRelativePath);
+    await writeFile(existingHelper, "owner-installed bytes");
+    const stageRoot = await makeOwnedHandoffStage();
+    failedAssetCheckCall = 3;
+
+    await expect(installFromStage(stageRoot)).rejects.toThrow(/previous app was restored/u);
+
+    expect(await readFile(existingHelper, "utf8")).toBe("owner-installed bytes");
+    expect(await readdir(applications)).toEqual(["Due Good.app"]);
+    expect(await exists(stageRoot)).toBe(false);
+    expect(await exists(stageLockPath(stageRoot))).toBe(false);
+    await expectStagePurposeReusable(stageRoot);
+  });
+
+  it("removes an owned stage when the candidate fails before copying", async () => {
+    const stageRoot = await makeOwnedHandoffStage();
+    failedAssetCheckCall = 1;
+
+    await expect(installFromStage(stageRoot)).rejects.toThrow(/asset check failed/u);
+
+    expect(await exists(stageRoot)).toBe(false);
+    expect(await exists(stageLockPath(stageRoot))).toBe(false);
+    expect(await readdir(applications)).toEqual([]);
+    await expectStagePurposeReusable(stageRoot);
+  });
+
+  it("rejects a handoff with a mismatched lock owner before starting installation", async () => {
+    const stageRoot = await makeOwnedHandoffStage();
+    await writeFile(path.join(stageLockPath(stageRoot), "owner.json"), "{}\n");
+
+    await expect(installFromStage(stageRoot)).rejects.toThrow("stage handoff lock does not match its receipt");
+
+    expect(embeddedAssetChecks).toHaveLength(0);
+    expect(await readdir(applications)).toEqual([]);
+    expect(await exists(stageRoot)).toBe(true);
+    expect(await exists(stageLockPath(stageRoot))).toBe(true);
+  });
+
+  it("reports stage cleanup failure without hiding the failed install", async () => {
+    const stageRoot = await makeOwnedHandoffStage();
+    failedAssetCheckCall = 1;
+    stageLockToCorrupt = stageLockPath(stageRoot);
+
+    let failure: unknown;
+    try {
+      await installFromStage(stageRoot);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    const aggregate = failure as AggregateError;
+    expect(aggregate.message).toContain("asset check failed");
+    expect(aggregate.message).toContain("stage handoff lock does not match its receipt");
+    expect(aggregate.cause).toBe(aggregate.errors[0]);
+    expect(aggregate.errors[0]).toMatchObject({ message: "asset check failed" });
+    expect(await exists(stageRoot)).toBe(true);
+    expect(await exists(stageLockPath(stageRoot))).toBe(true);
+  });
+
+  it.each([
+    { label: "an explicit keep flag", handoff: true, keep: true },
+    { label: "a diagnostic non-handoff receipt", handoff: false, keep: false },
+  ])("keeps the stage when the receipt requests retention ($label)", async ({ handoff, keep }) => {
+    const stageRoot = await makeOwnedHandoffStage({ handoff, keep });
+
+    await installFromStage(stageRoot);
+
+    expect(await exists(stageRoot)).toBe(true);
+    expect(await exists(path.join(stageRoot, "build", "Due Good.app"))).toBe(true);
+    if (keep) expect(await exists(stageLockPath(stageRoot))).toBe(true);
+  });
+
+  it("does not remove a stage when the receipt names a different stage path", async () => {
+    const fixture = path.join(temporary, "caller-fixture");
+    await mkdir(fixture, { recursive: true });
+    await writeFile(path.join(fixture, "keep.txt"), "keep\n");
+    const stageRoot = await makeOwnedHandoffStage({ stageRootOverride: fixture });
+
+    await installFromStage(stageRoot);
+
+    expect(await readFile(path.join(fixture, "keep.txt"), "utf8")).toBe("keep\n");
+    expect(await exists(stageRoot)).toBe(true);
+  });
+
+  it("does not remove a stage whose canonical path is not a direct child of the source .stage directory", async () => {
+    const stageRoot = await makeOwnedHandoffStage({ relative: ["nested", "candidate"] });
+
+    await installFromStage(stageRoot);
+
+    expect(await exists(stageRoot)).toBe(true);
+  });
+
+  it("does not remove a stage when the receipt names a different source checkout", async () => {
+    const otherSource = path.join(temporary, "other-source");
+    await mkdir(otherSource, { recursive: true });
+    const stageRoot = await makeOwnedHandoffStage({ sourceRootOverride: otherSource });
+
+    await installFromStage(stageRoot);
+
+    expect(await exists(stageRoot)).toBe(true);
   });
 });

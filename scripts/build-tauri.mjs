@@ -5,7 +5,7 @@
  * `cargo test` when a test runner needs the Tauri frontend assets but no signed app.
  */
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdir, readFile, readdir, writeFile, copyFile, rm } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, readFile, readdir, writeFile, copyFile, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,9 +16,45 @@ export const MANIFEST_FORMAT = "duegood-frontend-assets";
 export const TEST_BUNDLE_IDENTIFIER = "com.zerodelta.duegood.test";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const APP_NAME = "Due Good.app";
 
 function fail(message) {
   throw new Error(message);
+}
+
+/** Uses the shared Cargo cache when staging sets it, with the source checkout as a local fallback. */
+export function cargoTargetDirectory(projectRoot = root, env = process.env) {
+  const configured = typeof env.CARGO_TARGET_DIR === "string" ? env.CARGO_TARGET_DIR.trim() : "";
+  return configured ? path.resolve(projectRoot, configured) : path.resolve(projectRoot, "src-tauri", "target");
+}
+
+export function tauriAppBundlePath(profile, { projectRoot = root, env = process.env } = {}) {
+  if (profile !== "debug" && profile !== "release") fail(`unsupported Tauri build profile: ${profile}`);
+  return path.join(cargoTargetDirectory(projectRoot, env), profile, "bundle", "macos", APP_NAME);
+}
+
+export function stageAppBundlePath(projectRoot = root) {
+  return path.join(path.resolve(projectRoot), "build", APP_NAME);
+}
+
+/** Removes any prior shared-target bundle before Tauri builds the current receipt-checked candidate. */
+export async function resetTauriBundleOutput(profile, options = {}) {
+  const appPath = tauriAppBundlePath(profile, options);
+  await rm(appPath, { recursive: true, force: true });
+  return appPath;
+}
+
+/** Copies a verified shared-target bundle into the stage for the contained installer handoff. */
+export async function copyVerifiedAppBundle(profile, options = {}) {
+  const source = tauriAppBundlePath(profile, options);
+  let stats;
+  try { stats = await lstat(source); } catch { fail("verified Tauri app bundle is missing from the shared target"); }
+  if (!stats.isDirectory() || stats.isSymbolicLink()) fail("verified Tauri app bundle must be a real directory");
+  const destination = stageAppBundlePath(options.projectRoot ?? root);
+  await mkdir(path.dirname(destination), { recursive: true });
+  await rm(destination, { recursive: true, force: true });
+  await cp(source, destination, { recursive: true, verbatimSymlinks: true });
+  return destination;
 }
 
 function run(command, args, options = {}) {
@@ -153,7 +189,7 @@ async function buildTestSidecar() {
   const triple = targetTriple();
   const extension = executableExtension();
   run("cargo", ["build", "--locked", "--manifest-path", "src-tauri/Cargo.toml", "--features", "test-overrides", "--bin", "duegood-refresh"]);
-  const source = path.join(root, "src-tauri", "target", "debug", `duegood-refresh${extension}`);
+  const source = path.join(cargoTargetDirectory(), "debug", `duegood-refresh${extension}`);
   const target = path.join(root, "src-tauri", "binaries", `duegood-refresh-${triple}${extension}`);
   await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
   await copyFile(source, target);
@@ -243,7 +279,7 @@ async function packageTauri(mode, receipt, options) {
   const triple = targetTriple();
   if (!triple.endsWith("-apple-darwin")) fail(`unsupported macOS Rust target: ${triple}`);
   const extension = executableExtension();
-  const helperSource = path.join(root, "src-tauri", "target", profile, `duegood-refresh${extension}`);
+  const helperSource = path.join(cargoTargetDirectory(), profile, `duegood-refresh${extension}`);
   const helperTarget = path.join(root, "src-tauri", "binaries", `duegood-refresh-${triple}${extension}`);
   await mkdir(path.dirname(helperTarget), { recursive: true, mode: 0o700 });
   await copyFile(helperSource, helperTarget);
@@ -251,6 +287,7 @@ async function packageTauri(mode, receipt, options) {
   if (mode === "release") signFile(helperTarget, identity);
   else codesign(["--force", "--sign", "-", helperTarget]);
 
+  const appPath = await resetTauriBundleOutput(profile);
   const overlayPath = path.join(root, "src-tauri", `.tauri-${mode}-build.conf.json`);
   const overlay = mode === "test" ? { identifier: TEST_BUNDLE_IDENTIFIER } : {};
   await writeFile(overlayPath, `${JSON.stringify(overlay, null, 2)}\n`, { mode: 0o600 });
@@ -262,7 +299,6 @@ async function packageTauri(mode, receipt, options) {
     await rm(overlayPath, { force: true });
   }
 
-  const appPath = path.join(root, "src-tauri", "target", profile, "bundle", "macos", "Due Good.app");
   const appExecutable = path.join(appPath, "Contents", "MacOS", "duegood-desktop");
   const bundledHelper = path.join(appPath, "Contents", "MacOS", "duegood-refresh");
   for (const executable of [appExecutable, bundledHelper]) {
@@ -283,7 +319,11 @@ async function packageTauri(mode, receipt, options) {
     signAppAdhoc(appPath);
   }
   run(process.execPath, verifyArgs);
-  console.log(`Built ${mode} Tauri app at ${path.relative(root, appPath)}.`);
+  const stageAppPath = await copyVerifiedAppBundle(profile);
+  const stageVerifyArgs = [assetVerifier, "--app", stageAppPath];
+  if (mode === "test") stageVerifyArgs.push("--allow-test-overrides");
+  run(process.execPath, stageVerifyArgs);
+  console.log(`Built ${mode} Tauri app at ${path.relative(root, stageAppPath)}.`);
 }
 
 export async function main(args = process.argv.slice(2)) {

@@ -1,7 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { acquireOwnedStageRoot } from "./owned-stage-root.mjs";
 
 const PROCESS_GROUP_TERM_TIMEOUT_MS = 1_000;
 const PROCESS_GROUP_KILL_TIMEOUT_MS = 1_000;
@@ -108,16 +106,9 @@ export function runNpmPhase(label, args, cwd, env, { onStart = () => {}, onClose
   });
 }
 
-/** Owns the generated temporary root and process signal lifecycle for the staging CLI. */
-export function createStageCliLifecycle(options, onLog) {
-  let temporaryRoot;
-  let destination;
-  if (options.destination) {
-    destination = path.resolve(options.destination);
-  } else {
-    temporaryRoot = mkdtempSync(path.join(tmpdir(), "duegood-tauri-stage-"));
-    destination = path.join(temporaryRoot, "stage");
-  }
+/** Owns the fixed project-local stage and npm child signal lifecycle for the staging CLI. */
+export async function createStageCliLifecycle(options, onLog) {
+  const owned = await acquireOwnedStageRoot({ source: options.source, destination: options.destination, keep: options.keep });
 
   let interruptedSignal;
   let activeNpmChild;
@@ -146,7 +137,10 @@ export function createStageCliLifecycle(options, onLog) {
   process.on("SIGTERM", onSigterm);
 
   return {
-    destination,
+    destination: owned.stageRoot,
+    projectRoot: owned.projectRoot,
+    cargoTargetDir: owned.cargoTargetDir,
+    ownership: owned.ownership,
     checkInterrupted,
     npmPhaseOptions,
     withInterruption(error) {
@@ -157,17 +151,16 @@ export function createStageCliLifecycle(options, onLog) {
       }
       return error;
     },
-    close() {
+    async close({ success = false, keep = false, handoff = false } = {}) {
       process.removeListener("SIGINT", onSigint);
       process.removeListener("SIGTERM", onSigterm);
       if (activeNpmChild) {
-        onLog(`cleanup: retained at ${temporaryRoot ?? destination} because the npm child process group is still active`);
-      } else if (options.keep && temporaryRoot) {
-        onLog(`stage: retained at ${temporaryRoot}`);
-      } else if (options.keep && existsSync(destination)) {
-        onLog(`stage: retained at ${temporaryRoot ?? destination}`);
-      } else if (temporaryRoot && !options.keep) {
-        rmSync(temporaryRoot, { recursive: true, force: true });
+        onLog(`cleanup: retained at ${owned.stageRoot} because the npm child process group is still active`);
+        await owned.close({ keep: true });
+      } else {
+        const retain = keep || (success && handoff);
+        await owned.close({ success, keep, handoff });
+        if (retain) onLog(`stage: retained at ${owned.stageRoot}${success && handoff ? " for installer handoff" : ""}`);
       }
     },
   };

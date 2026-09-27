@@ -3,29 +3,27 @@ import {
   chmod,
   lstat,
   mkdir,
-  mkdtemp,
   readFile,
   readdir,
   readlink,
-  realpath,
-  rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { prepareLegacyRoot } from "../../scripts/prepare-legacy-root.mjs";
+import { createOwnedScratchRoot } from "../../scripts/owned-scratch-root.mjs";
 
-const temporaryRoots: string[] = [];
+const temporaryRoots: Array<ReturnType<typeof createOwnedScratchRoot>> = [];
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 async function makeTempRoot(): Promise<string> {
-  const privateTemp = await realpath(tmpdir());
-  const root = await mkdtemp(path.join(privateTemp, "duegood-legacy-prepare-"));
-  temporaryRoots.push(root);
-  return root;
+  const privateScratch = path.join(projectRoot, ".cache");
+  await mkdir(privateScratch, { recursive: true, mode: 0o700 });
+  const scratch = createOwnedScratchRoot("legacy-prepare", { baseDirectory: privateScratch });
+  temporaryRoots.push(scratch);
+  return scratch.root;
 }
 
 async function writeFixtureRoot(root: string, { rejectedEntries = false } = {}): Promise<void> {
@@ -101,7 +99,7 @@ async function assertPrivateTree(root: string): Promise<void> {
 }
 
 afterEach(async () => {
-  await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  for (const scratch of temporaryRoots.splice(0)) scratch.cleanup();
 });
 
 describe("prepareLegacyRoot", () => {

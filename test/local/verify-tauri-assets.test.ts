@@ -2,10 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildStamp, createFrontendAssetManifest } from "../../scripts/build-tauri.mjs";
-import { verifyRuntimeAssets, verifyTauriAssets } from "../../scripts/verify-tauri-assets.mjs";
+import { buildStamp, cargoTargetDirectory, copyVerifiedAppBundle, createFrontendAssetManifest, resetTauriBundleOutput, stageAppBundlePath, tauriAppBundlePath } from "../../scripts/build-tauri.mjs";
+import { parseArguments, verifyRuntimeAssets, verifyTauriAssets } from "../../scripts/verify-tauri-assets.mjs";
 
 const tempRoots: string[] = [];
+const CANDIDATE_TREE = "a".repeat(40);
 
 async function fixture() {
   const root = await mkdtemp(path.join(tmpdir(), "duegood-tauri-assets-"));
@@ -97,6 +98,62 @@ describe("Tauri staged asset verifier", () => {
     );
     expect(() => buildStamp({ sourceRevision: "bad\nrevision", candidateTree: "a".repeat(40) }))
       .toThrow("single non-empty line");
+  });
+
+  it("resolves build outputs into the shared Cargo target and defaults verification to the stage app", () => {
+    const projectRoot = path.join(tmpdir(), "duegood-candidate");
+    const targetRoot = path.join(tmpdir(), "duegood-cache", "cargo-target");
+    const env = { CARGO_TARGET_DIR: targetRoot };
+    expect(cargoTargetDirectory(projectRoot, env)).toBe(targetRoot);
+    expect(tauriAppBundlePath("release", { projectRoot, env })).toBe(
+      path.join(targetRoot, "release", "bundle", "macos", "Due Good.app"),
+    );
+    expect(cargoTargetDirectory(projectRoot, {})).toBe(path.join(projectRoot, "src-tauri", "target"));
+    expect(parseArguments([], projectRoot).appPath).toBe(stageAppBundlePath(projectRoot));
+    expect(stageAppBundlePath(projectRoot)).toBe(path.join(projectRoot, "build", "Due Good.app"));
+  });
+
+  it("clears stale shared-target bundles and copies only the finished bundle into the stage", async () => {
+    const projectRoot = path.join(await mkdtemp(path.join(tmpdir(), "duegood-stage-app-")), "candidate");
+    tempRoots.push(path.dirname(projectRoot));
+    const targetRoot = path.join(path.dirname(projectRoot), "shared-target");
+    const options = { projectRoot, env: { CARGO_TARGET_DIR: targetRoot } };
+    const source = tauriAppBundlePath("release", options);
+    const staleFile = path.join(source, "stale-marker");
+    await mkdir(source, { recursive: true });
+    await writeFile(staleFile, "old candidate");
+
+    expect(await resetTauriBundleOutput("release", options)).toBe(source);
+    await expect(readFile(staleFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+    const executable = path.join(source, "Contents", "MacOS", "duegood-desktop");
+    await mkdir(path.dirname(executable), { recursive: true });
+    await writeFile(executable, "synthetic verified bundle");
+    const destination = await copyVerifiedAppBundle("release", options);
+    expect(destination).toBe(path.join(projectRoot, "build", "Due Good.app"));
+    expect(await readFile(path.join(destination, "Contents", "MacOS", "duegood-desktop"), "utf8"))
+      .toBe("synthetic verified bundle");
+    await expect(readFile(path.join(destination, "stale-marker"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("requires build metadata to identify the current staged candidate", async () => {
+    const sample = await fixture();
+    const candidateTree = CANDIDATE_TREE;
+    await writeFile(path.join(sample.app, "Contents", "Resources", "duegood-build.json"),
+      buildStamp({ sourceRevision: "synthetic-revision", candidateTree }));
+    await expect(verifyTauriAssets({
+      appPath: sample.app,
+      testedUiDir: sample.ui,
+      candidateTree,
+      runtimeVerifier: () => ({ files: 3 }),
+    })).resolves.toMatchObject({ files: 3, runtimeVerified: true });
+    await expect(verifyTauriAssets({
+      appPath: sample.app,
+      testedUiDir: sample.ui,
+      candidateTree: "b".repeat(40),
+      runtimeVerifier: () => ({ files: 3 }),
+    })).rejects.toThrow("app build metadata does not match the current staged candidate");
   });
 
   it("accepts only the app's fixed, content-free runtime verification result", () => {

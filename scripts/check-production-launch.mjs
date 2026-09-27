@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmdirSync, rmSync, unlinkSync } from "node:fs";
+import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmdirSync, unlinkSync, writeSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createOwnedScratchRoot, preserveScratchEvidence } from "./owned-scratch-root.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PRODUCTION_BUNDLE_ID = "com.zerodelta.duegood";
@@ -11,6 +12,10 @@ const TEST_SCHEME = "DueGoodDesktopUITests";
 const TEST_CASE = `${TEST_SCHEME}/DueGoodDesktopUITests/testProductionIdentifierLaunchOnly`;
 const PROJECT = path.join(ROOT, "test/native/macos/DueGoodDesktopUITests.xcodeproj");
 const ALLOWED_LAUNCH_FILES = new Set(["duegood.instance.lock", "duegood.write.lock", "duegood.refresh.lock"]);
+const activeChildren = new Set();
+let requestedSignal;
+let cleanupStarted = false;
+let interruptKillTimer;
 const runningAppsSwift = String.raw`
 import AppKit
 import Foundation
@@ -82,15 +87,85 @@ function progress(message) {
   process.stdout.write(`[production launch] ${message}\n`);
 }
 
+function signalChild(child, signal) {
+  if (child.pid === undefined) return;
+  try { process.kill(-child.pid, signal); }
+  catch {
+    try { child.kill(signal); }
+    catch { /* The child already exited. */ }
+  }
+}
+
+function childEnded(child) {
+  activeChildren.delete(child);
+  if (activeChildren.size === 0 && interruptKillTimer !== undefined) {
+    clearTimeout(interruptKillTimer);
+    interruptKillTimer = undefined;
+  }
+}
+
+function installSignalHandlers() {
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => {
+      requestedSignal ??= signal;
+      process.exitCode = requestedSignal === "SIGINT" ? 130 : 143;
+      if (cleanupStarted) return;
+      for (const child of activeChildren) signalChild(child, requestedSignal);
+      if (activeChildren.size > 0 && interruptKillTimer === undefined) {
+        interruptKillTimer = setTimeout(() => {
+          for (const child of activeChildren) signalChild(child, "SIGKILL");
+          interruptKillTimer = undefined;
+        }, 5_000);
+        interruptKillTimer.unref();
+      }
+    });
+  }
+}
+
+function rejectIfInterrupted() {
+  if (requestedSignal && !cleanupStarted) throw new Error(`Interrupted by ${requestedSignal}.`);
+}
+
+function processGroupExists(pid) {
+  try { process.kill(-pid, 0); return true; }
+  catch (error) {
+    if (error?.code === "ESRCH") return false;
+    if (error?.code === "EPERM") return true;
+    throw error;
+  }
+}
+
+async function waitForProcessGroupExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (processGroupExists(pid)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return true;
+}
+
+async function stopLingeringProcessGroup(child) {
+  if (child.pid === undefined || !processGroupExists(child.pid)) return true;
+  progress("Stopping a remaining child process from the isolated command.");
+  signalChild(child, "SIGTERM");
+  if (await waitForProcessGroupExit(child.pid, 2_000)) return true;
+  signalChild(child, "SIGKILL");
+  return waitForProcessGroupExit(child.pid, 3_000);
+}
+
 function runCapture(command, args, options = {}) {
-  const { input, maxBytes = 4 * 1024 * 1024, timeoutMs = 60_000, ...spawnOptions } = options;
+  const { input, maxBytes = 4 * 1024 * 1024, timeoutMs = 60_000, onProcessGroupStopped = () => {}, ...spawnOptions } = options;
   return new Promise((resolve, reject) => {
+    try { rejectIfInterrupted(); }
+    catch (error) { onProcessGroupStopped(); reject(error); return; }
     const child = spawn(command, args, { ...spawnOptions, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    activeChildren.add(child);
     const stdout = [];
     const stderr = [];
     let size = 0;
     let timedOut = false;
     let oversized = false;
+    let spawnError = false;
     let forceKillTimer;
     const deadline = setTimeout(() => {
       timedOut = true;
@@ -116,10 +191,15 @@ function runCapture(command, args, options = {}) {
       else stdout.push(chunk);
     });
     child.stderr.on("data", (chunk) => stderr.push(chunk));
-    child.on("error", (error) => { clearTimers(); reject(error); });
-    child.on("close", (code, signal) => {
+    child.on("error", (error) => { spawnError = true; clearTimers(); childEnded(child); onProcessGroupStopped(); reject(error); });
+    child.on("close", async (code, signal) => {
+      if (spawnError) return;
       clearTimers();
-      if (timedOut) reject(new Error(`${path.basename(command)} timed out after ${timeoutMs / 1000} seconds.`));
+      const groupStopped = await stopLingeringProcessGroup(child).catch(() => false);
+      if (groupStopped) onProcessGroupStopped();
+      childEnded(child);
+      if (!groupStopped) reject(new Error(`${path.basename(command)} left a child process running; its scratch root was preserved.`));
+      else if (timedOut) reject(new Error(`${path.basename(command)} timed out after ${timeoutMs / 1000} seconds.`));
       else if (oversized) reject(new Error(`${path.basename(command)} output exceeded its safety limit.`));
       else if (code !== 0) {
         const diagnostic = Buffer.concat(stderr).toString("utf8").slice(-1500);
@@ -132,12 +212,16 @@ function runCapture(command, args, options = {}) {
 
 function runCaptureBoth(command, args, { timeoutMs = 60_000, maxBytes = 4 * 1024 * 1024 } = {}) {
   return new Promise((resolve, reject) => {
+    try { rejectIfInterrupted(); }
+    catch (error) { reject(error); return; }
     const child = spawn(command, args, { detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    activeChildren.add(child);
     const stdout = [];
     const stderr = [];
     let size = 0;
     let timedOut = false;
     let oversized = false;
+    let spawnError = false;
     let forceKillTimer;
     const deadline = setTimeout(() => {
       timedOut = true;
@@ -163,9 +247,16 @@ function runCaptureBoth(command, args, { timeoutMs = 60_000, maxBytes = 4 * 1024
     };
     child.stdout.on("data", collect(stdout));
     child.stderr.on("data", collect(stderr));
-    child.on("error", (error) => { clearTimers(); reject(error); });
-    child.on("close", (code, signal) => {
+    child.on("error", (error) => { spawnError = true; clearTimers(); childEnded(child); reject(error); });
+    child.on("close", async (code, signal) => {
+      if (spawnError) return;
       clearTimers();
+      const groupStopped = await stopLingeringProcessGroup(child).catch(() => false);
+      childEnded(child);
+      if (!groupStopped) {
+        reject(new Error(`${path.basename(command)} left a child process running.`));
+        return;
+      }
       if (timedOut) {
         reject(new Error(`${path.basename(command)} timed out after ${timeoutMs / 1000} seconds.`));
         return;
@@ -182,22 +273,61 @@ function runCaptureBoth(command, args, { timeoutMs = 60_000, maxBytes = 4 * 1024
 }
 
 async function runSwift(code, options = {}) {
-  const cacheRoot = mkdtempSync(path.join(os.tmpdir(), "duegood-phase4-swift-cache-"));
+  const cache = createOwnedScratchRoot("production-launch-swift-cache");
+  cache.setActive(true);
   try {
-    return await runCapture("/usr/bin/swift", ["-module-cache-path", path.join(cacheRoot, "Modules"), "-e", code], options);
+    return await runCapture("/usr/bin/swift", ["-module-cache-path", path.join(cache.root, "Modules"), "-e", code], {
+      ...options,
+      onProcessGroupStopped: () => cache.setActive(false),
+    });
   } finally {
-    rmSync(cacheRoot, { recursive: true, force: true });
+    if (!cache.isActive()) cache.cleanup();
   }
 }
 
 function runStreaming(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const { timeoutMs = 15 * 60 * 1000, ...spawnOptions } = options;
+    const { timeoutMs = 15 * 60 * 1000, logPath, onProcessGroupStopped = () => {}, ...spawnOptions } = options;
+    try { rejectIfInterrupted(); }
+    catch (error) { onProcessGroupStopped(); reject(error); return; }
+    const maxLogBytes = 8 * 1024 * 1024;
+    let logFd;
+    try { if (logPath) logFd = openSync(logPath, "wx", 0o600); }
+    catch (error) { onProcessGroupStopped(); reject(error); return; }
     const child = spawn(command, args, { ...spawnOptions, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-    let out = "";
-    let err = "";
+    activeChildren.add(child);
+    let loggedBytes = 0;
+    let logTruncated = false;
+    let logFailure;
     let timedOut = false;
+    let spawnError = false;
     let forceKillTimer;
+    const closeLog = () => {
+      if (logFd === undefined) return;
+      try {
+        if (logTruncated) writeSync(logFd, Buffer.from("\n[output truncated at 8 MiB]\n"));
+        closeSync(logFd);
+      } catch (error) { logFailure ??= error; }
+      logFd = undefined;
+    };
+    const capture = (label, chunk) => {
+      if (logFd === undefined || logFailure) return;
+      try {
+        const prefix = Buffer.from(`[${label}] `);
+        const remaining = maxLogBytes - loggedBytes;
+        if (remaining <= 0) { logTruncated = true; return; }
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        const prefixBytes = prefix.subarray(0, remaining);
+        writeSync(logFd, prefixBytes);
+        loggedBytes += prefixBytes.length;
+        const content = bytes.subarray(0, Math.max(0, remaining - prefixBytes.length));
+        if (content.length > 0) { writeSync(logFd, content); loggedBytes += content.length; }
+        if (content.length < bytes.length || prefixBytes.length < prefix.length) logTruncated = true;
+      } catch (error) {
+        logFailure = error;
+        try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }
+      }
+    };
     const deadline = setTimeout(() => {
       timedOut = true;
       process.stdout.write("[production launch] Xcode UI test exceeded its 15 minute deadline; stopping it.\n");
@@ -208,24 +338,32 @@ function runStreaming(command, args, options = {}) {
         catch { child.kill("SIGKILL"); }
       }, 10_000);
     }, timeoutMs);
-    const drain = (chunk, label, prior) => {
-      const lines = (prior + chunk.toString()).split(/\r?\n/);
-      const rest = lines.pop() ?? "";
-      for (const line of lines) if (line.trim()) process.stdout.write(`${label}${line}\n`);
-      return rest;
+    const progressTimer = setInterval(() => progress("Xcode UI test is still running; command output is retained privately."), 30_000);
+    const clearTimers = () => {
+      clearTimeout(deadline);
+      clearInterval(progressTimer);
+      if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
     };
-    child.stdout.on("data", (chunk) => { out = drain(chunk, "[xcodebuild] ", out); });
-    child.stderr.on("data", (chunk) => { err = drain(chunk, "[xcodebuild] ", err); });
+    child.stdout.on("data", (chunk) => capture("stdout", chunk));
+    child.stderr.on("data", (chunk) => capture("stderr", chunk));
     child.on("error", (error) => {
-      clearTimeout(deadline);
-      if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
-      reject(error);
+      spawnError = true;
+      clearTimers();
+      closeLog();
+      childEnded(child);
+      onProcessGroupStopped();
+      reject(logFailure ?? error);
     });
-    child.on("close", (code, signal) => {
-      clearTimeout(deadline);
-      if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
-      for (const line of [out, err]) if (line.trim()) process.stdout.write(`[xcodebuild] ${line}\n`);
-      if (timedOut) reject(new Error("xcodebuild timed out after 15 minutes."));
+    child.on("close", async (code, signal) => {
+      if (spawnError) return;
+      clearTimers();
+      closeLog();
+      const groupStopped = await stopLingeringProcessGroup(child).catch(() => false);
+      if (groupStopped) onProcessGroupStopped();
+      childEnded(child);
+      if (!groupStopped) reject(new Error("xcodebuild left an active child process; its scratch root was preserved."));
+      else if (logFailure) reject(logFailure);
+      else if (timedOut) reject(new Error("xcodebuild timed out after 15 minutes."));
       else if (code === 0) resolve();
       else reject(new Error(`xcodebuild exited ${code ?? signal}`));
     });
@@ -356,7 +494,8 @@ async function main() {
     });
     if ((await getRunningApps()).length !== 0) throw new Error("The installer-started app did not exit; the production root was preserved.");
   }
-  const tempRoot = mkdtempSync(path.join(os.tmpdir(), "duegood-production-launch-"));
+  const scratch = createOwnedScratchRoot("production-launch");
+  const tempRoot = scratch.root;
   let launchedPid;
   let launchRequested = false;
   let checkFailure;
@@ -371,6 +510,7 @@ async function main() {
     if (!Number.isInteger(launchedPid) || launchedPid <= 0) throw new Error("The staged production app did not return a launch process.");
     const runningPid = await awaitRunning(appPath);
     if (runningPid !== launchedPid) throw new Error("The production process did not match the process opened from the staged bundle.");
+    scratch.setActive(true);
     await runStreaming("/usr/bin/xcodebuild", [
       "test",
       "-project", PROJECT,
@@ -382,18 +522,21 @@ async function main() {
       `-only-testing:${TEST_CASE}`,
       "CODE_SIGN_IDENTITY=-",
       "CODE_SIGN_STYLE=Manual",
-    ], {
+      ], {
       cwd: ROOT,
       env: {
         ...process.env,
         DUEGOOD_PRODUCTION_APP_PATH: appPath,
         TEST_RUNNER_DUEGOOD_EXPECTED_PRODUCTION_DISPLAY_ROOT: `~/Library/Application Support/${PRODUCTION_BUNDLE_ID}`,
       },
+      logPath: path.join(tempRoot, "xcodebuild.log"),
+      onProcessGroupStopped: () => scratch.setActive(false),
     });
   } catch (error) {
     checkFailure = error;
   } finally {
-    let safeToCleanRoot = !launchRequested;
+    cleanupStarted = true;
+    let safeToCleanDataRoot = !launchRequested;
     if (launchedPid !== undefined) {
       const remaining = await getRunningApps().catch(() => []);
       if (remaining.some((app) => app.pid === launchedPid && app.path === appPath)) {
@@ -411,26 +554,47 @@ async function main() {
         } catch (error) { checkFailure ??= new Error(`Could not stop the app process started by this check: ${error.message}`); }
       }
       const afterStop = await getRunningApps().catch(() => [{ pid: launchedPid, path: appPath }]);
-      safeToCleanRoot = afterStop.length === 0;
+      safeToCleanDataRoot = afterStop.length === 0;
     } else if (launchRequested) {
       checkFailure ??= new Error("The app launch process could not be identified; its production data folder was preserved.");
     }
-    if (checkFailure) progress("Preserving the private failed XCTest result for diagnosis.");
-    else rmSync(tempRoot, { recursive: true, force: true });
-    if (safeToCleanRoot) {
+    if (!safeToCleanDataRoot) checkFailure ??= new Error("The production app is still running; its production data folder was preserved.");
+
+    if (checkFailure) {
+      if (scratch.isActive()) {
+        progress("An isolated child process remains active; preserving its scratch root and evidence in place.");
+      } else {
+        progress("Preserving private failed launch evidence before scratch cleanup.");
+        try {
+          const saved = preserveScratchEvidence({
+            scratch,
+            projectRoot: ROOT,
+            entries: ["ProductionLaunch.xcresult", "xcodebuild.log"],
+          });
+          if (saved) progress("Private failed launch evidence was saved under project .logs.");
+        } catch (error) { checkFailure ??= new Error(`Could not preserve private launch evidence: ${error.message}`); }
+      }
+    }
+    if (!scratch.isActive()) {
+      try {
+        scratch.cleanup();
+      } catch (error) { checkFailure ??= error; }
+    } else {
+      progress("Keeping the scratch root until the isolated child process exits.");
+    }
+    if (safeToCleanDataRoot) {
       try {
         progress("Removing only allowlisted launch files and the empty root recorded absent before Phase 4.");
         await cleanupRoot(dataRoot);
       } catch (error) { checkFailure ??= error; }
-    } else {
-      checkFailure ??= new Error("The production app is still running; its data folder was preserved.");
     }
   }
-  if (checkFailure) throw checkFailure;
+if (checkFailure) throw checkFailure;
   progress("The production launch-only check passed; no coursework import or Canvas request was made.");
 }
 
+installSignalHandlers();
 main().catch((error) => {
   process.stderr.write(`[production launch] ${error.message}\n`);
-  process.exitCode = 1;
+  process.exitCode = requestedSignal === "SIGINT" ? 130 : requestedSignal === "SIGTERM" ? 143 : 1;
 });

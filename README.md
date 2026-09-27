@@ -28,7 +28,9 @@ Run source checks in a private staged candidate so the current installed app and
 npm run stage:tauri -- --skip-preflight --test test:tauri
 ```
 
-An implicit stage is removed when the command ends, including on failure or interruption. Use `--keep` to retain and print its path, or `--destination /absolute/private/path` when a later build or installer needs it. `npm run sweep:temp` reports old Due Good stage and UI-smoke roots under `$TMPDIR` without deleting them; `--apply` is an explicit separate cleanup action.
+Stages use a fixed, gitignored `.stage/<purpose>` directory and share the project’s gitignored `.cache/cargo-target`. A test stage is removed when the command ends, including on failure or interruption. Use `--destination "$PWD/.stage/install"` only for a build that the installer will consume and remove; `--keep` explicitly retains a diagnostic stage. The stage command rejects destinations outside `.stage`. `npm run check:stage-budget` enforces the stage count and size limit. `npm run sweep:temp` dry-runs guarded cleanup of old Due Good roots in both `$TMPDIR` and `/private/tmp`; `--apply` is a separate owner-authorized action.
+
+Keep reusable Python caches in `.cache/uv` and `.cache/harvest-uv` by setting `UV_CACHE_DIR` to the matching absolute project path when running those tools. Do not create cache directories in `/private/tmp`.
 
 The project installer is `npm run install:tauri` after the staged build and asset checks pass. Launch the installed app by bundle ID, `open -b com.zerodelta.duegood`, so LaunchServices selects the registered app. Installation, launch, and live feed acceptance are separate checks. See [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md) and [`docs/DESKTOP-CUTOVER.md`](docs/DESKTOP-CUTOVER.md) for the remaining gates.
 

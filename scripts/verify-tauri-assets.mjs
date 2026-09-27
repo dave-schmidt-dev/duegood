@@ -4,7 +4,7 @@ import { lstat, readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertStagedCandidate, createFrontendAssetManifest } from "./build-tauri.mjs";
+import { assertStagedCandidate, createFrontendAssetManifest, stageAppBundlePath } from "./build-tauri.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const TEST_OVERRIDES_MARKER = Buffer.from("test-overrides");
@@ -48,6 +48,7 @@ export async function verifyTauriAssets({
   appExecutableName = "duegood-desktop",
   helperExecutableName = "duegood-refresh",
   allowTestOverrides = false,
+  candidateTree,
   runtimeVerifier = verifyRuntimeAssets,
 }) {
   if (typeof appPath !== "string" || typeof testedUiDir !== "string") {
@@ -82,15 +83,29 @@ export async function verifyTauriAssets({
       fail(`${label} contains the test-overrides marker`);
     }
   }
+  if (candidateTree !== undefined) {
+    if (typeof candidateTree !== "string" || !/^[0-9a-f]{40,64}$/.test(candidateTree)) {
+      fail("expected candidate tree is invalid");
+    }
+    let metadata;
+    try {
+      metadata = JSON.parse(await readFile(path.join(appPath, "Contents", "Resources", "duegood-build.json"), "utf8"));
+    } catch {
+      fail("app build metadata is missing or invalid");
+    }
+    if (metadata?.schemaVersion !== 1 || metadata?.candidateTree !== candidateTree) {
+      fail("app build metadata does not match the current staged candidate");
+    }
+  }
   const expectedFiles = JSON.parse(expectedManifest).files.length;
   const runtime = await runtimeVerifier(appExecutable);
   if (runtime.files !== expectedFiles) fail("bundled app embedded-asset count differs from the tested candidate");
   return { files: expectedFiles, runtimeVerified: true };
 }
 
-function parseArguments(args) {
+export function parseArguments(args, projectRoot = root) {
   const parsed = {
-    appPath: path.join(root, "src-tauri", "target", "release", "bundle", "macos", "Due Good.app"),
+    appPath: stageAppBundlePath(projectRoot),
     testedUiDir: path.join(root, "dist", "public"),
     allowTestOverrides: false,
   };
@@ -104,8 +119,8 @@ function parseArguments(args) {
 }
 
 export async function main(args = process.argv.slice(2)) {
-  await assertStagedCandidate(root);
-  const result = await verifyTauriAssets(parseArguments(args));
+  const receipt = await assertStagedCandidate(root);
+  const result = await verifyTauriAssets({ ...parseArguments(args), candidateTree: receipt.treeDigest });
   console.log(`Verified ${result.files} bundled and runtime frontend asset(s) and release binaries.`);
 }
 

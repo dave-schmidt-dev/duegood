@@ -1,16 +1,19 @@
 #!/usr/bin/env node
-/** Report or remove stale Due Good staging roots directly under the system temp folder. */
+/** Report or remove stale, unheld direct-child Due Good roots from approved temp locations. */
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const PREFIXES = Object.freeze(["duegood-tauri-stage-", "duegood-tauri-ui-smoke-"]);
-export const MIN_AGE_MS = 2 * 60 * 60 * 1_000;
+export const MIN_AGE_MS = 24 * 60 * 60 * 1_000;
 
 function matchesName(name) {
-  return PREFIXES.some((prefix) => name.startsWith(prefix) && name.length > prefix.length);
+  return name.startsWith("duegood-") && name.length > "duegood-".length;
+}
+
+function allocatedSize(stats) {
+  return Number.isFinite(stats.blocks) ? stats.blocks * 512 : stats.size;
 }
 
 export function parseLsofResult(result) {
@@ -25,98 +28,160 @@ export function listHeldPathsViaLsof() {
   }));
 }
 
-/** Return the newest write time and apparent size; symlinks are counted, never followed. */
+/** Return newest write time and both logical and allocated bytes; symlinks are never followed. */
 export function inspectTree(root, onProgress = () => {}) {
   let newestMs = 0;
-  let bytes = 0;
+  let apparentBytes = 0;
+  let allocatedBytes = 0;
   let scanned = 0;
   let lastProgress = Date.now();
   const pending = [root];
   while (pending.length > 0) {
-    const path = pending.pop();
-    let stat;
-    try { stat = lstatSync(path); } catch { return null; }
-    newestMs = Math.max(newestMs, stat.mtimeMs);
-    bytes += stat.size;
+    const current = pending.pop();
+    let stats;
+    try { stats = lstatSync(current); } catch { return null; }
+    newestMs = Math.max(newestMs, stats.mtimeMs);
+    apparentBytes += stats.size;
+    allocatedBytes += allocatedSize(stats);
     scanned += 1;
     if (Date.now() - lastProgress >= 5_000) {
       onProgress(scanned);
       lastProgress = Date.now();
     }
-    if (!stat.isDirectory()) continue;
+    if (!stats.isDirectory()) continue;
     let children;
-    try { children = readdirSync(path); } catch { return null; }
-    for (const child of children) pending.push(join(path, child));
+    try { children = readdirSync(current); } catch { return null; }
+    for (const child of children) pending.push(join(current, child));
   }
-  return { newestMs, bytes };
+  return { newestMs, apparentBytes, allocatedBytes, scanned };
 }
 
-/** The final authorization check uses canonical paths, not the spelling from readdir. */
+/** The final authorization check uses canonical paths and direct-child containment. */
 export function isSweepAuthorized(candidate, canonicalTmp) {
   return dirname(candidate) === canonicalTmp && matchesName(basename(candidate));
 }
 
+function canonicalHeldPaths(paths) {
+  return paths.map((open) => {
+    try { return realpathSync(open); } catch { return open; }
+  });
+}
+
+function isHeld(candidate, held) {
+  return held.some((open) => open === candidate || open.startsWith(`${candidate}/`));
+}
+
+function resolveRoots({ tmpDir, tmpDirs }) {
+  if (tmpDirs) return { paths: tmpDirs, allowMissing: false };
+  if (tmpDir) return { paths: [tmpDir], allowMissing: false };
+  return { paths: [...new Set([tmpdir(), "/private/tmp"])], allowMissing: true };
+}
+
 export function sweepTempDirs({
-  tmpDir = tmpdir(), apply = false, now = Date.now(),
+  tmpDir, tmpDirs, apply = false, now = Date.now(),
   listHeldPaths = listHeldPathsViaLsof, log = console.log,
 } = {}) {
-  const summary = { candidates: 0, eligible: 0, removed: 0, apparentBytes: 0,
-    skippedFresh: 0, skippedHeld: 0, skippedSymlink: 0, skippedUnreadable: 0, refused: 0, failed: 0 };
-  let canonicalTmp;
-  try { canonicalTmp = realpathSync(tmpDir); } catch {
-    log("sweep: cannot resolve temp directory");
-    return { status: 1, summary };
+  const summary = { roots: 0, candidates: 0, eligible: 0, removed: 0, apparentBytes: 0, allocatedBytes: 0,
+    excludedCaches: 0, skippedFresh: 0, skippedHeld: 0, skippedSymlink: 0, skippedUnreadable: 0, refused: 0, failed: 0 };
+  const configured = resolveRoots({ tmpDir, tmpDirs });
+  const canonicalRoots = [];
+  for (const root of configured.paths) {
+    if (configured.allowMissing && !existsSync(root)) continue;
+    try { canonicalRoots.push(realpathSync(root)); } catch {
+      log(`sweep: cannot resolve temp directory ${root}`);
+      return { status: 1, summary };
+    }
   }
-  log("sweep: checking open paths with lsof");
-  const held = listHeldPaths();
+  const uniqueRoots = [...new Set(canonicalRoots)];
+  if (uniqueRoots.length === 0) return { status: 0, summary };
+  summary.roots = uniqueRoots.length;
+
+  log(`sweep: checking open paths with lsof across ${uniqueRoots.length} temp root(s)`);
+  let held = listHeldPaths();
   if (held === null) {
     log("sweep: lsof failed or returned incomplete results; refusing to sweep");
     return { status: 1, summary };
   }
-  const canonicalHeld = held.map((open) => {
-    try { return realpathSync(open); } catch { return open; }
-  });
-  let names;
-  try { names = readdirSync(canonicalTmp).filter(matchesName).sort(); } catch {
-    log("sweep: cannot list temp directory");
-    return { status: 1, summary };
-  }
-  summary.candidates = names.length;
+  held = canonicalHeldPaths(held);
   const cutoffMs = now - MIN_AGE_MS;
-  for (const [index, name] of names.entries()) {
-    log(`sweep: inspecting ${index + 1}/${names.length} ${name}`);
-    const path = join(canonicalTmp, name);
-    let stat;
-    try { stat = lstatSync(path); } catch { summary.skippedUnreadable += 1; continue; }
-    if (stat.isSymbolicLink() || !stat.isDirectory()) { summary.skippedSymlink += 1; continue; }
-    if (stat.mtimeMs > cutoffMs) { summary.skippedFresh += 1; continue; }
-    let canonicalPath;
-    try { canonicalPath = realpathSync(path); } catch { summary.skippedUnreadable += 1; continue; }
-    if (!isSweepAuthorized(canonicalPath, canonicalTmp)) { summary.refused += 1; continue; }
-    if (canonicalHeld.some((open) => open === canonicalPath || open.startsWith(`${canonicalPath}/`))) {
-      summary.skippedHeld += 1;
-      continue;
+  const removals = [];
+
+  for (const canonicalTmp of uniqueRoots) {
+    let names;
+    try { names = readdirSync(canonicalTmp).filter(matchesName).sort(); } catch {
+      log(`sweep: cannot list temp directory ${canonicalTmp}`);
+      return { status: 1, summary };
     }
-    const tree = inspectTree(canonicalPath, (scanned) => log(`sweep: ${name} scanned ${scanned} entries`));
-    if (tree === null) { summary.skippedUnreadable += 1; continue; }
-    if (tree.newestMs > cutoffMs) { summary.skippedFresh += 1; continue; }
-    summary.eligible += 1;
-    summary.apparentBytes += tree.bytes;
-    if (!apply) continue;
-    // A replacement symlink or moved directory must never turn a collected name into a target.
-    try {
-      if (!lstatSync(path).isDirectory() || realpathSync(path) !== canonicalPath || !isSweepAuthorized(canonicalPath, canonicalTmp)) {
-        summary.refused += 1;
-        continue;
-      }
-      rmSync(canonicalPath, { recursive: true, force: true });
-      summary.removed += 1;
-    } catch { summary.failed += 1; }
+    summary.candidates += names.length;
+    for (const name of names) {
+      log(`sweep: inspecting ${name} under ${canonicalTmp}`);
+      const candidate = join(canonicalTmp, name);
+      let stats;
+      try { stats = lstatSync(candidate); } catch { summary.skippedUnreadable += 1; continue; }
+      if (stats.isSymbolicLink() || !stats.isDirectory()) { summary.skippedSymlink += 1; continue; }
+      if (stats.mtimeMs > cutoffMs) { summary.skippedFresh += 1; continue; }
+      let canonicalCandidate;
+      try { canonicalCandidate = realpathSync(candidate); } catch { summary.skippedUnreadable += 1; continue; }
+      if (!isSweepAuthorized(canonicalCandidate, canonicalTmp)) { summary.refused += 1; continue; }
+      if (isHeld(canonicalCandidate, held)) { summary.skippedHeld += 1; continue; }
+      const tree = inspectTree(canonicalCandidate, (scanned) => log(`sweep: ${name} scanned ${scanned} entries`));
+      if (tree === null) { summary.skippedUnreadable += 1; continue; }
+      if (tree.newestMs > cutoffMs) { summary.skippedFresh += 1; continue; }
+      summary.eligible += 1;
+      summary.apparentBytes += tree.apparentBytes;
+      summary.allocatedBytes += tree.allocatedBytes;
+      if (!apply) continue;
+
+      removals.push({ candidate, canonicalCandidate, canonicalTmp, name });
+    }
   }
-  log(`sweep ${apply ? "applied" : "dry-run"}: candidates=${summary.candidates} eligible=${summary.eligible} ` +
-    `apparentBytes=${summary.apparentBytes} removed=${summary.removed} held=${summary.skippedHeld} ` +
-    `fresh=${summary.skippedFresh} symlink=${summary.skippedSymlink} ` +
-    `unreadable=${summary.skippedUnreadable} refused=${summary.refused} failed=${summary.failed}`);
+
+  if (apply && removals.length > 0) {
+    log(`sweep: rechecking open paths before removing ${removals.length} eligible root(s)`);
+    held = listHeldPaths();
+    if (held === null) {
+      log("sweep: lsof failed or returned incomplete results; refusing removals");
+      return { status: 1, summary };
+    }
+    held = canonicalHeldPaths(held);
+    for (const [index, { candidate, canonicalCandidate, canonicalTmp, name }] of removals.entries()) {
+      const report = (result) => log(`sweep: ${index + 1}/${removals.length} ${result} ${name}`);
+      try {
+        const latest = lstatSync(candidate);
+        if (latest.isSymbolicLink() || !latest.isDirectory() || realpathSync(candidate) !== canonicalCandidate ||
+            !isSweepAuthorized(canonicalCandidate, canonicalTmp)) {
+          summary.refused += 1;
+          report("skipped (path changed)");
+          continue;
+        }
+        if (isHeld(canonicalCandidate, held)) {
+          summary.skippedHeld += 1;
+          report("skipped (open handle)");
+          continue;
+        }
+        const latestTree = inspectTree(canonicalCandidate, (scanned) => log(`sweep: rechecked ${name} scanned ${scanned} entries`));
+        if (latestTree === null) {
+          summary.skippedUnreadable += 1;
+          report("skipped (unreadable)");
+          continue;
+        }
+        if (latestTree.newestMs > cutoffMs) {
+          summary.skippedFresh += 1;
+          report("skipped (recently modified)");
+          continue;
+        }
+        rmSync(canonicalCandidate, { recursive: true, force: true });
+        summary.removed += 1;
+        report("removed");
+      } catch {
+        summary.failed += 1;
+        report("failed");
+      }
+    }
+  }
+  log(`sweep ${apply ? "applied" : "dry-run"}: roots=${summary.roots} candidates=${summary.candidates} eligible=${summary.eligible} ` +
+    `apparentBytes=${summary.apparentBytes} allocatedBytes=${summary.allocatedBytes} removed=${summary.removed} held=${summary.skippedHeld} ` +
+    `fresh=${summary.skippedFresh} symlink=${summary.skippedSymlink} unreadable=${summary.skippedUnreadable} refused=${summary.refused} failed=${summary.failed}`);
   return { status: summary.failed > 0 || summary.refused > 0 ? 1 : 0, summary };
 }
 

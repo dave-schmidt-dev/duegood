@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { createOwnedScratchRoot } from "./owned-scratch-root.mjs";
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -27,7 +27,8 @@ function verify(receipt, expected = {}) {
 }
 
 function selfTest() {
-  const dir = mkdtempSync(path.join(tmpdir(), "duegood-receipt-"));
+  const scratch = createOwnedScratchRoot("receipt-self-test");
+  const dir = scratch.root;
   try {
     const metadata = Buffer.from('{"opencodeVersion":"1.18.30","model":"opencode-go/deepseek-v4.1-flash","variant":"high"}\n');
     const patch = Buffer.from("diff --git a/README.md b/README.md\n");
@@ -59,7 +60,7 @@ function selfTest() {
     }
     console.log("Executor receipt verifier self-test passed.");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    scratch.cleanup();
   }
 }
 

@@ -11,6 +11,8 @@ venv/
 node_modules/
 *.tsbuildinfo
 .playwright/
+.cache/
+.stage/
 
 # Secrets / local state (never commit)
 etc/bws-config.txt
@@ -70,6 +72,6 @@ spikes/
 opencode.jsonc
 
 # Tauri desktop build output (src-tauri/ is added by a later task)
-src-tauri/target/
+src-tauri/target
 src-tauri/binaries/
 src-tauri/gen/

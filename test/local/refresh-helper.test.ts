@@ -77,7 +77,10 @@ function helperPath(): string {
   const override = process.env.DUEGOOD_REFRESH_HELPER_BIN;
   if (override) return path.resolve(override);
   const suffix = process.platform === "win32" ? ".exe" : "";
-  return path.join(ROOT, "src-tauri", "target", "debug", `duegood-refresh${suffix}`);
+  const targetDirectory = process.env.CARGO_TARGET_DIR
+    ? path.resolve(ROOT, process.env.CARGO_TARGET_DIR)
+    : path.join(ROOT, "src-tauri", "target");
+  return path.join(targetDirectory, "debug", `duegood-refresh${suffix}`);
 }
 
 async function runHelper(dataRoot: string, origin: string, timeoutMs = 90_000): Promise<{ code: number | null; stdout: string; stderr: string; argv: string[] }> {
@@ -158,8 +161,12 @@ async function assertNodeExportParity(root: TestRoot): Promise<void> {
       TMPDIR: process.env.TMPDIR ?? tmpdir(),
       TEMP: process.env.TEMP ?? tmpdir(),
       SystemRoot: process.env.SystemRoot ?? "",
+      CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR
+        ? path.resolve(ROOT, process.env.CARGO_TARGET_DIR)
+        : path.join(ROOT, "src-tauri", "target"),
       DUEGOOD_EXPORT_TEST_SOURCE: legacySource,
       DUEGOOD_EXPORT_TEST_DESTINATION: destination,
+      DUEGOOD_EXPORT_TEST_TEMP_ROOT: temporary,
     },
     timeout: 120_000,
     maxBuffer: 1024 * 1024,

@@ -42,8 +42,11 @@ describe("Rust legacy export", () => {
     }
     await run("cargo", ["test", "--manifest-path", "src-tauri/Cargo.toml", "--features", "test-overrides", "--", "--ignored", "export_fixture_helper"], {
       cwd: path.resolve("."),
-      env: { ...process.env, DUEGOOD_EXPORT_TEST_SOURCE: source, DUEGOOD_EXPORT_TEST_DESTINATION: destination },
+      env: { ...process.env, DUEGOOD_EXPORT_TEST_SOURCE: source, DUEGOOD_EXPORT_TEST_DESTINATION: destination,
+        DUEGOOD_EXPORT_TEST_TEMP_ROOT: temp },
       timeout: 120_000,
+    }).catch((error: Error & { stdout?: string }) => {
+      throw new Error(`${error.message}\n${error.stdout ?? ""}`, { cause: error });
     });
     const folders = await readdir(path.join(destination, "exports"));
     expect(folders).toHaveLength(1);

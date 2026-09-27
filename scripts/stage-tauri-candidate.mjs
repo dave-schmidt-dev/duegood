@@ -1,30 +1,33 @@
 #!/usr/bin/env node
 /**
  * Builds a scanned, exact-byte candidate set from a Due Good checkout and commits it into a
- * disposable Git repository under a private temporary directory, so later staged builds/tests
+ * disposable Git repository under a fixed project-local .stage root, so later staged builds/tests
  * (`npm ci`, `npm run build:*`, `npm run test:*`, including `check:public-tree` and
  * `check:staged-public-tree`) run against that copy instead of the live checkout that serves the
  * running browser app. Never mutates the source checkout; the only Git command run against it is
  * read-only enumeration (`git ls-files`).
  *
  * Usage:
- *   node scripts/stage-tauri-candidate.mjs [--source <checkout>] [--destination <new-dir>]
+ *   node scripts/stage-tauri-candidate.mjs [--source <checkout>] [--destination <source>/.stage/<purpose>]
  *     [--include <path>]... [--exclude <path>]... [--build <script>]... [--test <script>]...
  *     [--playwright-browsers-path <dir>] [--skip-install] [--skip-preflight] [--keep]
  *
- * `--destination` must not exist yet; it is created (mode 0700) outside the source, in a parent
- * that other users cannot write. Without it, the stage is a new `stage` folder inside a fresh
- * private temporary directory, removed when the command exits. Pass `--keep` to retain it.
+ * `--destination`, when supplied, must be a direct child of the source's .stage directory and is
+ * retained as an installer handoff after success. Otherwise the fixed .stage/tauri root is used
+ * and removed when the command exits. Pass `--keep` to retain a stage for inspection. The CLI
+ * always uses this project-local namespace; the low-level `stageCandidate()` helper also supports
+ * a new private destination outside the source for isolated fixture use.
  */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { appendFile, chmod, lstat, mkdir, readFile, readlink, realpath, symlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, lstat, mkdir, readdir, readFile, readlink, realpath, symlink, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { homedir, cpus as osCpus, release as osRelease } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scanContent, scanPath } from "./check-public-tree.mjs";
 import { createStageCliLifecycle, runNpmPhase } from "./stage-npm-process.mjs";
+import { assertStageBudget } from "./check-stage-budget.mjs";
 
 export const scriptRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -68,7 +71,13 @@ export function listUntrackedPaths(source) {
  */
 export function buildCandidateSet(source, { include = [], exclude = [] } = {}) {
   const tracked = listTrackedPaths(source);
-  const untracked = listUntrackedPaths(source);
+  const cargoCache = path.join(".cache", "cargo-target");
+  if (tracked.some((candidate) => candidate === cargoCache || candidate.startsWith(`${cargoCache}${path.sep}`))) {
+    throw new Error("the shared .cache/cargo-target directory must never be tracked or staged");
+  }
+  const untracked = listUntrackedPaths(source).filter((candidate) =>
+    candidate !== ".stage" && !candidate.startsWith(`.stage${path.sep}`) &&
+    candidate !== cargoCache && !candidate.startsWith(`${cargoCache}${path.sep}`));
   const untrackedSet = new Set(untracked);
   const missingInclude = include.filter((candidate) => !untrackedSet.has(candidate));
   if (missingInclude.length > 0) {
@@ -120,13 +129,14 @@ async function assertPrivateParent(directory) {
  * symlink, owned by the current user, whose `realpath` is exactly `expected` and lies outside the
  * source. Returns that real path.
  */
-async function assertOwnedStageDirectory(realSource, expected) {
+async function assertOwnedStageDirectory(realSource, expected, { allowProjectStage = false } = {}) {
   const stats = await lstat(expected);
   if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error("destination must be a real directory, not a symlink");
   if (CHECK_OWNERSHIP && stats.uid !== process.getuid()) throw new Error("destination must be owned by the current user");
   const realDestination = await realpath(expected);
   if (realDestination !== expected) throw new Error("destination changed while it was being created");
-  if (isInsideOrEqual(realSource, realDestination)) throw new Error(DESTINATION_INSIDE_SOURCE);
+  const isOwnedChild = path.dirname(realDestination) === path.join(realSource, ".stage") && path.basename(realDestination) !== ".locks";
+  if (isInsideOrEqual(realSource, realDestination) && !(allowProjectStage && isOwnedChild)) throw new Error(DESTINATION_INSIDE_SOURCE);
   return realDestination;
 }
 
@@ -145,7 +155,18 @@ async function assertOwnedStageDirectory(realSource, expected) {
  * Threat model: this closes accidental misuse and interference by other local users. It does not
  * defend against a process running as the same user, which can already write the source checkout.
  */
-async function createStageDirectory(source, realSource, destination) {
+async function createStageDirectory(source, realSource, destination, ownership) {
+  if (ownership) {
+    const expected = path.join(realSource, ".stage", ownership.purpose);
+    if (ownership.schemaVersion !== 1 || ownership.owner !== "duegood-stage" || ownership.projectRoot !== realSource ||
+        ownership.stageRoot !== expected || path.resolve(destination) !== expected) {
+      throw new Error("prepared stage ownership does not match the destination");
+    }
+    const prepared = await assertOwnedStageDirectory(realSource, expected, { allowProjectStage: true });
+    if ((await readdir(prepared)).length !== 0) throw new Error("prepared stage root must be empty before staging");
+    await chmod(prepared, 0o700);
+    return prepared;
+  }
   if (isInsideOrEqual(source, destination)) throw new Error(DESTINATION_INSIDE_SOURCE);
   const name = path.basename(destination);
   if (name.length === 0 || name === "." || name === "..") throw new Error("destination must name a new directory");
@@ -226,18 +247,19 @@ function commitCandidate(repoRoot, candidatePaths, identity, date) {
 }
 
 /**
- * Stages `source`'s candidate set into `destination` (a new directory outside `source` that must
- * not exist yet; missing parents are created privately): scans and copies every candidate file with its current
+ * Stages `source`'s candidate set into `destination`: direct low-level calls use a new private
+ * directory outside `source`; the CLI passes a helper-owned, empty direct child of `source/.stage`.
+ * The destination is scanned and populated with every candidate file's current
  * working-tree bytes, commits it into a throwaway Git repository at `destination` with a fixed
  * author/committer/date, verifies the committed tree matches the working candidate set exactly,
  * and writes a JSON digest receipt at `destination/receipt.json` — never added to the commit, and
  * excluded via `.git/info/exclude` so `git ls-files --others --exclude-standard` (what
  * `check-public-tree.mjs`'s `publicPaths()` uses) skips it automatically.
  *
- * Never touches `source` except through read-only `git ls-files` enumeration. The destination is
- * created by {@link createStageDirectory}: an existing destination, one that resolves into the
- * source, or one whose parent other users can write is refused. The returned `destination` is the
- * created directory's real path.
+ * Candidate discovery touches `source` only through read-only Git enumeration. The CLI-owned
+ * destination is created and locked by `owned-stage-root.mjs`; direct low-level destinations are
+ * created by {@link createStageDirectory}, which refuses an existing path or an unsafe parent.
+ * The returned `destination` is the created directory's real path.
  *
  * @param {{
  *   source: string,
@@ -249,6 +271,7 @@ function commitCandidate(repoRoot, candidatePaths, identity, date) {
  *   gitDate?: string,
  *   log?: (message: string) => void,
  *   checkInterrupted?: () => void,
+ *   stageOwnership?: object,
  * }} options
  */
 export async function stageCandidate({
@@ -261,12 +284,13 @@ export async function stageCandidate({
   gitDate = FIXED_GIT_DATE,
   log = noop,
   checkInterrupted = noop,
+  stageOwnership,
 } = {}) {
   if (!source || !destination) throw new Error("stageCandidate requires both source and destination directories");
   const resolvedSource = path.resolve(source);
   const realSource = await realpath(resolvedSource);
   // Every later write, Git command, and npm phase uses only this verified real path.
-  const resolvedDestination = await createStageDirectory(resolvedSource, realSource, path.resolve(destination));
+  const resolvedDestination = await createStageDirectory(resolvedSource, realSource, path.resolve(destination), stageOwnership);
 
   log("stage: enumerating candidate set");
   const candidatePaths = buildCandidateSet(resolvedSource, { include, exclude });
@@ -313,6 +337,7 @@ export async function stageCandidate({
     fileCount: candidateSorted.length,
     stagedMatchesCandidate,
     files,
+    ...(stageOwnership ? { stageOwnership } : {}),
   };
   const receiptPath = path.join(resolvedDestination, "receipt.json");
   await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
@@ -436,16 +461,20 @@ export async function run(argv = process.argv.slice(2)) {
   const options = parseCliArgs(argv);
   const onLog = (message) => process.stderr.write(`stage-tauri-candidate: ${message}\n`);
   const source = options.source ? path.resolve(options.source) : scriptRoot;
-  const lifecycle = createStageCliLifecycle(options, onLog);
+  const lifecycle = await createStageCliLifecycle({ ...options, source }, onLog);
+  let successful = false;
 
   try {
-    const result = await stageCandidate({ source, destination: lifecycle.destination, include: options.include, exclude: options.exclude, log: onLog, checkInterrupted: lifecycle.checkInterrupted });
+    assertStageBudget({ stageDirectory: path.join(lifecycle.projectRoot, ".stage") });
+    const result = await stageCandidate({ source, destination: lifecycle.destination, include: options.include, exclude: options.exclude,
+      stageOwnership: lifecycle.ownership, log: onLog, checkInterrupted: lifecycle.checkInterrupted });
     onLog(`stage: complete at ${result.destination}`);
 
     const browsersPath = options.playwrightBrowsersPath ?? process.env.PLAYWRIGHT_BROWSERS_PATH ?? defaultPlaywrightCacheDirectory();
-    const stageEnv = { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsersPath };
+    const stageEnv = { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsersPath, CARGO_TARGET_DIR: lifecycle.cargoTargetDir,
+      DUEGOOD_SOURCE_CHECKOUT: lifecycle.projectRoot, TMPDIR: lifecycle.temporaryDirectory };
     // The npm phases execute code in the stage, so recheck that it is still the directory we created.
-    await assertOwnedStageDirectory(await realpath(source), result.destination);
+    await assertOwnedStageDirectory(await realpath(source), result.destination, { allowProjectStage: true });
     lifecycle.checkInterrupted();
 
     if (!options.skipInstall) {
@@ -479,11 +508,15 @@ export async function run(argv = process.argv.slice(2)) {
       lifecycle.checkInterrupted();
     }
 
+    const budget = assertStageBudget({ stageDirectory: path.join(lifecycle.projectRoot, ".stage") });
+    onLog(`budget: ${budget.stageCount} stage(s), ${budget.scratchRootCount} scratch root(s), ${budget.allocatedBytes} allocated byte(s)`);
+    successful = true;
+
     return result;
   } catch (error) {
     throw lifecycle.withInterruption(error);
   } finally {
-    lifecycle.close();
+    await lifecycle.close({ success: successful, keep: options.keep, handoff: Boolean(options.destination) });
   }
 }
 if (path.resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
