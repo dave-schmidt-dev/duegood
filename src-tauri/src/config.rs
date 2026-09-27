@@ -32,6 +32,12 @@ pub const INSTANCE_LOCK_FILE: &str = "duegood.instance.lock";
 pub const WRITE_LOCK_FILE: &str = "duegood.write.lock";
 /// Private app-data setting that enables owner-requested Canvas refresh. Missing means disabled.
 pub const CANVAS_REFRESH_SETTING_FILE: &str = "canvas-refresh-enabled.json";
+/// Durable monotonic counter used by the standalone Canvas capture-state helper.
+pub const CANVAS_CAPTURE_RUN_COUNTER_FILE: &str = "canvas-capture-run-counter.json";
+/// Current running/failed attempt receipt written before browser collection begins.
+pub const CANVAS_CAPTURE_ATTEMPT_FILE: &str = "canvas-capture-attempt.json";
+/// Short-lived lock serializing capture-state sidecar updates.
+pub const CANVAS_CAPTURE_STATE_LOCK_FILE: &str = "duegood.capture-state.lock";
 /// Journal recording an in-flight preview replacement, used for crash recovery on open.
 pub const REPLACE_JOURNAL_FILE: &str = "replace-journal.json";
 /// Prefix of the import staging directory created inside the data root.
@@ -132,9 +138,9 @@ pub fn resolve_helper_data_root() -> Result<PathBuf, String> {
     }
     #[cfg(all(not(feature = "test-overrides"), target_os = "macos"))]
     {
-        let home = std::env::var_os("HOME")
+        let home = current_account_home()
             .ok_or_else(|| "the application data folder is unavailable".to_string())?;
-        Ok(PathBuf::from(home)
+        Ok(home
             .join("Library")
             .join("Application Support")
             .join(PRODUCTION_BUNDLE_IDENTIFIER))
@@ -152,6 +158,13 @@ pub fn refresh_helper_path(app_executable: &Path) -> Option<PathBuf> {
     app_executable
         .parent()
         .map(|parent| parent.join("duegood-refresh"))
+}
+
+/// Fixed sibling path for the one-request Canvas file downloader shipped with the app.
+pub fn capture_download_helper_path(app_executable: &Path) -> Option<PathBuf> {
+    app_executable
+        .parent()
+        .map(|parent| parent.join("duegood-capture-download"))
 }
 
 /// Fixed BWS broker executable path for the desktop host. The app never searches `PATH` or uses a
@@ -216,6 +229,21 @@ pub fn canvas_refresh_setting_path(data_root: &Path) -> PathBuf {
     data_root.join(CANVAS_REFRESH_SETTING_FILE)
 }
 
+/// Returns the durable Canvas capture run-counter path under the fixed app-data root.
+pub fn canvas_capture_run_counter_path(data_root: &Path) -> PathBuf {
+    data_root.join(CANVAS_CAPTURE_RUN_COUNTER_FILE)
+}
+
+/// Returns the running/failed Canvas capture receipt path under the fixed app-data root.
+pub fn canvas_capture_attempt_path(data_root: &Path) -> PathBuf {
+    data_root.join(CANVAS_CAPTURE_ATTEMPT_FILE)
+}
+
+/// Returns the short-lived Canvas capture-state lock path under the fixed app-data root.
+pub fn canvas_capture_state_lock_path(data_root: &Path) -> PathBuf {
+    data_root.join(CANVAS_CAPTURE_STATE_LOCK_FILE)
+}
+
 /// Validates an explicit data root (tests and staged smokes only): absolute, named for the test
 /// bundle identifier, and never inside a folder named for the production identifier.
 #[cfg(feature = "test-overrides")]
@@ -264,6 +292,20 @@ mod tests {
     }
 
     #[test]
+    fn fixed_helpers_resolve_as_app_bundle_siblings() {
+        let executable = Path::new("/Applications/Due Good.app/Contents/MacOS/duegood-desktop");
+        let directory = Path::new("/Applications/Due Good.app/Contents/MacOS");
+        assert_eq!(
+            refresh_helper_path(executable),
+            Some(directory.join("duegood-refresh"))
+        );
+        assert_eq!(
+            capture_download_helper_path(executable),
+            Some(directory.join("duegood-capture-download"))
+        );
+    }
+
+    #[test]
     fn tauri_config_is_strict() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
@@ -291,8 +333,11 @@ mod tests {
         assert_eq!(config["bundle"]["active"], true);
         assert_eq!(
             config["bundle"]["externalBin"],
-            serde_json::json!(["binaries/duegood-refresh"]),
-            "only the fixed refresh helper is bundled"
+            serde_json::json!([
+                "binaries/duegood-refresh",
+                "binaries/duegood-capture-download"
+            ]),
+            "only the fixed app helpers are bundled"
         );
     }
 
@@ -396,6 +441,23 @@ mod tests {
         assert_eq!(
             ReadLimits::PRODUCTION.max_document_bytes,
             limits.max_json_bytes
+        );
+    }
+
+    #[test]
+    fn canvas_capture_state_paths_are_fixed_under_the_data_root() {
+        let root = Path::new("/synthetic/com.zerodelta.duegood.test");
+        assert_eq!(
+            canvas_capture_run_counter_path(root),
+            root.join(CANVAS_CAPTURE_RUN_COUNTER_FILE)
+        );
+        assert_eq!(
+            canvas_capture_attempt_path(root),
+            root.join(CANVAS_CAPTURE_ATTEMPT_FILE)
+        );
+        assert_eq!(
+            canvas_capture_state_lock_path(root),
+            root.join(CANVAS_CAPTURE_STATE_LOCK_FILE)
         );
     }
 }

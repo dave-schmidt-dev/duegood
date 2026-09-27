@@ -1082,10 +1082,10 @@ fn stage_generation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use crate::config::{ImportLimits, TEST_BUNDLE_IDENTIFIER};
     use crate::import::{import_legacy_root, ImportOptions};
     use crate::testutil::{materialize_fixture, snapshot_tree, TempRoot};
+    use serde_json::json;
 
     fn authoritative_store(root: &TempRoot) -> Store {
         let data_root = root.path().join(TEST_BUNDLE_IDENTIFIER);

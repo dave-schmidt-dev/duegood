@@ -86,7 +86,11 @@ fn main() {
         };
         std::fs::write(&marker_path, marker).expect("write executable build marker");
         println!("cargo:rerun-if-env-changed=CARGO_FEATURE_TEST_OVERRIDES");
-        for binary in ["duegood-desktop", "duegood-refresh"] {
+        for binary in [
+            "duegood-desktop",
+            "duegood-refresh",
+            "duegood-capture-download",
+        ] {
             println!("cargo:rustc-link-arg-bin={binary}=-sectcreate");
             println!("cargo:rustc-link-arg-bin={binary}=__TEXT");
             println!("cargo:rustc-link-arg-bin={binary}=__duegood");

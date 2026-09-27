@@ -4,8 +4,9 @@
 //! checked before a new request is sent, and no Authorization header is ever attached.
 
 use std::fmt;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::net::IpAddr;
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::Mutex;
 use std::thread;
@@ -14,12 +15,18 @@ use std::time::Duration;
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{ACCEPT, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, LOCATION};
 use reqwest::{StatusCode, Url};
+use sha2::{Digest, Sha256};
+
+use crate::capture_archive::{StagedBlob, StagingDirectory, StagingError};
 
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
-const MAX_FILE_BYTES: u64 = 25 * 1024 * 1024;
+pub(crate) const MAX_FILE_BYTES: u64 = 25 * 1024 * 1024;
+pub(crate) const MAX_CAPTURE_FILE_BYTES: u64 =
+    crate::config::ImportLimits::PRODUCTION.max_file_bytes;
 const MAX_AVATAR_BYTES: u64 = 5 * 1024 * 1024;
 const REQUEST_ATTEMPTS: usize = 2;
 const MAX_REDIRECT_HOPS: usize = 3;
+const SIGNATURE_PREFIX_BYTES: usize = 2048;
 
 /// Downloaded bytes and the non-sensitive response metadata needed by the capture layer.
 pub struct DownloadedBody {
@@ -27,6 +34,13 @@ pub struct DownloadedBody {
     pub bytes: Vec<u8>,
     pub content_type: Option<String>,
     pub content_disposition: Option<String>,
+}
+
+/// Content-free result for one verified file staged by the private capture helper.
+pub struct StagedDownload {
+    pub blob: StagedBlob,
+    pub file_id: u64,
+    pub content_type: &'static str,
 }
 
 /// Content-free download error.
@@ -40,6 +54,11 @@ pub enum DownloadError {
     RequestFailed,
     HttpStatus(u16),
     ConcurrencyLockPoisoned,
+    SignInResponse,
+    MimeSignatureMismatch,
+    SizeMismatch,
+    UnsafeStagingDirectory,
+    StagingFailed,
 }
 
 impl DownloadError {
@@ -54,6 +73,11 @@ impl DownloadError {
             DownloadError::RequestFailed => "request-failed",
             DownloadError::HttpStatus(_) => "http-status",
             DownloadError::ConcurrencyLockPoisoned => "concurrency-lock-poisoned",
+            DownloadError::SignInResponse => "sign-in-response",
+            DownloadError::MimeSignatureMismatch => "mime-signature-mismatch",
+            DownloadError::SizeMismatch => "size-mismatch",
+            DownloadError::UnsafeStagingDirectory => "unsafe-staging-directory",
+            DownloadError::StagingFailed => "staging-failed",
         }
     }
 }
@@ -129,6 +153,229 @@ impl DownloadClient {
         self.download(url, DownloadKind::File)
     }
 
+    /// Streams one Canvas file into private staging without retaining its complete body in memory.
+    /// The caller supplies only the numeric Canvas file ID and optional metadata size; the verifier
+    /// URL remains transient input and is never included in any returned value or error.
+    pub fn download_file_to_staging(
+        &self,
+        url: &str,
+        file_id: u64,
+        expected_size: Option<u64>,
+        staging: &StagingDirectory,
+    ) -> Result<StagedDownload, DownloadError> {
+        if expected_size.is_some_and(|size| size > MAX_CAPTURE_FILE_BYTES) {
+            return Err(DownloadError::ResponseTooLarge);
+        }
+        self.validate_initial_file_url(url, file_id)?;
+        self.stream_file_to_staging(url, file_id, expected_size, staging)
+    }
+
+    /// Streams a browser-observed Canvas download redirect without contacting the initial route.
+    /// The source must be the exact file-ID-bound Marymount download URL, and the redirect target
+    /// is checked with the same host policy used for every subsequent hop.
+    pub fn download_file_to_staging_from_browser_location(
+        &self,
+        source_url: &str,
+        location: &str,
+        file_id: u64,
+        expected_size: Option<u64>,
+        staging: &StagingDirectory,
+    ) -> Result<StagedDownload, DownloadError> {
+        if expected_size.is_some_and(|size| size > MAX_CAPTURE_FILE_BYTES) {
+            return Err(DownloadError::ResponseTooLarge);
+        }
+        let target = self.resolve_browser_location(source_url, location, file_id)?;
+        self.stream_file_to_staging(target.as_str(), file_id, expected_size, staging)
+    }
+
+    /// Adopts an owner-only `.part` file produced by the authenticated browser transfer helper.
+    /// The input path must be the exact random-name shape in the same private staging directory;
+    /// only the opaque native destination basename is returned to the caller.
+    pub fn adopt_browser_staged_file(
+        &self,
+        path: &Path,
+        file_id: u64,
+        browser_byte_count: u64,
+        expected_size: Option<u64>,
+        browser_content_type: Option<&str>,
+        staging: &StagingDirectory,
+    ) -> Result<StagedDownload, DownloadError> {
+        if file_id == 0 {
+            return Err(DownloadError::InvalidUrl);
+        }
+        if browser_byte_count == 0
+            || browser_byte_count > MAX_CAPTURE_FILE_BYTES
+            || expected_size.is_some_and(|size| size > MAX_CAPTURE_FILE_BYTES)
+        {
+            return Err(DownloadError::ResponseTooLarge);
+        }
+        if expected_size.is_some_and(|size| size != browser_byte_count) {
+            return Err(DownloadError::SizeMismatch);
+        }
+        if browser_content_type.is_some_and(|value| value.len() > 256) {
+            return Err(DownloadError::MimeSignatureMismatch);
+        }
+        let mut source = staging
+            .open_browser_source(path)
+            .map_err(map_staging_error)?;
+        let metadata = source
+            .file_mut()
+            .metadata()
+            .map_err(|_| DownloadError::UnsafeStagingDirectory)?;
+        if metadata.len() != browser_byte_count {
+            return Err(DownloadError::SizeMismatch);
+        }
+
+        let mut staged = staging.create_file().map_err(map_staging_error)?;
+        let mut hasher = Sha256::new();
+        let mut prefix = Vec::with_capacity(SIGNATURE_PREFIX_BYTES);
+        let mut byte_count = 0_u64;
+        let mut chunk = [0_u8; 8192];
+        loop {
+            let count = source
+                .file_mut()
+                .read(&mut chunk)
+                .map_err(|_| DownloadError::StagingFailed)?;
+            if count == 0 {
+                break;
+            }
+            let next_count = byte_count
+                .checked_add(count as u64)
+                .ok_or(DownloadError::ResponseTooLarge)?;
+            if next_count > MAX_CAPTURE_FILE_BYTES {
+                return Err(DownloadError::ResponseTooLarge);
+            }
+            if next_count > browser_byte_count {
+                return Err(DownloadError::SizeMismatch);
+            }
+            staged
+                .file_mut()
+                .map_err(map_staging_error)?
+                .write_all(&chunk[..count])
+                .map_err(|_| DownloadError::StagingFailed)?;
+            hasher.update(&chunk[..count]);
+            if prefix.len() < SIGNATURE_PREFIX_BYTES {
+                let remaining = SIGNATURE_PREFIX_BYTES - prefix.len();
+                prefix.extend_from_slice(&chunk[..count.min(remaining)]);
+            }
+            byte_count = next_count;
+        }
+        if byte_count != browser_byte_count || expected_size.is_some_and(|size| size != byte_count)
+        {
+            return Err(DownloadError::SizeMismatch);
+        }
+        let content_type = crate::capture_archive::verify_content_type(
+            browser_content_type,
+            &prefix,
+        )
+        .map_err(|error| match error {
+            crate::capture_archive::MediaError::SignInResponse => DownloadError::SignInResponse,
+            crate::capture_archive::MediaError::MimeSignatureMismatch => {
+                DownloadError::MimeSignatureMismatch
+            }
+        })?;
+        source
+            .verify_unchanged(staging)
+            .map_err(map_staging_error)?;
+        let sha256 = format!("{:x}", hasher.finalize());
+        let blob = staged
+            .commit(byte_count, sha256)
+            .map_err(map_staging_error)?;
+        source.remove(staging).map_err(|error| {
+            let _ = staging.remove_committed_blob(&blob.basename);
+            map_staging_error(error)
+        })?;
+        Ok(StagedDownload {
+            blob,
+            file_id,
+            content_type,
+        })
+    }
+
+    fn stream_file_to_staging(
+        &self,
+        url: &str,
+        file_id: u64,
+        expected_size: Option<u64>,
+        staging: &StagingDirectory,
+    ) -> Result<StagedDownload, DownloadError> {
+        let _guard = self
+            .request_gate
+            .lock()
+            .map_err(|_| DownloadError::ConcurrencyLockPoisoned)?;
+        let mut response = self.final_response(url, DownloadKind::File)?;
+        let status = response.status();
+        if status != StatusCode::OK {
+            return Err(DownloadError::HttpStatus(status.as_u16()));
+        }
+        if response
+            .headers()
+            .get(CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some_and(|length| length > MAX_CAPTURE_FILE_BYTES)
+        {
+            return Err(DownloadError::ResponseTooLarge);
+        }
+        let response_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let mut staged = staging.create_file().map_err(map_staging_error)?;
+        let mut hasher = Sha256::new();
+        let mut byte_count = 0_u64;
+        let mut prefix = Vec::with_capacity(SIGNATURE_PREFIX_BYTES);
+        let mut chunk = [0_u8; 8192];
+        loop {
+            let count = response
+                .read(&mut chunk)
+                .map_err(|_| DownloadError::RequestFailed)?;
+            if count == 0 {
+                break;
+            }
+            let next_count = byte_count
+                .checked_add(count as u64)
+                .ok_or(DownloadError::ResponseTooLarge)?;
+            if next_count > MAX_CAPTURE_FILE_BYTES {
+                return Err(DownloadError::ResponseTooLarge);
+            }
+            staged
+                .file_mut()
+                .map_err(map_staging_error)?
+                .write_all(&chunk[..count])
+                .map_err(|_| DownloadError::StagingFailed)?;
+            hasher.update(&chunk[..count]);
+            if prefix.len() < SIGNATURE_PREFIX_BYTES {
+                let remaining = SIGNATURE_PREFIX_BYTES - prefix.len();
+                prefix.extend_from_slice(&chunk[..count.min(remaining)]);
+            }
+            byte_count = next_count;
+        }
+        if expected_size.is_some_and(|size| size != byte_count) {
+            return Err(DownloadError::SizeMismatch);
+        }
+        let content_type =
+            crate::capture_archive::verify_content_type(response_type.as_deref(), &prefix)
+                .map_err(|error| match error {
+                    crate::capture_archive::MediaError::SignInResponse => {
+                        DownloadError::SignInResponse
+                    }
+                    crate::capture_archive::MediaError::MimeSignatureMismatch => {
+                        DownloadError::MimeSignatureMismatch
+                    }
+                })?;
+        let sha256 = format!("{:x}", hasher.finalize());
+        let blob = staged
+            .commit(byte_count, sha256)
+            .map_err(map_staging_error)?;
+        Ok(StagedDownload {
+            blob,
+            file_id,
+            content_type,
+        })
+    }
+
     /// Downloads and signature-checks a Canvas profile avatar without credentials.
     pub fn download_avatar(&self, url: &str) -> Result<DownloadedBody, DownloadError> {
         let body = self.download(url, DownloadKind::Avatar)?;
@@ -148,13 +395,36 @@ impl DownloadClient {
             .request_gate
             .lock()
             .map_err(|_| DownloadError::ConcurrencyLockPoisoned)?;
+        let response = self.final_response(raw_url, kind)?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(DownloadError::HttpStatus(status.as_u16()));
+        }
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let content_disposition = response
+            .headers()
+            .get(CONTENT_DISPOSITION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let bytes = read_response_bounded(response, kind.max_bytes())?;
+        Ok(DownloadedBody {
+            status: status.as_u16(),
+            bytes,
+            content_type,
+            content_disposition,
+        })
+    }
+
+    fn final_response(&self, raw_url: &str, kind: DownloadKind) -> Result<Response, DownloadError> {
         let mut current = Url::parse(raw_url).map_err(|_| DownloadError::InvalidUrl)?;
         self.validate_url(&current, kind)?;
-
         for redirect_hops in 0..=MAX_REDIRECT_HOPS {
             let response = self.fetch_hop(&current, kind)?;
-            let status = response.status();
-            if status.is_redirection() {
+            if response.status().is_redirection() {
                 if redirect_hops == MAX_REDIRECT_HOPS {
                     return Err(DownloadError::TooManyRedirects);
                 }
@@ -169,29 +439,102 @@ impl DownloadClient {
                 self.validate_url(&current, kind)?;
                 continue;
             }
-            if !status.is_success() {
-                return Err(DownloadError::HttpStatus(status.as_u16()));
-            }
-
-            let content_type = response
-                .headers()
-                .get(CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_owned);
-            let content_disposition = response
-                .headers()
-                .get(CONTENT_DISPOSITION)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_owned);
-            let bytes = read_response_bounded(response, kind.max_bytes())?;
-            return Ok(DownloadedBody {
-                status: status.as_u16(),
-                bytes,
-                content_type,
-                content_disposition,
-            });
+            return Ok(response);
         }
         Err(DownloadError::TooManyRedirects)
+    }
+
+    /// Validates the original Canvas verifier URL before opening any network connection. This is
+    /// deliberately narrower than the redirect allowlist: only the Marymount file download route
+    /// bound to the supplied numeric ID is accepted, followed by the existing reviewed CDN hops.
+    fn validate_initial_file_url(&self, raw_url: &str, file_id: u64) -> Result<(), DownloadError> {
+        let url = self.parse_canvas_file_url(raw_url, file_id)?;
+        let mut verifier_seen = false;
+        let mut download_frd_seen = false;
+        for (name, value) in url.query_pairs() {
+            match name.as_ref() {
+                "verifier" => {
+                    if verifier_seen
+                        || value.is_empty()
+                        || value.len() > 512
+                        || value.chars().any(char::is_control)
+                    {
+                        return Err(DownloadError::InvalidUrl);
+                    }
+                    verifier_seen = true;
+                }
+                "download_frd" => {
+                    if download_frd_seen || value != "1" {
+                        return Err(DownloadError::InvalidUrl);
+                    }
+                    download_frd_seen = true;
+                }
+                _ => return Err(DownloadError::InvalidUrl),
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_browser_source_url(
+        &self,
+        raw_url: &str,
+        file_id: u64,
+    ) -> Result<Url, DownloadError> {
+        let url = self.parse_canvas_file_url(raw_url, file_id)?;
+        if url.query() != Some("download_frd=1") {
+            return Err(DownloadError::InvalidUrl);
+        }
+        Ok(url)
+    }
+
+    fn resolve_browser_location(
+        &self,
+        source_url: &str,
+        location: &str,
+        file_id: u64,
+    ) -> Result<Url, DownloadError> {
+        let source = self.validate_browser_source_url(source_url, file_id)?;
+        if location.is_empty() || location.len() > 16 * 1024 {
+            return Err(DownloadError::InvalidUrl);
+        }
+        let target = source
+            .join(location)
+            .map_err(|_| DownloadError::InvalidUrl)?;
+        self.validate_url(&target, DownloadKind::File)?;
+        Ok(target)
+    }
+
+    fn parse_canvas_file_url(&self, raw_url: &str, file_id: u64) -> Result<Url, DownloadError> {
+        if file_id == 0 || raw_url.len() > 16 * 1024 {
+            return Err(DownloadError::InvalidUrl);
+        }
+        let url = Url::parse(raw_url).map_err(|_| DownloadError::InvalidUrl)?;
+        let identity_ok = {
+            #[cfg(feature = "test-overrides")]
+            if let Some(origin) = &self.test_origin {
+                same_origin(&url, origin) && url.scheme() == "http"
+            } else {
+                url.scheme() == "https"
+                    && url.host_str() == Some("marymount.instructure.com")
+                    && url.port().is_none()
+            }
+            #[cfg(not(feature = "test-overrides"))]
+            {
+                url.scheme() == "https"
+                    && url.host_str() == Some("marymount.instructure.com")
+                    && url.port().is_none()
+            }
+        };
+        if !identity_ok
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.fragment().is_some()
+            || url.path() != format!("/files/{file_id}/download")
+            || url.query() == Some("")
+        {
+            return Err(DownloadError::InvalidUrl);
+        }
+        Ok(url)
     }
 
     fn validate_url(&self, url: &Url, kind: DownloadKind) -> Result<(), DownloadError> {
@@ -277,14 +620,64 @@ impl DownloadKind {
 
 fn is_reviewed_download_host(host: &str, kind: DownloadKind) -> bool {
     let host = host.to_ascii_lowercase();
+    let canvas_user_content = is_canvas_user_content_host(&host);
+    let instructure_uploads = matches!(
+        host.as_str(),
+        "instructure-uploads.s3.amazonaws.com"
+            | "instructure-uploads-2.s3.amazonaws.com"
+            | "instructure-uploads-eu.s3.amazonaws.com"
+            | "instructure-uploads-apse1.s3.amazonaws.com"
+            | "instructure-uploads-apse2.s3.amazonaws.com"
+            | "instructure-uploads-fra.s3.amazonaws.com"
+            | "instructure-uploads-pdx.s3.amazonaws.com"
+            | "instructure-uploads-yul.s3.amazonaws.com"
+    );
+    let canvas_file_storage =
+        matches!(kind, DownloadKind::File) && (canvas_user_content || instructure_uploads);
     let canvas = host == "marymount.instructure.com"
         || host.ends_with(".instructure.com")
         || host == "instructureusercontent.com"
         || host.ends_with(".instructureusercontent.com")
-        || host.ends_with(".inscloudgate.net");
+        || host.ends_with(".inscloudgate.net")
+        || canvas_file_storage;
     canvas
         || matches!(kind, DownloadKind::Avatar)
             && (host == "gravatar.com" || host.ends_with(".gravatar.com"))
+}
+
+fn is_canvas_user_content_host(host: &str) -> bool {
+    let Some(subdomain) = host.strip_suffix(".canvas-user-content.com") else {
+        return false;
+    };
+    let labels = subdomain.split('.').collect::<Vec<_>>();
+    match labels.as_slice() {
+        // Preserve the existing single-label file host allowlist.
+        [label] => !label.is_empty(),
+        // Canvas file redirects may use a source label followed by a numeric cluster label.
+        [source, cluster] => {
+            valid_dns_label(source)
+                && cluster.len() <= 63
+                && cluster.strip_prefix("cluster").is_some_and(|digits| {
+                    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+                })
+        }
+        _ => false,
+    }
+}
+
+fn valid_dns_label(label: &str) -> bool {
+    label.len() <= 63
+        && label
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && label
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && label
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 fn parse_test_origin(origin: &str) -> Result<Url, DownloadError> {
@@ -349,6 +742,15 @@ fn read_response_bounded(mut response: Response, max_bytes: u64) -> Result<Vec<u
     Ok(bytes)
 }
 
+fn map_staging_error(error: StagingError) -> DownloadError {
+    match error {
+        StagingError::UnsafeDirectory => DownloadError::UnsafeStagingDirectory,
+        StagingError::CreateFailed | StagingError::WriteFailed => DownloadError::StagingFailed,
+    }
+}
+
+/// Checks the response MIME against a small, reviewed set of file signatures. Unknown types are
+/// refused as a file-coverage gap instead of being guessed from a filename supplied by Canvas.
 fn normalized_image_type(value: &str) -> Option<&'static str> {
     let normalized = value.split(';').next()?.trim().to_ascii_lowercase();
     match normalized.as_str() {
@@ -371,169 +773,5 @@ fn image_signature_matches(bytes: &[u8], content_type: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn exact_reviewed_host_patterns_are_enforced() {
-        assert!(is_reviewed_download_host(
-            "marymount.instructure.com",
-            DownloadKind::File
-        ));
-        assert!(is_reviewed_download_host(
-            "files.instructureusercontent.com",
-            DownloadKind::File
-        ));
-        assert!(is_reviewed_download_host(
-            "inst-fs-iad-prod.inscloudgate.net",
-            DownloadKind::File
-        ));
-        assert!(!is_reviewed_download_host(
-            "inscloudgate.net.evil.invalid",
-            DownloadKind::File
-        ));
-        assert!(!is_reviewed_download_host(
-            "evil.invalid",
-            DownloadKind::File
-        ));
-        assert!(!is_reviewed_download_host(
-            "gravatar.com",
-            DownloadKind::File
-        ));
-        assert!(is_reviewed_download_host(
-            "secure.gravatar.com",
-            DownloadKind::Avatar
-        ));
-        assert!(!is_reviewed_download_host(
-            "gravatar.com.evil.invalid",
-            DownloadKind::Avatar
-        ));
-    }
-
-    #[test]
-    fn avatar_requires_matching_image_type_and_signature() {
-        assert_eq!(
-            normalized_image_type("image/png; charset=binary"),
-            Some("image/png")
-        );
-        assert!(image_signature_matches(
-            &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a],
-            "image/png"
-        ));
-        assert!(!image_signature_matches(b"not an image", "image/png"));
-        assert!(!image_signature_matches(b"GIF89a", "image/png"));
-        assert_eq!(normalized_image_type("text/html"), None);
-    }
-
-    #[cfg(feature = "test-overrides")]
-    #[test]
-    fn test_origin_is_loopback_and_explicitly_ported() {
-        assert!(parse_test_origin("http://127.0.0.1:8011").is_ok());
-        assert!(parse_test_origin("http://10.0.0.2:8011").is_err());
-        assert!(parse_test_origin("https://127.0.0.1:8011").is_err());
-        assert!(parse_test_origin("http://127.0.0.1").is_err());
-    }
-
-    #[cfg(feature = "test-overrides")]
-    #[test]
-    fn avatar_redirects_are_manual_and_never_send_authorization() {
-        use std::io::{BufRead, BufReader, Write};
-        use std::net::TcpListener;
-        use std::sync::mpsc;
-
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let origin = format!("http://{}", listener.local_addr().unwrap());
-        let redirect = format!("{origin}/avatar-final");
-        let (tx, rx) = mpsc::channel();
-        let server = thread::spawn(move || {
-            for (status, headers, body) in [
-                (
-                    "302 Found",
-                    format!("Location: {redirect}\r\n"),
-                    "".as_bytes(),
-                ),
-                (
-                    "200 OK",
-                    "Content-Type: image/png\r\n".to_owned(),
-                    &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a][..],
-                ),
-            ] {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut request = String::new();
-                loop {
-                    let mut line = String::new();
-                    reader.read_line(&mut line).unwrap();
-                    request.push_str(&line);
-                    if line == "\r\n" || line.is_empty() {
-                        break;
-                    }
-                }
-                tx.send(request).unwrap();
-                write!(
-                    stream,
-                    "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                )
-                .unwrap();
-                stream.write_all(body).unwrap();
-            }
-        });
-
-        let client = DownloadClient::with_test_origin(&origin).unwrap();
-        let result = client.download_avatar(&format!("{origin}/avatar")).unwrap();
-        assert_eq!(result.status, 200);
-        assert_eq!(result.bytes.len(), 8);
-        let first = rx.recv().unwrap();
-        let second = rx.recv().unwrap();
-        assert!(!first.to_ascii_lowercase().contains("authorization:"));
-        assert!(!second.to_ascii_lowercase().contains("authorization:"));
-        server.join().unwrap();
-    }
-
-    #[cfg(feature = "test-overrides")]
-    #[test]
-    fn download_redirect_outside_mock_origin_is_rejected_before_following() {
-        use std::io::{BufRead, BufReader, Write};
-        use std::net::TcpListener;
-        use std::sync::mpsc;
-
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let origin = format!("http://{}", listener.local_addr().unwrap());
-        let (tx, rx) = mpsc::channel();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut request = String::new();
-            loop {
-                let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
-                request.push_str(&line);
-                if line == "\r\n" || line.is_empty() {
-                    break;
-                }
-            }
-            tx.send(request).unwrap();
-            write!(
-                stream,
-                "HTTP/1.1 302 Found\r\nLocation: https://evil.invalid/file\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            )
-            .unwrap();
-        });
-
-        let client = DownloadClient::with_test_origin(&origin).unwrap();
-        assert_eq!(
-            client
-                .download_file(&format!("{origin}/file"))
-                .err()
-                .unwrap(),
-            DownloadError::InvalidUrl
-        );
-        assert!(!rx
-            .recv()
-            .unwrap()
-            .to_ascii_lowercase()
-            .contains("authorization:"));
-        server.join().unwrap();
-    }
-}
+#[path = "downloads_tests.rs"]
+mod tests;

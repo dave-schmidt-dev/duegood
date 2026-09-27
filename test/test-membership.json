@@ -41,7 +41,20 @@
       "test/local/install-desktop-app.test.ts",
       "test/local/verify-tauri-assets.test.ts",
       "test/local/prepare-legacy-root.test.ts",
-      "test/local/verify-cutover.test.ts"
+      "test/local/verify-cutover.test.ts",
+      "test/local/canvas-browser-reader.test.ts",
+      "test/local/canvas-browser-reader-account.test.ts",
+      "test/local/canvas-browser-capture.test.ts",
+      "test/local/canvas-browser-capture-collector.test.ts",
+      "test/local/canvas-browser-file-pipeline.test.ts",
+      "test/local/canvas-browser-archive.test.ts",
+      "test/local/canvas-browser-binding.test.ts",
+      "test/local/canvas-browser-identity.test.ts",
+      "test/local/canvas-browser-capture-files.test.ts",
+      "test/local/canvas-browser-session.test.ts",
+      "test/local/canvas-browser-session-download.test.ts",
+      "test/local/canvas-browser-runtime-loader.test.ts",
+      "test/local/prepare-canvas-helper.test.ts"
     ]
   },
   "native": {
@@ -71,9 +84,13 @@
       "src-tauri/src/capture.rs": 10,
       "src-tauri/src/clipboard.rs": 1,
       "src-tauri/src/commands.rs": 19,
-      "src-tauri/src/config.rs": 8,
+      "src-tauri/src/config.rs": 10,
+      "src-tauri/src/capture_download_helper_tests.rs": 7,
+      "src-tauri/src/capture_archive.rs": 9,
+      "src-tauri/src/capture_media.rs": 3,
+      "src-tauri/src/bin/duegood-capture-state.rs": 7,
       "src-tauri/src/documents.rs": 4,
-      "src-tauri/src/downloads.rs": 5,
+      "src-tauri/src/downloads_tests.rs": 6,
       "src-tauri/src/export.rs": 5,
       "src-tauri/src/history.rs": 7,
       "src-tauri/src/ical.rs": 9,
@@ -103,7 +120,10 @@
     "runner": "test:desktop-ui",
     "inclusiveRunner": "test:all",
     "tests": [
-      "test/native/playwright/desktop-first-run.spec.ts"
+      "test/native/playwright/desktop-first-run.spec.ts",
+      "test/native/playwright/canvas-browser-reader.spec.ts",
+      "test/native/playwright/canvas-browser-auth-download.spec.ts",
+      "test/native/playwright/canvas-browser-auth-production.spec.ts"
     ]
   }
 }

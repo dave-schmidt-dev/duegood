@@ -4,7 +4,7 @@ import { lstat, readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertStagedCandidate, createFrontendAssetManifest, stageAppBundlePath } from "./build-tauri.mjs";
+import { assertStagedCandidate, createFrontendAssetManifest, SIDECAR_EXECUTABLES, stageAppBundlePath } from "./build-tauri.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const TEST_OVERRIDES_MARKER = Buffer.from("test-overrides");
@@ -46,7 +46,7 @@ export async function verifyTauriAssets({
   appPath,
   testedUiDir,
   appExecutableName = "duegood-desktop",
-  helperExecutableName = "duegood-refresh",
+  helperExecutableNames = SIDECAR_EXECUTABLES,
   allowTestOverrides = false,
   candidateTree,
   runtimeVerifier = verifyRuntimeAssets,
@@ -75,7 +75,8 @@ export async function verifyTauriAssets({
   if (!appBytes.includes(Buffer.from(expectedManifest))) {
     fail("app executable does not embed the tested frontend asset manifest");
   }
-  for (const [name, label] of [[appExecutableName, "app executable"], [helperExecutableName, "refresh helper"]]) {
+  const helpers = helperExecutableNames.map((name) => [name, name === "duegood-refresh" ? "refresh helper" : "capture download helper"]);
+  for (const [name, label] of [[appExecutableName, "app executable"], ...helpers]) {
     const executable = path.join(executableDirectory, name);
     await assertRegularFile(executable, label);
     const bytes = await readFile(executable);

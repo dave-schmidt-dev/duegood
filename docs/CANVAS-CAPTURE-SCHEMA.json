@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.duegood.invalid/canvas-capture/v1.json",
+  "title": "Due Good private Canvas browser capture",
+  "description": "Versioned local handoff from the operator-run browser reader to the native Tauri importer.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "source", "capturedAt", "identity", "complete", "resources", "coverage"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "source": { "const": "canvas-browser" },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "complete": { "type": "boolean" },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "userId"],
+      "properties": {
+        "origin": { "const": "https://marymount.instructure.com" },
+        "userId": { "type": "integer", "minimum": 1 },
+        "accountId": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["endpoint", "courseId", "items", "pages"],
+        "properties": {
+          "endpoint": {
+            "enum": ["profile", "coursesActive", "coursesCompleted", "course", "syllabus", "courseTabs", "assignments", "assignmentGroups", "submissions", "submission", "pages", "page", "modules", "moduleItems", "discussions", "discussionEntries", "discussionReplies", "announcements", "quizzes", "quiz", "courseFiles", "folders", "groups", "personalFiles", "personalFolders", "personalFile", "inbox", "inboxAll", "conversationsSent", "conversationsArchived", "conversation", "file", "fileBodies", "calendarEvents"]
+          },
+          "courseId": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+          "items": { "type": "array", "items": { "type": "object" } },
+          "pages": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["endpoint", "courseId", "status"],
+        "properties": {
+          "endpoint": { "type": "string", "minLength": 1 },
+          "courseId": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+          "status": { "enum": ["complete", "incomplete", "gap"] },
+          "reason": { "enum": ["forbidden-optional", "disabled", "not-attempted", "not-found", "request-failed"] }
+        }
+      }
+    }
+  }
+}

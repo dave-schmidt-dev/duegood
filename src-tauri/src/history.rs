@@ -551,7 +551,11 @@ mod tests {
         ]});
         let diff = diff_coursework(&before, &after).expect("diff");
         assert_eq!((diff.added, diff.updated, diff.removed), (1, 1, 0));
-        let changed = diff.changes.iter().find(|change| change["kind"] == "changed").unwrap();
+        let changed = diff
+            .changes
+            .iter()
+            .find(|change| change["kind"] == "changed")
+            .unwrap();
         assert_eq!(changed["itemId"], "stable-id");
         assert_eq!(changed["fields"].as_array().unwrap().len(), 2);
         assert_eq!(changed["fields"][0]["field"], "title");

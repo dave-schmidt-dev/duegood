@@ -29,7 +29,10 @@
   "bundle": {
     "active": true,
     "icon": ["icons/icon.png"],
-    "externalBin": ["binaries/duegood-refresh"],
+    "externalBin": [
+      "binaries/duegood-refresh",
+      "binaries/duegood-capture-download"
+    ],
     "resources": {
       "../dist/public/": "frontend/"
     },

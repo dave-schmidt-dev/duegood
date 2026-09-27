@@ -13,6 +13,10 @@ default-run = "duegood-desktop"
 name = "duegood_desktop"
 crate-type = ["rlib"]
 
+[[bin]]
+name = "duegood-capture-download"
+path = "src/bin/duegood-capture-download.rs"
+
 [features]
 # Data-root overrides for tests and staged smoke builds only. Release builds never enable this.
 test-overrides = []

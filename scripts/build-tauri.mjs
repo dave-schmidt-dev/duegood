@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Staged-only Tauri packaging. Builds the UI and its deterministic hash manifest before Cargo,
- * builds/signs the helper before bundling, then signs the app last. Use --prepare-only before
+ * builds/signs fixed sidecars before bundling, then signs the app last. Use --prepare-only before
  * `cargo test` when a test runner needs the Tauri frontend assets but no signed app.
  */
 import { createHash } from "node:crypto";
@@ -14,6 +14,7 @@ import { run as runTauriCli } from "@tauri-apps/cli";
 export const MANIFEST_NAME = "asset-manifest.json";
 export const MANIFEST_FORMAT = "duegood-frontend-assets";
 export const TEST_BUNDLE_IDENTIFIER = "com.zerodelta.duegood.test";
+export const SIDECAR_EXECUTABLES = Object.freeze(["duegood-refresh", "duegood-capture-download"]);
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const APP_NAME = "Due Good.app";
@@ -152,14 +153,15 @@ export async function assertStagedCandidate(projectRoot = root) {
   return receipt;
 }
 
-async function ensureStageBinaryExcluded() {
+async function ensureStageBinariesExcluded() {
   const excludePath = path.join(root, ".git", "info", "exclude");
   let old = "";
   try { old = await readFile(excludePath, "utf8"); } catch { /* git has a default empty exclude file */ }
-  const entry = "/src-tauri/binaries/duegood-refresh-*";
-  if (!old.split(/\r?\n/).includes(entry)) {
+  const entries = SIDECAR_EXECUTABLES.map((name) => `/src-tauri/binaries/${name}-*`);
+  if (entries.some((entry) => !old.split(/\r?\n/).includes(entry))) {
     await mkdir(path.dirname(excludePath), { recursive: true });
-    await writeFile(excludePath, `${old}${old.endsWith("\n") || old.length === 0 ? "" : "\n"}${entry}\n`, { mode: 0o600 });
+    const missing = entries.filter((entry) => !old.split(/\r?\n/).includes(entry));
+    await writeFile(excludePath, `${old}${old.endsWith("\n") || old.length === 0 ? "" : "\n"}${missing.join("\n")}\n`, { mode: 0o600 });
   }
 }
 
@@ -171,9 +173,9 @@ function executableExtension() {
   return process.platform === "win32" ? ".exe" : "";
 }
 
-async function ensureSidecarBuildInput() {
-  await ensureStageBinaryExcluded();
-  const target = path.join(root, "src-tauri", "binaries", `duegood-refresh-${targetTriple()}${executableExtension()}`);
+async function ensureSidecarBuildInput(executable) {
+  await ensureStageBinariesExcluded();
+  const target = path.join(root, "src-tauri", "binaries", `${executable}-${targetTriple()}${executableExtension()}`);
   try {
     await lstat(target);
   } catch {
@@ -184,17 +186,28 @@ async function ensureSidecarBuildInput() {
   }
 }
 
-async function buildTestSidecar() {
-  await ensureSidecarBuildInput();
+async function copyBuiltSidecars(profile) {
   const triple = targetTriple();
   const extension = executableExtension();
-  run("cargo", ["build", "--locked", "--manifest-path", "src-tauri/Cargo.toml", "--features", "test-overrides", "--bin", "duegood-refresh"]);
-  const source = path.join(cargoTargetDirectory(), "debug", `duegood-refresh${extension}`);
-  const target = path.join(root, "src-tauri", "binaries", `duegood-refresh-${triple}${extension}`);
-  await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-  await copyFile(source, target);
-  await chmod(target, 0o700);
-  if (process.platform === "darwin") codesign(["--force", "--sign", "-", target]);
+  for (const executable of SIDECAR_EXECUTABLES) {
+    const source = path.join(cargoTargetDirectory(), profile, `${executable}${extension}`);
+    const target = path.join(root, "src-tauri", "binaries", `${executable}-${triple}${extension}`);
+    await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    await copyFile(source, target);
+    await chmod(target, 0o700);
+  }
+}
+
+async function buildTestSidecars() {
+  for (const executable of SIDECAR_EXECUTABLES) await ensureSidecarBuildInput(executable);
+  run("cargo", ["build", "--locked", "--manifest-path", "src-tauri/Cargo.toml", "--features", "test-overrides", ...SIDECAR_EXECUTABLES.flatMap((name) => ["--bin", name])]);
+  await copyBuiltSidecars("debug");
+  if (process.platform === "darwin") {
+    for (const executable of SIDECAR_EXECUTABLES) {
+      const target = path.join(root, "src-tauri", "binaries", `${executable}-${targetTriple()}${executableExtension()}`);
+      codesign(["--force", "--sign", "-", target]);
+    }
+  }
 }
 
 function codesign(args) {
@@ -228,7 +241,7 @@ function signFile(file, identity) {
 
 function signAppAdhoc(appPath) {
   const executableDirectory = path.join(appPath, "Contents", "MacOS");
-  for (const executable of ["duegood-desktop", "duegood-refresh"]) {
+  for (const executable of ["duegood-desktop", ...SIDECAR_EXECUTABLES]) {
     const executablePath = path.join(executableDirectory, executable);
     if (process.platform === "darwin") codesign(["--force", "--sign", "-", executablePath]);
   }
@@ -270,22 +283,20 @@ async function packageTauri(mode, receipt, options) {
     sourceRevision: getSourceRevision(options),
     candidateTree: receipt.treeDigest,
   });
-  await ensureSidecarBuildInput();
+  for (const executable of SIDECAR_EXECUTABLES) await ensureSidecarBuildInput(executable);
 
   const featureArgs = mode === "test" ? ["--features", "test-overrides"] : [];
   const profile = mode === "test" ? "debug" : "release";
-  run("cargo", ["build", "--locked", "--manifest-path", "src-tauri/Cargo.toml", "--bin", "duegood-refresh", ...featureArgs, ...(mode === "release" ? ["--release"] : [])]);
+  run("cargo", ["build", "--locked", "--manifest-path", "src-tauri/Cargo.toml", ...SIDECAR_EXECUTABLES.flatMap((name) => ["--bin", name]), ...featureArgs, ...(mode === "release" ? ["--release"] : [])]);
 
   const triple = targetTriple();
   if (!triple.endsWith("-apple-darwin")) fail(`unsupported macOS Rust target: ${triple}`);
-  const extension = executableExtension();
-  const helperSource = path.join(cargoTargetDirectory(), profile, `duegood-refresh${extension}`);
-  const helperTarget = path.join(root, "src-tauri", "binaries", `duegood-refresh-${triple}${extension}`);
-  await mkdir(path.dirname(helperTarget), { recursive: true, mode: 0o700 });
-  await copyFile(helperSource, helperTarget);
-  await chmod(helperTarget, 0o700);
-  if (mode === "release") signFile(helperTarget, identity);
-  else codesign(["--force", "--sign", "-", helperTarget]);
+  await copyBuiltSidecars(profile);
+  for (const executable of SIDECAR_EXECUTABLES) {
+    const helperTarget = path.join(root, "src-tauri", "binaries", `${executable}-${triple}${executableExtension()}`);
+    if (mode === "release") signFile(helperTarget, identity);
+    else codesign(["--force", "--sign", "-", helperTarget]);
+  }
 
   const appPath = await resetTauriBundleOutput(profile);
   const overlayPath = path.join(root, "src-tauri", `.tauri-${mode}-build.conf.json`);
@@ -300,8 +311,8 @@ async function packageTauri(mode, receipt, options) {
   }
 
   const appExecutable = path.join(appPath, "Contents", "MacOS", "duegood-desktop");
-  const bundledHelper = path.join(appPath, "Contents", "MacOS", "duegood-refresh");
-  for (const executable of [appExecutable, bundledHelper]) {
+  const bundledHelpers = SIDECAR_EXECUTABLES.map((name) => path.join(appPath, "Contents", "MacOS", name));
+  for (const executable of [appExecutable, ...bundledHelpers]) {
     try { await lstat(executable); } catch { fail(`Tauri app is missing expected executable ${path.basename(executable)}`); }
   }
   const stampPath = path.join(appPath, "Contents", "Resources", "duegood-build.json");
@@ -312,8 +323,8 @@ async function packageTauri(mode, receipt, options) {
   run(process.execPath, verifyArgs);
   if (mode === "release") {
     // Tauri may re-sign the copied sidecar while bundling, so sign the final bundled bytes.
-    signFile(bundledHelper, identity);
-    for (const executable of [appExecutable, bundledHelper]) ensureNoTestMarker(executable);
+    for (const helper of bundledHelpers) signFile(helper, identity);
+    for (const executable of [appExecutable, ...bundledHelpers]) ensureNoTestMarker(executable);
     signFile(appPath, identity);
   } else {
     signAppAdhoc(appPath);
@@ -330,7 +341,7 @@ export async function main(args = process.argv.slice(2)) {
   const options = parseArguments(args);
   const receipt = await assertStagedCandidate(root);
   await prepareFrontendAssets();
-  if (options.prepareOnly && options.mode === "test") await buildTestSidecar();
+  if (options.prepareOnly && options.mode === "test") await buildTestSidecars();
   if (!options.prepareOnly) await packageTauri(options.mode, receipt, options);
 }
 

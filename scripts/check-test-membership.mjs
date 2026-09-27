@@ -105,17 +105,29 @@ let tauriTestCount = 0;
   }
   // `generate_context!` embeds dist/public, so the test binary cannot compile without the UI build.
   if (!existsSync(path.join(root, "dist", "public", "index.html"))) list(process.execPath, [path.join(root, "scripts", "build-ui.mjs")]);
-  const discovery = list("cargo", ["test", "--locked", "--manifest-path", tauri.cargoManifest, "--features", tauri.features, "--", "--list", "--format", "terse"]);
+  const cargoArgs = ["test", "--locked", "--manifest-path", tauri.cargoManifest, "--features", tauri.features];
+  const discovery = list("cargo", [...cargoArgs, "--lib", "--", "--list", "--format", "terse"]);
   const discovered = new Map();
   const pathModules = new Map([
     ["ical::bootstrap", "ical_bootstrap.rs"],
     ["ical_apply::bootstrap", "ical_apply_bootstrap.rs"],
+    ["downloads::tests", "downloads_tests.rs"],
   ]);
   for (const match of discovery.matchAll(/^([A-Za-z0-9_:]+): test$/gm)) {
     const modulePath = match[1];
     const parts = modulePath.split("::");
     const file = `${tauri.sourceRoot}/${pathModules.get(`${parts[0]}::${parts[1]}`) ?? `${parts[0]}.rs`}`;
     discovered.set(file, (discovered.get(file) ?? 0) + 1);
+  }
+  // Binary-local `tests::` names do not identify their source file in Cargo's combined output.
+  // Discover each listed binary separately so its tests retain exact file membership.
+  for (const file of listed.keys()) {
+    const binPrefix = `${tauri.sourceRoot}/bin/`;
+    if (!file.startsWith(binPrefix)) continue;
+    const binName = file.slice(binPrefix.length, -".rs".length);
+    const binDiscovery = list("cargo", [...cargoArgs, "--bin", binName, "--", "--list", "--format", "terse"]);
+    const count = [...binDiscovery.matchAll(/^[A-Za-z0-9_:]+: test$/gm)].length;
+    if (count > 0) discovered.set(file, count);
   }
   for (const [file, count] of discovered) {
     if (!listed.has(file)) throw new Error(`${tauri.runner} discovers Rust tests in ${file}, which is not listed.`);

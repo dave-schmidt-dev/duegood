@@ -18,6 +18,28 @@ Every row below is a plain claim with a **Status**:
 - `intentionally changed` — today's behavior is real, but the desktop plan (Decision 7) already
   commits to changing it; a reason and the plan citation are given inline.
 
+## Personal browser-session source for Tauri
+
+The owner may run a private, visible Chrome session as an operator source for local Tauri capture.
+It is not a browser application, public onboarding route, or background refresh service. Chrome
+retains its own session cookies in the dedicated capture profile; the reader performs bounded,
+same-origin API GETs from inside that browser and never exports cookies or uses Playwright's Node
+request context. The fixed capture schema is version 1. The broker's `identity` command reports
+the authenticated numeric Canvas user ID so the owner can confirm the first binding. `bind <id>`
+writes that binding privately only after comparing it with the current session identity. Every
+later `refresh` checks the saved binding against the live identity before collection. Collection
+uses bounded same-origin API reads and records explicit coverage gaps. Discoverable Canvas files
+pass through the bounded browser/native download path into a private, hashed archive generation;
+transient signed URLs are never written to that archive. A prior generation remains available if
+a later capture fails. The probe alone does not establish a completed file capture. A current live
+partial capture and private archive publication have been verified. Native-store import has not
+been implemented or verified; the Tauri dashboard must not claim freshness from this archive.
+
+Calendar/iCal remains an independently authoritative source. Browser Canvas observations can
+complement it in the native store but cannot silently replace iCal facts or student-owned progress.
+The Tauri app remains the only product interface; the browser session is an operator-controlled
+source that may eventually feed that app through the versioned local capture contract.
+
 ## Course import
 
 Today's refresh is driven entirely by the private wrapper. It is invoked with no arguments

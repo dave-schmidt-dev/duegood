@@ -24,6 +24,8 @@
     "hooks:check": "node scripts/install-hooks.mjs --check",
     "check:hooks": "npm run hooks:check",
     "desktop-ui:install-test-browser": "node scripts/install-test-browser.mjs",
+    "canvas:session": "node scripts/canvas-browser-session-client.mjs",
+    "canvas:prepare-helper": "node scripts/prepare-canvas-helper.mjs",
     "check:python": "node scripts/check-python.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",

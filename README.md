@@ -16,6 +16,25 @@ On an empty store, use **Connect calendar** in the native app. A successful, use
 
 The private coursework, grades, messages, feed URL, credentials, and screenshots do not belong in this repository, fixtures, CI output, or public issues. Public fixtures are synthetic.
 
+## Private Canvas capture
+
+Canvas capture uses one headed Chrome profile under the app's private data folder. Sign in in that window once, confirm the account ID reported by `identity`, and bind that ID locally. The download helper is built once from a staged production candidate. Later refreshes reuse the installed helper and account binding:
+
+```sh
+npm run canvas:prepare-helper
+npm run canvas:session -- start
+npm run canvas:session -- status
+npm run canvas:session -- probe
+npm run canvas:session -- identity
+npm run canvas:session -- bind <confirmed-numeric-user-id>
+npm run canvas:session -- refresh
+npm run canvas:session -- stop
+```
+
+The browser stays open across commands. `refresh` checks the saved account binding, then writes a private, hashed archive generation and a latest capture snapshot in Application Support. File transfers use the existing Canvas page without opening, navigating, or closing a tab for each file. Capture has a 30-minute budget and the client waits up to 35 minutes. A partial response keeps prior generations available and names gaps in the private snapshot; it does not make the Tauri dashboard current. This capture path has not yet been imported into the native coursework store. `stop` closes the browser and broker. Canvas SSO can expire, so a later refresh may return `SIGN_IN_REQUIRED` and need a visible sign-in again. Output contains only status and counts; never commit the private archive.
+
+File checks establish local byte integrity and compatibility with reviewed MIME types: known binary formats use prefix signatures, while declared text formats use UTF-8 and non-HTML checks. They do not prove complete file grammar, Office container structure, or Canvas source authenticity. Archived files are not automatically opened.
+
 ## Calendar feed
 
 The feed URL lives only in Bitwarden Secrets Manager, separate from the Canvas API token. The fixed `duegood-canvas-ical` broker consumer pins `scripts/sync-canvas-ical.mjs` and supplies the URL to that helper. The helper fetches only the reviewed Marymount Canvas calendar URL family and posts bounded calendar bytes to the native one-shot localhost receiver after the port handoff. Tauri stages a fresh store only when empty, then applies later accepted observations under its store lock; unsupported or ambiguous events are held, and rolling-window omissions never delete coursework. Course labels initially use Canvas IDs because the feed does not establish official course names.

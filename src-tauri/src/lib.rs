@@ -7,6 +7,8 @@
 
 mod canvas;
 mod capture;
+mod capture_archive;
+mod capture_media;
 mod clipboard;
 mod commands;
 mod config;
@@ -207,6 +209,161 @@ pub fn run_refresh_helper() -> Result<(), String> {
 pub fn refresh_helper_store_root() -> Result<std::path::PathBuf, String> {
     config::resolve_helper_data_root()
 }
+
+/// Returns the fixed paths used by the capture-state helper for its monotonic counter, attempt
+/// receipt, and short-lived writer lock.
+pub fn capture_state_paths(
+    data_root: &std::path::Path,
+) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    (
+        config::canvas_capture_run_counter_path(data_root),
+        config::canvas_capture_attempt_path(data_root),
+        config::canvas_capture_state_lock_path(data_root),
+    )
+}
+
+const CAPTURE_DOWNLOAD_REQUEST_MAX_BYTES: usize = 64 * 1024;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CaptureDownloadRequest {
+    file_id: u64,
+    #[serde(default)]
+    verifier_url: Option<String>,
+    #[serde(default)]
+    browser_source_url: Option<String>,
+    #[serde(default)]
+    browser_location_url: Option<String>,
+    #[serde(default)]
+    browser_staged_path: Option<std::path::PathBuf>,
+    #[serde(default)]
+    browser_byte_count: Option<u64>,
+    #[serde(default)]
+    browser_content_type: Option<String>,
+    staging_directory: std::path::PathBuf,
+    expected_size: Option<u64>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CaptureDownloadReceipt {
+    file_id: u64,
+    staged_file: String,
+    byte_count: u64,
+    sha256: String,
+    content_type: &'static str,
+    hash_scope: &'static str,
+    source_authenticity: &'static str,
+}
+
+/// Runs the one-request private-pipe file helper. Download URLs are accepted only in bounded stdin
+/// JSON, never as arguments or files; stdout contains a content-free staged-byte receipt.
+pub fn run_capture_download_helper() -> Result<(), &'static str> {
+    use std::io::{Read, Write};
+
+    let mut input = Vec::new();
+    std::io::stdin()
+        .lock()
+        .take((CAPTURE_DOWNLOAD_REQUEST_MAX_BYTES + 1) as u64)
+        .read_to_end(&mut input)
+        .map_err(|_| "request-read-failed")?;
+    if input.len() > CAPTURE_DOWNLOAD_REQUEST_MAX_BYTES {
+        return Err("request-too-large");
+    }
+    let request: CaptureDownloadRequest =
+        serde_json::from_slice(&input).map_err(|_| "invalid-request")?;
+    if request.file_id == 0
+        || request
+            .verifier_url
+            .as_ref()
+            .is_some_and(|url| url.len() > 16 * 1024)
+        || request
+            .browser_source_url
+            .as_ref()
+            .is_some_and(|url| url.len() > 16 * 1024)
+        || request
+            .browser_location_url
+            .as_ref()
+            .is_some_and(|url| url.len() > 16 * 1024)
+        || request.browser_staged_path.as_ref().is_some_and(|path| {
+            !path.is_absolute() || path.to_str().map_or(true, |value| value.len() > 16 * 1024)
+        })
+        || request
+            .browser_content_type
+            .as_ref()
+            .is_some_and(|value| value.len() > 256 || value.chars().any(char::is_control))
+    {
+        return Err("invalid-request");
+    }
+    let CaptureDownloadRequest {
+        file_id,
+        verifier_url,
+        browser_source_url,
+        browser_location_url,
+        browser_staged_path,
+        browser_byte_count,
+        browser_content_type,
+        staging_directory,
+        expected_size,
+    } = request;
+    let staging = capture_archive::StagingDirectory::open(&staging_directory)
+        .map_err(|_| "unsafe-staging-directory")?;
+    #[cfg(feature = "test-overrides")]
+    let downloads = downloads::DownloadClient::from_test_environment()
+        .map_err(|_| "download-client-unavailable")?;
+    #[cfg(not(feature = "test-overrides"))]
+    let downloads = downloads::DownloadClient::new().map_err(|_| "download-client-unavailable")?;
+    let result = match (
+        verifier_url,
+        browser_source_url,
+        browser_location_url,
+        browser_staged_path,
+        browser_byte_count,
+        browser_content_type,
+    ) {
+        (Some(verifier_url), None, None, None, None, None) => {
+            downloads.download_file_to_staging(&verifier_url, file_id, expected_size, &staging)
+        }
+        (None, Some(source_url), Some(location_url), None, None, None) => downloads
+            .download_file_to_staging_from_browser_location(
+                &source_url,
+                &location_url,
+                file_id,
+                expected_size,
+                &staging,
+            ),
+        (None, None, None, Some(path), Some(byte_count), content_type) => downloads
+            .adopt_browser_staged_file(
+                &path,
+                file_id,
+                byte_count,
+                expected_size,
+                content_type.as_deref(),
+                &staging,
+            ),
+        _ => return Err("invalid-request"),
+    }
+    .map_err(|error| error.code())?;
+    let receipt = CaptureDownloadReceipt {
+        file_id: result.file_id,
+        staged_file: result.blob.basename,
+        byte_count: result.blob.byte_count,
+        sha256: result.blob.sha256,
+        content_type: result.content_type,
+        hash_scope: "staged-bytes-only",
+        source_authenticity: "unverified",
+    };
+    let mut output = serde_json::to_vec(&receipt).map_err(|_| "receipt-encode-failed")?;
+    output.push(b'\n');
+    std::io::stdout()
+        .lock()
+        .write_all(&output)
+        .map_err(|_| "receipt-write-failed")
+}
+
+#[cfg(test)]
+#[path = "capture_download_helper_tests.rs"]
+mod capture_download_helper_tests;
 
 #[cfg(test)]
 pub(crate) mod testutil {
