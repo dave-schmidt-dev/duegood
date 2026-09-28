@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { fixedCanvasDownloadHelperPath, prepareCanvasHelper } from "../../scripts/prepare-canvas-helper.mjs";
+import { fixedCanvasBrowserImportHelperPath, fixedCanvasCaptureStateHelperPath, fixedCanvasDownloadHelperPath, prepareCanvasHelper } from "../../scripts/prepare-canvas-helper.mjs";
 
 const directories: string[] = [];
 const testMarker = "duegood-feature:test-overrides";
@@ -61,7 +61,7 @@ async function expectHelperStageCleaned(sourceCheckout: string): Promise<void> {
   expect(await readdir(path.join(stageParent, ".locks"))).toEqual([]);
 }
 
-function fakeTool({ bytes = Buffer.from("synthetic production helper"), failCargo = false } = {}) {
+function fakeTool({ bytes = Buffer.from("synthetic production helper"), failCargo = false, omitImport = false } = {}) {
   const calls: Array<{ command: string; args: string[]; options: { cwd?: string; env?: NodeJS.ProcessEnv } }> = [];
   const run = async (command: string, args: string[], options: {
     cwd?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal; capture?: boolean;
@@ -69,11 +69,15 @@ function fakeTool({ bytes = Buffer.from("synthetic production helper"), failCarg
     calls.push({ command: path.basename(command), args, options });
     if (command === "cargo") {
       if (failCargo) throw new Error("synthetic compiler failure");
-      const executableName = process.platform === "win32" ? "duegood-capture-download.exe" : "duegood-capture-download";
-      const output = path.join(options.env?.CARGO_TARGET_DIR ?? "", "release", executableName);
-      await mkdir(path.dirname(output), { recursive: true });
-      await writeFile(output, bytes, { mode: 0o700 });
-      await chmod(output, 0o700);
+      const extension = process.platform === "win32" ? ".exe" : "";
+      const releaseDirectory = path.join(options.env?.CARGO_TARGET_DIR ?? "", "release");
+      await mkdir(releaseDirectory, { recursive: true });
+      for (const executable of ["duegood-capture-download", "duegood-capture-state", "duegood-browser-import"]) {
+        if (omitImport && executable === "duegood-browser-import") continue;
+        const output = path.join(releaseDirectory, `${executable}${extension}`);
+        await writeFile(output, bytes, { mode: 0o700 });
+        await chmod(output, 0o700);
+      }
       return { stdout: "", stderr: "" };
     }
     if (command === "rustc") return { stdout: "aarch64-apple-darwin\n", stderr: "" };
@@ -88,7 +92,7 @@ afterEach(async () => {
 });
 
 describe("prepareCanvasHelper", () => {
-  it("builds only the release binary, ad hoc signs on macOS, and atomically installs owner-only bytes", async () => {
+  it("builds, signs, and atomically installs all three owner-only capture helpers", async () => {
     const setupValue = await setup();
     const productionBytes = Buffer.from(`synthetic helper ${releaseMarker}`);
     const fake = fakeTool({ bytes: productionBytes });
@@ -102,7 +106,11 @@ describe("prepareCanvasHelper", () => {
     });
 
     expect(installed.path).toBe(fixedCanvasDownloadHelperPath(setupValue.homeDirectory));
+    expect(installed.stateHelperPath).toBe(fixedCanvasCaptureStateHelperPath(setupValue.homeDirectory));
+    expect(installed.importPath).toBe(fixedCanvasBrowserImportHelperPath(setupValue.homeDirectory));
     expect(await readFile(installed.path)).toEqual(productionBytes);
+    expect(await readFile(installed.stateHelperPath)).toEqual(productionBytes);
+    expect(await readFile(installed.importPath)).toEqual(productionBytes);
     expect((await stat(installed.path)).mode & 0o777).toBe(0o700);
     expect((await stat(path.dirname(installed.path))).mode & 0o777).toBe(0o700);
     expect((await stat(path.dirname(path.dirname(installed.path)))).mode & 0o777).toBe(0o700);
@@ -120,16 +128,20 @@ describe("prepareCanvasHelper", () => {
     expect((await stat(sharedCargoTarget)).isDirectory()).toBe(true);
     expect(cargo?.args).toContain("--release");
     expect(cargo?.args).toContain("--no-default-features");
+    expect(cargo?.args.filter((arg) => arg === "--bin")).toHaveLength(3);
+    expect(cargo?.args).toContain("duegood-browser-import");
     expect(cargo?.args).not.toContain("--features");
     expect(fake.calls.filter((call) => call.command === "codesign").map((call) => call.args[0]))
-      .toEqual(["--force", "--verify", "--display"]);
-    expect(progress).toContain("helper installed and ready");
+      .toEqual(["--force", "--verify", "--display", "--force", "--verify", "--display", "--force", "--verify", "--display"]);
+    expect(progress).toContain("helpers installed and ready");
 
     const replacementBytes = Buffer.from(`replacement helper ${releaseMarker}`);
     const replacement = fakeTool({ bytes: replacementBytes });
     await prepareCanvasHelper({ ...setupValue, platform: "darwin", run: replacement.run });
     expect(await readFile(installed.path)).toEqual(replacementBytes);
-    expect(await readdir(path.dirname(installed.path))).toEqual(["duegood-capture-download"]);
+    expect(await readFile(installed.stateHelperPath)).toEqual(replacementBytes);
+    expect(await readFile(installed.importPath)).toEqual(replacementBytes);
+    expect(await readdir(path.dirname(installed.path))).toEqual(["duegood-browser-import", "duegood-capture-download", "duegood-capture-state"]);
     expect(replacement.calls.find((call) => call.command === "cargo")?.options.env?.CARGO_TARGET_DIR)
       .toBe(sharedCargoTarget);
     expect((await stat(sharedCargoTarget)).isDirectory()).toBe(true);
@@ -150,17 +162,35 @@ describe("prepareCanvasHelper", () => {
     expect(fake.calls.some((call) => call.command === "codesign")).toBe(false);
   });
 
+  it("rejects a missing browser import binary before installing any helper and cleans its stage", async () => {
+    const setupValue = await setup();
+    const fake = fakeTool({ bytes: Buffer.from(`synthetic helper ${releaseMarker}`), omitImport: true });
+
+    await expect(prepareCanvasHelper({ ...setupValue, platform: "linux", run: fake.run }))
+      .rejects.toMatchObject({ phase: "verifying" });
+
+    expect(await readdir(setupValue.temporaryDirectory)).toEqual([]);
+    await expectHelperStageCleaned(setupValue.sourceCheckout);
+    await expect(readFile(fixedCanvasDownloadHelperPath(setupValue.homeDirectory)))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(fixedCanvasCaptureStateHelperPath(setupValue.homeDirectory)))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(fixedCanvasBrowserImportHelperPath(setupValue.homeDirectory)))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("keeps an installed helper intact when a later release compilation fails", async () => {
     const setupValue = await setup();
     const originalBytes = Buffer.from("first good helper");
     const first = fakeTool({ bytes: originalBytes });
-    await prepareCanvasHelper({ ...setupValue, platform: "linux", run: first.run });
+    const installed = await prepareCanvasHelper({ ...setupValue, platform: "linux", run: first.run });
 
     const failing = fakeTool({ failCargo: true });
     await expect(prepareCanvasHelper({ ...setupValue, platform: "linux", run: failing.run }))
       .rejects.toMatchObject({ phase: "compiling" });
 
     expect(await readFile(fixedCanvasDownloadHelperPath(setupValue.homeDirectory))).toEqual(originalBytes);
+    expect(await readFile(installed.importPath)).toEqual(originalBytes);
     expect(await readdir(setupValue.temporaryDirectory)).toEqual([]);
     await expectHelperStageCleaned(setupValue.sourceCheckout);
   });
@@ -174,7 +204,7 @@ describe("prepareCanvasHelper", () => {
       ...setupValue,
       platform: "linux",
       signal: controller.signal,
-      compile: async ({ signal }) => new Promise<string>((_resolve, reject) => {
+      compile: async ({ signal }) => new Promise<{ downloadBinaryPath: string; stateBinaryPath: string; importBinaryPath: string }>((_resolve, reject) => {
         markCompiling();
         signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
       }),

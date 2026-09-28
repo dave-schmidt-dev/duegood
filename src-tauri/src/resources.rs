@@ -10,6 +10,10 @@ use tauri::Runtime;
 
 use crate::config::ReadLimits;
 use crate::import::{is_course_folder_name, is_plain_basename};
+use crate::resources_save::{
+    copy_verified_archive_file, ensure_destination_is_open_file, quarantine_saved_copy,
+    remove_destination_if_same_file, ArchivedReceipt,
+};
 use crate::store::{create_private_file, Store, StoreError};
 
 /// The types explicitly allowed to open through the system handler.
@@ -83,6 +87,17 @@ pub fn resolve_resource(store: &Store, id: &str) -> Result<PathBuf, StoreError> 
 }
 
 fn resolve_resource_locked(store: &Store, id: &str) -> Result<PathBuf, StoreError> {
+    Ok(resolve_named_resource_locked(store, id)?.path)
+}
+
+struct ResolvedResource {
+    path: PathBuf,
+    name: String,
+    archived: bool,
+    archive_receipt: Option<ArchivedReceipt>,
+}
+
+fn resolve_named_resource_locked(store: &Store, id: &str) -> Result<ResolvedResource, StoreError> {
     if id.len() > 300 || !id.contains(":file:") {
         return Err(StoreError::Invalid("unknown library resource"));
     }
@@ -136,6 +151,45 @@ fn resolve_resource_locked(store: &Store, id: &str) -> Result<PathBuf, StoreErro
         if !known {
             continue;
         }
+        if let Some(entry) = manifest.as_array().and_then(|entries| {
+            entries.iter().find(|entry| {
+                entry.get("fileId").and_then(id_text).as_deref() == Some(file_id)
+                    && entry["status"] == "saved"
+            })
+        }) {
+            let hash = entry["sha256"]
+                .as_str()
+                .ok_or(StoreError::Invalid("invalid archive reference"))?;
+            let size = entry["byteCount"]
+                .as_u64()
+                .ok_or(StoreError::Invalid("invalid archive reference"))?;
+            let content_type = entry["contentType"]
+                .as_str()
+                .ok_or(StoreError::Invalid("invalid archive reference"))?;
+            let path = crate::browser_resources::verified_blob(
+                store.data_root(),
+                hash,
+                size,
+                content_type,
+            )
+            .map_err(|_| StoreError::Invalid("archived library file is missing or unverified"))?;
+            let name = entry
+                .get("name")
+                .or_else(|| entry.get("filename"))
+                .and_then(Value::as_str)
+                .filter(|name| is_plain_basename(name))
+                .unwrap_or("canvas-file")
+                .to_owned();
+            return Ok(ResolvedResource {
+                path,
+                name,
+                archived: true,
+                archive_receipt: Some(ArchivedReceipt {
+                    sha256: hash.to_owned(),
+                    byte_count: size,
+                }),
+            });
+        }
         let Some(name) = manifest.as_array().and_then(|list| {
             list.iter().find_map(|entry| {
                 if entry.get("id").and_then(id_text).as_deref() != Some(file_id)
@@ -180,7 +234,12 @@ fn resolve_resource_locked(store: &Store, id: &str) -> Result<PathBuf, StoreErro
         {
             return Err(StoreError::Invalid("library file leaves materials"));
         }
-        return Ok(canonical_file);
+        return Ok(ResolvedResource {
+            path: canonical_file,
+            name: name.to_owned(),
+            archived: false,
+            archive_receipt: None,
+        });
     }
     Err(StoreError::Invalid("unknown library resource"))
 }
@@ -192,21 +251,18 @@ pub fn open_resource(
     handler: &dyn ResourceHandler,
 ) -> Result<ResourceAction, StoreError> {
     let _read_lock = store.read_lock()?;
-    let path = resolve_resource_locked(store, id)?;
-    let extension = path
+    let resource = resolve_named_resource_locked(store, id)?;
+    let extension = resource
+        .path
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    if SAFE_OPEN_TYPES.contains(&extension.as_str()) {
-        handler.open_safe(&path)?;
+    if !resource.archived && SAFE_OPEN_TYPES.contains(&extension.as_str()) {
+        handler.open_safe(&resource.path)?;
         return Ok(ResourceAction::Opened);
     }
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or(StoreError::Invalid("invalid library filename"))?;
-    let Some(destination) = handler.save_destination(name) else {
+    let Some(destination) = handler.save_destination(&resource.name) else {
         return Ok(ResourceAction::Cancelled);
     };
     let parent = destination
@@ -215,116 +271,43 @@ pub fn open_resource(
     if !fs::symlink_metadata(parent)?.is_dir() {
         return Err(StoreError::Invalid("invalid download destination"));
     }
-    let mut source = File::open(path)?;
+    let mut legacy_source = if resource.archived {
+        None
+    } else {
+        Some(File::open(&resource.path)?)
+    };
     let mut target = create_private_file(&destination)?;
-    io::copy(&mut source, &mut target)?;
-    target.sync_all()?;
+    let copied = (|| -> Result<(), StoreError> {
+        if resource.archived {
+            let receipt = resource
+                .archive_receipt
+                .as_ref()
+                .ok_or(StoreError::Invalid("archived library receipt is missing"))?;
+            copy_verified_archive_file(&resource.path, receipt, &mut target)?;
+        } else if let Some(source) = legacy_source.as_mut() {
+            io::copy(source, &mut target)?;
+        }
+        target.sync_all()?;
+        if resource.archived {
+            ensure_destination_is_open_file(&destination, &target)?;
+            quarantine_saved_copy(&target)
+                .map_err(|_| StoreError::Invalid("saved library file could not be quarantined"))?;
+            target.sync_all()?;
+            ensure_destination_is_open_file(&destination, &target)?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = copied {
+        let target_metadata = target.metadata().ok();
+        drop(target);
+        if let Some(metadata) = target_metadata {
+            remove_destination_if_same_file(&destination, &metadata);
+        }
+        return Err(error);
+    }
     Ok(ResourceAction::Downloaded)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::MANIFEST_FILE;
-    use crate::store::{atomic_write, create_private_dir, new_preview_manifest, node_json_bytes};
-    use crate::testutil::TempRoot;
-    use std::sync::Mutex;
-    use std::time::{Duration, SystemTime};
-
-    struct Double {
-        saved: PathBuf,
-        opened: Mutex<Vec<PathBuf>>,
-        save_calls: Mutex<u32>,
-    }
-    impl ResourceHandler for Double {
-        fn save_destination(&self, _: &str) -> Option<PathBuf> {
-            *self.save_calls.lock().unwrap() += 1;
-            Some(self.saved.clone())
-        }
-        fn open_safe(&self, path: &Path) -> io::Result<()> {
-            self.opened.lock().unwrap().push(path.to_path_buf());
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn ids_are_confined_and_safe_types_use_only_the_double() {
-        let temp = TempRoot::new("resources");
-        let store = Store::open(temp.path(), Duration::from_millis(200)).unwrap();
-        let root = store.store_dir();
-        create_private_dir(&root, false).unwrap();
-        atomic_write(
-            &root.join(MANIFEST_FILE),
-            &node_json_bytes(&new_preview_manifest(1, 1, "x", SystemTime::now())),
-        )
-        .unwrap();
-        atomic_write(
-            &root.join("coursework.json"),
-            &node_json_bytes(
-                &serde_json::json!({ "courses": [{ "key": "syn", "folder": "syn" }], "items": [] }),
-            ),
-        )
-        .unwrap();
-        let base = root.join("classes/syn/canvas-export");
-        for dir in [
-            root.join("classes"),
-            root.join("classes/syn"),
-            base.clone(),
-            base.join("api"),
-            root.join("classes/syn/materials"),
-        ] {
-            create_private_dir(&dir, false).unwrap();
-        }
-        atomic_write(
-            &base.join("api/files.json"),
-            &node_json_bytes(&serde_json::json!([{ "id": 1 }, { "id": 2 }, { "id": 3 }])),
-        )
-        .unwrap();
-        atomic_write(
-            &base.join("download-manifest.json"),
-            &node_json_bytes(&serde_json::json!([
-                { "id": 1, "status": "downloaded", "filename": "guide.pdf" },
-                { "id": 2, "status": "downloaded", "filename": "archive.bin" },
-                { "id": 3, "status": "downloaded", "filename": "outside.txt" }
-            ])),
-        )
-        .unwrap();
-        let materials = root.join("classes/syn/materials");
-        atomic_write(&materials.join("guide.pdf"), b"%PDF synthetic").unwrap();
-        atomic_write(&materials.join("archive.bin"), b"synthetic binary").unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(
-            temp.path().join("outside.txt"),
-            materials.join("outside.txt"),
-        )
-        .unwrap();
-        atomic_write(&temp.path().join("outside.txt"), b"outside").unwrap();
-        let handler = Double {
-            saved: temp.path().join("saved.bin"),
-            opened: Mutex::new(Vec::new()),
-            save_calls: Mutex::new(0),
-        };
-        assert_eq!(
-            open_resource(&store, "syn:file:1", &handler).unwrap(),
-            ResourceAction::Opened
-        );
-        assert_eq!(handler.opened.lock().unwrap().len(), 1);
-        assert_eq!(
-            open_resource(&store, "syn:file:2", &handler).unwrap(),
-            ResourceAction::Downloaded
-        );
-        assert_eq!(fs::read(&handler.saved).unwrap(), b"synthetic binary");
-        assert_eq!(*handler.save_calls.lock().unwrap(), 1);
-        for id in ["syn:file:999", "../syn:file:1", "/syn:file:1", "syn:file:3"] {
-            assert!(resolve_resource(&store, id).is_err());
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                fs::metadata(&handler.saved).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
-    }
-}
+#[path = "resources_tests.rs"]
+mod tests;

@@ -469,8 +469,8 @@ describe("guarded Canvas browser API reader", () => {
       $id: string;
       properties: { schemaVersion: { const: number }; source: { const: string } };
     };
-    expect(schema.$id).toBe("https://schemas.duegood.invalid/canvas-capture/v1.json");
-    expect(schema.properties.schemaVersion.const).toBe(1);
+    expect(schema.$id).toBe("https://schemas.duegood.invalid/canvas-capture/v2.json");
+    expect(schema.properties.schemaVersion.const).toBe(2);
     expect(schema.properties.source.const).toBe("canvas-browser");
   });
 });

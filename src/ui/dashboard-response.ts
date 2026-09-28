@@ -14,6 +14,7 @@ import {
   type DashboardPendingSourceLink,
   safeLocalHref,
 } from "./pages/dashboard";
+import { parseBrowserFreshness, type BrowserFreshness } from "../shared/browser-freshness";
 
 function record(value: unknown): Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function text(value: unknown, fallback = ""): string { return typeof value === "string" ? value : fallback; }
@@ -156,9 +157,10 @@ function parsePendingSourceLink(value: unknown): DashboardPendingSourceLink | un
   return { id, localId, courseId, reference: { source, id: referenceId, institution, course: referenceCourse, ...(optionalText(reference.instance) === undefined ? {} : { instance: optionalText(reference.instance) }) }, fields, ...(observedAt === undefined ? {} : { observedAt }), candidateIds: candidates, reason, ...(item.needsRefresh === true ? { needsRefresh: true } : {}) };
 }
 
-export function parseDashboard(value: unknown): DashboardData {
+export function parseDashboard(value: unknown): DashboardData & { readonly sourceStatus: DashboardSourceStatus & { readonly browserFreshness?: BrowserFreshness } } {
   const body = record(value); const source = record(body.sourceStatus);
-  const sourceStatus: DashboardSourceStatus = { ...(optionalText(source.state) === undefined ? {} : { state: optionalText(source.state) }), ...(optionalText(source.label) === undefined ? {} : { label: optionalText(source.label) }), ...(optionalText(source.detail) === undefined ? {} : { detail: optionalText(source.detail) }), ...(timestamp(source.lastRefreshAt) === undefined ? {} : { lastRefreshAt: timestamp(source.lastRefreshAt) }) };
+  const browserFreshness = source.browserFreshness === undefined ? undefined : parseBrowserFreshness(source.browserFreshness);
+  const sourceStatus = { ...(optionalText(source.state) === undefined ? {} : { state: optionalText(source.state) }), ...(optionalText(source.label) === undefined ? {} : { label: optionalText(source.label) }), ...(optionalText(source.detail) === undefined ? {} : { detail: optionalText(source.detail) }), ...(timestamp(source.lastRefreshAt) === undefined ? {} : { lastRefreshAt: timestamp(source.lastRefreshAt) }), ...(browserFreshness === undefined ? {} : { browserFreshness }) };
   return {
     version: typeof body.version === "string" ? body.version : typeof body.version === "number" && Number.isFinite(body.version) ? String(body.version) : "",
     courses: rows(body.courses).map(parseCourse).filter((item): item is DashboardCourse => item !== undefined),

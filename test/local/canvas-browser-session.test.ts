@@ -143,18 +143,35 @@ async function waitForReady(socketPath: string) {
   throw new Error("broker did not become ready");
 }
 
-function syntheticSnapshot(userId: number) {
+function syntheticSnapshot(userId: number, runId = 99, generationId = "e".repeat(32)) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     source: "canvas-browser",
+    runId,
+    generationId,
     capturedAt: "2026-09-27T12:00:00.000Z",
     identity: { origin: "https://marymount.instructure.com", userId },
-    resources: [{ endpoint: "profile", courseId: null, pages: 1, items: [{ id: userId, name: "synthetic private body" }] }],
+    activeCourses: { complete: true, courseIds: [] },
+    coverageRequirements: { activeCoursesComplete: true,
+      perActiveCourse: ["course", "assignments", "assignmentGroups", "submissions"] },
+    resources: [
+      { endpoint: "profile", courseId: null, pages: 1, items: [{ id: userId, name: "synthetic private body" }] },
+      { endpoint: "coursesActive", courseId: null, pages: 1, items: [] },
+    ],
     coverage: [
       { endpoint: "profile", courseId: null, status: "complete" },
+      { endpoint: "coursesActive", courseId: null, status: "complete" },
       { endpoint: "fileBodies", courseId: null, status: "gap", reason: "not-attempted" },
     ],
   };
+}
+
+async function syntheticRunLease({ run }: { run: (runId: number) => Promise<{
+  terminal?: Record<string, unknown>; value?: unknown;
+}> }) {
+  const outcome = await run(52);
+  if (outcome.terminal?.status !== "captured") throw new Error("synthetic capture lease failed");
+  return outcome.value;
 }
 
 function captureBrokerProgram() {
@@ -171,8 +188,9 @@ function captureBrokerProgram() {
       socketPath: path.join(directory, "session.sock"),
       launchContext: async () => context,
       identity: async ({ context: activeContext }) => activeContext === context ? 41 : undefined,
-      capture: async ({ context: activeContext, expectedUserId, progress }) => {
+      capture: async ({ context: activeContext, expectedUserId, protocolVersion, progress }) => {
         if (activeContext !== context) throw new Error("context was not reused");
+        if (protocolVersion !== 2) throw new Error("current broker did not request schema v2");
         runs += 1;
         progress("CAPTURE_RUNNING");
         if (expectedUserId === 42) return ${JSON.stringify(syntheticSnapshot(41))};
@@ -182,6 +200,7 @@ function captureBrokerProgram() {
         ] };
         if (expectedUserId === 44) return { ...${JSON.stringify(syntheticSnapshot(44))}, coverage: [
           { endpoint: "profile", courseId: null, status: "complete" },
+          { endpoint: "coursesActive", courseId: null, status: "complete" },
           { endpoint: "quizzes", courseId: 88, status: "gap", reason: "not-found" },
           { endpoint: "fileBodies", courseId: null, status: "gap", reason: "not-attempted" },
         ] };
@@ -212,7 +231,8 @@ function delayedBrokerProgram() {
         await delay(100);
         return { status: "PARTIAL", checks: { apiShapePagination: "OK" } };
       },
-      capture: async ({ expectedUserId, progress }) => {
+      capture: async ({ expectedUserId, protocolVersion, progress }) => {
+        if (protocolVersion !== 2) throw new Error("current broker did not request schema v2");
         progress("CAPTURE_RUNNING");
         await delay(50);
         return { ...${JSON.stringify(syntheticSnapshot(41))}, identity: {
@@ -314,7 +334,7 @@ describe("Canvas session broker process protocol", () => {
       expect((await sendCommand(socketPath, "probe")).final)
         .toMatchObject({ status: "PARTIAL", checks: { apiShapePagination: "OK" } });
       expect((await sendCommand(socketPath, { command: "capture", expectedUserId: 41 })).final)
-        .toMatchObject({ status: "PARTIAL", resourceCount: 1, fileBodiesIncomplete: true });
+        .toMatchObject({ status: "PARTIAL", resourceCount: 2, fileBodiesIncomplete: true });
       expect((await sendCommand(socketPath, "status")).final).toEqual({ status: "READY" });
 
       let signalRunning!: () => void;
@@ -396,7 +416,7 @@ describe("Canvas session broker process protocol", () => {
 
       const first = await sendCommand(socketPath, { command: "capture", expectedUserId: 41 });
       expect(first.final).toEqual({
-        status: "PARTIAL", resourceCount: 1, itemCount: 1, gapCount: 1, fileBodiesIncomplete: true,
+        status: "PARTIAL", resourceCount: 2, itemCount: 1, gapCount: 1, fileBodiesIncomplete: true,
       });
       expect(first.frames).toContainEqual({ progress: "CAPTURE_RUNNING" });
       expect(first.frames).toContainEqual({ progress: "CAPTURE_SAVING" });
@@ -410,13 +430,17 @@ describe("Canvas session broker process protocol", () => {
       expect(JSON.parse(saved)).toMatchObject({
         complete: false,
         identity: { userId: 41 },
-        coverage: [{ endpoint: "profile", status: "complete" }, { endpoint: "fileBodies", status: "gap" }],
+        coverage: [
+          { endpoint: "profile", status: "complete" },
+          { endpoint: "coursesActive", status: "complete" },
+          { endpoint: "fileBodies", status: "gap" },
+        ],
       });
       expect(saved).toContain("synthetic private body");
 
       await waitForReady(socketPath);
       const second = await sendCommand(socketPath, { command: "capture", expectedUserId: 41 });
-      expect(second.final).toMatchObject({ status: "PARTIAL", resourceCount: 1, itemCount: 1 });
+      expect(second.final).toMatchObject({ status: "PARTIAL", resourceCount: 2, itemCount: 1 });
       expect(await readFile(snapshotPath, "utf8")).toBe(saved);
       expect((await readdir(directory)).some((entry) => entry.endsWith(".tmp"))).toBe(false);
 
@@ -433,7 +457,7 @@ describe("Canvas session broker process protocol", () => {
     }
   });
 
-  it("reuses the existing same-origin page for each capture without navigation or closure", async () => {
+  it("keeps a v1 broker view transient while the durable archive and current broker stay v2", async () => {
     const page = {
       url: () => "https://marymount.instructure.com/",
       isClosed: () => false,
@@ -447,22 +471,40 @@ describe("Canvas session broker process protocol", () => {
     const collector = vi.fn(async ({
       page: capturePage,
       expectedUserId,
+      runId,
+      generationId,
     }: {
       page: typeof page;
       expectedUserId: number;
+      runId: number;
+      generationId: string;
     }) => {
       expect(capturePage).toBe(page);
-      return syntheticSnapshot(expectedUserId);
+      return syntheticSnapshot(expectedUserId, runId, generationId);
     });
     const progress = vi.fn();
     const appDirectory = await tempDirectory();
     const helperPath = path.join(appDirectory, "synthetic-helper");
     await writeFile(helperPath, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
-    const saveGeneration = vi.fn(async ({ snapshot }) => ({ generationId: "synthetic", blobCount: 0,
+    const stateHelperPath = path.join(appDirectory, "synthetic-state-helper");
+    await writeFile(stateHelperPath, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    const saveGeneration = vi.fn(async ({ snapshot, generationId }) => ({ generationId,
+      snapshotSha256: "f".repeat(64), blobCount: 0,
       archivedSnapshot: snapshot }));
 
-    await runCanvasCapture({ context, expectedUserId: 41, progress, collector, appDirectory, helperPath, saveGeneration });
-    await runCanvasCapture({ context, expectedUserId: 41, progress, collector, appDirectory, helperPath, saveGeneration });
+    const legacyView = await runCanvasCapture({ context, expectedUserId: 41, progress, collector, appDirectory, helperPath,
+      stateHelperPath, withRunLease: syntheticRunLease, saveGeneration });
+    const currentView = await runCanvasCapture({ context, expectedUserId: 41, protocolVersion: 2,
+      progress, collector, appDirectory, helperPath,
+      stateHelperPath, withRunLease: syntheticRunLease, saveGeneration });
+
+    expect(legacyView).toMatchObject({ schemaVersion: 1, source: "canvas-browser", complete: false });
+    expect(legacyView).not.toHaveProperty("runId");
+    expect(legacyView).not.toHaveProperty("generationId");
+    expect(currentView).toMatchObject({ schemaVersion: 2, runId: 52,
+      generationId: expect.stringMatching(/^[a-f0-9]{32}$/u) });
+    expect(saveGeneration.mock.calls.every(([value]) => value.snapshot.schemaVersion === 2
+      && value.snapshot.runId === 52 && value.snapshot.generationId === value.generationId)).toBe(true);
 
     expect(context.pages).toHaveBeenCalledTimes(2);
     expect(context.newPage).not.toHaveBeenCalled();

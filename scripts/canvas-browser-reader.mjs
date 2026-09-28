@@ -29,7 +29,7 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
   const allowedInputKeys = new Set([
     "mode", "endpoint", "courseId", "fileId", "conversationId", "expectedUserId", "perPage",
     "assignmentId", "pageSlug", "moduleId", "topicId", "entryId", "quizId",
-    "calendarStart", "calendarEnd",
+    "calendarStart", "calendarEnd", "allEvents", "groupId", "folderId", "accountId", "calendarContextCode",
     "maxPages", "maxItems", "maxBytes", "timeoutMs",
   ]);
   if (input === null || typeof input !== "object" || Array.isArray(input)
@@ -63,6 +63,30 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
   function courseRoute(values, suffix, list = true, optionalDenied = false) {
     if (!positiveId(values.courseId)) fail(codes.invalid);
     return { path: `/api/v1/courses/${values.courseId}${suffix}`, list, courseId: values.courseId, expectedContextCode: `course_${values.courseId}`, optionalDenied, fixed: {} };
+  }
+  function groupRoute(values, suffix, list = true, optionalDenied = true) {
+    if (!positiveId(values.groupId)) fail(codes.invalid);
+    return {
+      path: `/api/v1/groups/${values.groupId}${suffix}`,
+      list,
+      expectedContextCode: `group_${values.groupId}`,
+      optionalDenied,
+      fixed: {},
+    };
+  }
+  function expectedCalendarContext(values) {
+    const scopes = [
+      ["course", values.courseId],
+      ["group", values.groupId],
+      ["account", values.accountId],
+    ].filter(([, id]) => id !== undefined);
+    if (scopes.length === 0) scopes.push(["user", values.expectedUserId]);
+    if (scopes.length !== 1 || !positiveId(scopes[0][1])) fail(codes.invalid);
+    const [type, id] = scopes[0];
+    if (type === "user" && id !== values.expectedUserId) fail(codes.invalid);
+    const expected = `${type}_${id}`;
+    if (values.calendarContextCode !== expected) fail(codes.invalid);
+    return expected;
   }
   function pageSlug(value) {
     return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/.test(value);
@@ -108,17 +132,28 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
       case "page":
         if (!positiveId(values.courseId) || !pageSlug(values.pageSlug)) fail(codes.invalid);
         return { path: `/api/v1/courses/${values.courseId}/pages/${values.pageSlug}`, list: false, courseId: values.courseId, expectedContextCode: `course_${values.courseId}`, optionalDenied: true, fixed: {} };
+      case "groupPages": return groupRoute(values, "/pages");
+      case "groupPage":
+        if (!pageSlug(values.pageSlug)) fail(codes.invalid);
+        return groupRoute(values, `/pages/${values.pageSlug}`, false);
       case "modules": return courseRoute(values, "/modules", true, true);
       case "moduleItems":
         if (!positiveId(values.courseId) || !positiveId(values.moduleId)) fail(codes.invalid);
         return { path: `/api/v1/courses/${values.courseId}/modules/${values.moduleId}/items`, list: true, courseId: values.courseId, expectedContextCode: `course_${values.courseId}`, optionalDenied: true, fixed: {} };
       case "discussions": return courseRoute(values, "/discussion_topics", true, true);
+      case "groupDiscussions": return groupRoute(values, "/discussion_topics");
       case "discussionEntries":
         if (!positiveId(values.courseId) || !positiveId(values.topicId)) fail(codes.invalid);
         return { path: `/api/v1/courses/${values.courseId}/discussion_topics/${values.topicId}/entries`, list: true, courseId: values.courseId, expectedContextCode: `course_${values.courseId}`, optionalDenied: true, fixed: {} };
+      case "groupDiscussionEntries":
+        if (!positiveId(values.topicId)) fail(codes.invalid);
+        return groupRoute(values, `/discussion_topics/${values.topicId}/entries`);
       case "discussionReplies":
         if (!positiveId(values.courseId) || !positiveId(values.topicId) || !positiveId(values.entryId)) fail(codes.invalid);
         return { path: `/api/v1/courses/${values.courseId}/discussion_topics/${values.topicId}/entries/${values.entryId}/replies`, list: true, courseId: values.courseId, expectedContextCode: `course_${values.courseId}`, optionalDenied: true, fixed: {} };
+      case "groupDiscussionReplies":
+        if (!positiveId(values.topicId) || !positiveId(values.entryId)) fail(codes.invalid);
+        return groupRoute(values, `/discussion_topics/${values.topicId}/entries/${values.entryId}/replies`);
       case "announcements":
         if (!positiveId(values.courseId)) fail(codes.invalid);
         return { path: "/api/v1/announcements", list: true, courseId: values.courseId, expectedContextCode: `course_${values.courseId}`, optionalDenied: true, fixed: { "context_codes[]": `course_${values.courseId}` } };
@@ -128,6 +163,17 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
         return { path: `/api/v1/courses/${values.courseId}/quizzes/${values.quizId}`, list: false, courseId: values.courseId, expectedContextCode: `course_${values.courseId}`, expectedId: values.quizId, optionalDenied: true, fixed: {} };
       case "courseFiles": return courseRoute(values, "/files", true, true);
       case "folders": return courseRoute(values, "/folders", true, true);
+      case "groupFolders": return groupRoute(values, "/folders");
+      case "groupFolderFiles":
+        if (!positiveId(values.groupId) || !positiveId(values.folderId)) fail(codes.invalid);
+        return {
+          path: `/api/v1/folders/${values.folderId}/files`,
+          list: true,
+          expectedOwnerContextType: "Group",
+          expectedOwnerContextId: values.groupId,
+          optionalDenied: true,
+          fixed: {},
+        };
       case "groups": return { path: "/api/v1/users/self/groups", list: true, optionalDenied: true, fixed: {} };
       case "personalFiles": return { path: "/api/v1/users/self/files", list: true, optionalDenied: true, fixed: {} };
       case "personalFolders": return { path: "/api/v1/users/self/folders", list: true, expectedOwnerContextType: "User", expectedOwnerContextId: values.expectedUserId, optionalDenied: true, fixed: {} };
@@ -143,19 +189,37 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
         return { path: `/api/v1/conversations/${values.conversationId}`, list: false, expectedId: values.conversationId, optionalDenied: true, fixed: { auto_mark_as_read: "false" } };
       case "file":
         if (!positiveId(values.fileId)) fail(codes.invalid);
+        if (values.groupId !== undefined) {
+          if (!positiveId(values.groupId)) fail(codes.invalid);
+          return {
+            path: `/api/v1/groups/${values.groupId}/files/${values.fileId}`,
+            list: false,
+            fileId: values.fileId,
+            expectedId: values.fileId,
+            expectedOwnerContextType: "Group",
+            expectedOwnerContextId: values.groupId,
+            optionalDenied: true,
+            fixed: {},
+          };
+        }
         return { path: `/api/v1/files/${values.fileId}`, list: false, fileId: values.fileId, expectedId: values.fileId, optionalDenied: true, fixed: {} };
       case "calendarEvents": {
-        const start = dateOnly(values.calendarStart);
-        const end = dateOnly(values.calendarEnd);
-        if (!positiveId(values.expectedUserId) || start === null || end === null
-            || end < start || end.getTime() - start.getTime() > 89 * 24 * 60 * 60 * 1000) fail(codes.invalid);
-        const contextCode = `user_${values.expectedUserId}`;
+        if (!positiveId(values.expectedUserId) || (values.allEvents !== undefined && values.allEvents !== true)) fail(codes.invalid);
+        const allEvents = values.allEvents === true;
+        const start = allEvents ? null : dateOnly(values.calendarStart);
+        const end = allEvents ? null : dateOnly(values.calendarEnd);
+        if (allEvents ? values.calendarStart !== undefined || values.calendarEnd !== undefined
+            : start === null || end === null || end < start || end.getTime() - start.getTime() > 89 * 24 * 60 * 60 * 1000) fail(codes.invalid);
+        const contextCode = expectedCalendarContext(values);
         return {
           path: "/api/v1/calendar_events",
           list: true,
           expectedContextCode: contextCode,
+          allEvents,
           optionalDenied: true,
-          fixed: { "context_codes[]": contextCode, start_date: values.calendarStart, end_date: values.calendarEnd },
+          fixed: allEvents
+            ? { "context_codes[]": contextCode, all_events: "true" }
+            : { "context_codes[]": contextCode, start_date: values.calendarStart, end_date: values.calendarEnd },
         };
       }
       default: fail(codes.invalid);
@@ -321,6 +385,9 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
       const rawNext = response.headers?.get?.("link") ?? response.headers?.get?.("Link") ?? null;
       const candidate = route.list ? nextUrl(rawNext, route, safeUrl.href) : null;
       if (samplePageLimit !== undefined && pages >= samplePageLimit && candidate !== null) {
+        return { status: "sampled", pages, items, hasNextPage: true };
+      }
+      if (route.allEvents === true && pages >= limits.pages && candidate !== null) {
         return { status: "sampled", pages, items, hasNextPage: true };
       }
       next = candidate;

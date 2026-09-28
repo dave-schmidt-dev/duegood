@@ -8,7 +8,7 @@ const json = (body: unknown, headers: Record<string, string> = {}): Response => 
 const profile = () => json({ id: 41, name: "Synthetic learner" });
 
 describe("identity-bound account Canvas reader routes", () => {
-  it("uses fixed personal, conversation, file-metadata, and bounded calendar GET shapes", async () => {
+  it("uses fixed personal, conversation, group, file-metadata, and bounded calendar GET shapes", async () => {
     const cases = [
       { input: { endpoint: "groups" }, path: "/api/v1/users/self/groups", search: "?per_page=100", item: { id: 6 } },
       { input: { endpoint: "personalFiles" }, path: "/api/v1/users/self/files", search: "?per_page=100", item: { id: 503 } },
@@ -18,20 +18,34 @@ describe("identity-bound account Canvas reader routes", () => {
       { input: { endpoint: "conversationsSent" }, path: "/api/v1/conversations", search: "?scope=sent&per_page=100", item: { id: 72 } },
       { input: { endpoint: "conversationsArchived" }, path: "/api/v1/conversations", search: "?scope=archived&per_page=100", item: { id: 73 } },
       {
-        input: { endpoint: "calendarEvents", calendarStart: "2026-01-01", calendarEnd: "2026-03-31", perPage: 17 },
+        input: { endpoint: "calendarEvents", calendarStart: "2026-01-01", calendarEnd: "2026-03-31", calendarContextCode: "user_41", perPage: 17 },
         path: "/api/v1/calendar_events",
         search: "?context_codes%5B%5D=user_41&start_date=2026-01-01&end_date=2026-03-31&per_page=17",
         item: { id: 91, context_code: "user_41" },
       },
+      { input: { endpoint: "groupFolders", groupId: 6 }, path: "/api/v1/groups/6/folders", search: "?per_page=100", item: { id: 60, context_type: "Group", context_id: 6, context_code: "group_6" } },
+      { input: { endpoint: "groupFolderFiles", groupId: 6, folderId: 60 }, path: "/api/v1/folders/60/files", search: "?per_page=100", item: { id: 503, context_type: "Group", context_id: 6 } },
+      { input: { endpoint: "groupPages", groupId: 6 }, path: "/api/v1/groups/6/pages", search: "?per_page=100", item: { id: 61, context_code: "group_6" } },
+      { input: { endpoint: "groupPage", groupId: 6, pageSlug: "overview" }, path: "/api/v1/groups/6/pages/overview", search: "", item: { id: 61, url: "overview", context_code: "group_6" }, detail: true },
+      { input: { endpoint: "groupDiscussions", groupId: 6 }, path: "/api/v1/groups/6/discussion_topics", search: "?per_page=100", item: { id: 62, context_code: "group_6" } },
+      { input: { endpoint: "groupDiscussionEntries", groupId: 6, topicId: 62 }, path: "/api/v1/groups/6/discussion_topics/62/entries", search: "?per_page=100", item: { id: 63, context_code: "group_6" } },
+      { input: { endpoint: "groupDiscussionReplies", groupId: 6, topicId: 62, entryId: 63 }, path: "/api/v1/groups/6/discussion_topics/62/entries/63/replies", search: "?per_page=100", item: { id: 64, context_code: "group_6" } },
+      { input: { endpoint: "file", groupId: 6, fileId: 503 }, path: "/api/v1/groups/6/files/503", search: "", item: { id: 503, context_type: "Group", context_id: 6 }, detail: true },
+      {
+        input: { endpoint: "calendarEvents", allEvents: true, calendarContextCode: "group_6", groupId: 6 },
+        path: "/api/v1/calendar_events",
+        search: "?context_codes%5B%5D=group_6&all_events=true&per_page=100",
+        item: { id: 92, context_code: "group_6" },
+      },
     ];
 
-    for (const { input, path, search, item } of cases) {
+    for (const { input, path, search, item, detail = false } of cases) {
       const calls: Array<{ url: URL; init: RequestInit }> = [];
       const fetcher = vi.fn(async (value: RequestInfo | URL, init: RequestInit = {}) => {
         const url = new URL(String(value));
         calls.push({ url, init });
         if (url.pathname === "/api/v1/users/self/profile") return profile();
-        return json(path.endsWith("/503") ? item : [item]);
+        return json(detail || path.endsWith("/503") ? item : [item]);
       });
       await expect(readCanvasBrowserApi({ mode: "read", ...input, expectedUserId: 41 }, fetcher))
         .resolves.toMatchObject({ status: "ok", identity: { userId: 41 } });
@@ -63,7 +77,7 @@ describe("identity-bound account Canvas reader routes", () => {
   it("rejects personal-folder and calendar records that escape the bound identity", async () => {
     for (const [input, item] of [
       [{ endpoint: "personalFolders" }, { id: 8, context_type: "User", context_id: 42 }],
-      [{ endpoint: "calendarEvents", calendarStart: "2026-03-01", calendarEnd: "2026-03-01" }, { id: 91, context_code: "user_42" }],
+      [{ endpoint: "calendarEvents", calendarContextCode: "user_41", calendarStart: "2026-03-01", calendarEnd: "2026-03-01" }, { id: 91, context_code: "user_42" }],
     ] as const) {
       const fetcher = vi.fn(async (value: RequestInfo | URL) => new URL(String(value)).pathname.endsWith("/profile")
         ? profile()
@@ -71,6 +85,24 @@ describe("identity-bound account Canvas reader routes", () => {
       await expect(readCanvasBrowserApi({ mode: "read", ...input, expectedUserId: 41 }, fetcher))
         .rejects.toMatchObject({ code: "IDENTITY_MISMATCH" });
     }
+  });
+
+  it("rejects calendar scopes that do not match the explicit context and group records that escape it", async () => {
+    for (const request of [
+      { endpoint: "calendarEvents", calendarContextCode: "user_42", calendarStart: "2026-03-01", calendarEnd: "2026-03-01" },
+      { endpoint: "calendarEvents", calendarContextCode: "group_6", groupId: 7, calendarStart: "2026-03-01", calendarEnd: "2026-03-01" },
+    ]) {
+      await expect(readCanvasBrowserApi({ mode: "read", ...request, expectedUserId: 41 }, vi.fn(async () => profile())))
+        .rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    }
+    const mismatchedGroup = vi.fn(async (value: RequestInfo | URL) => {
+      const url = new URL(String(value));
+      return url.pathname.endsWith("/profile")
+        ? profile()
+        : json([{ id: 60, context_type: "Group", context_id: 7 }]);
+    });
+    await expect(readCanvasBrowserApi({ mode: "read", endpoint: "groupFolderFiles", groupId: 6, folderId: 60, expectedUserId: 41 }, mismatchedGroup))
+      .rejects.toMatchObject({ code: "IDENTITY_MISMATCH" });
   });
 
   it("keeps opaque Link cursors bounded and constrained to fixed route queries", async () => {
@@ -118,6 +150,7 @@ describe("identity-bound account Canvas reader routes", () => {
       .resolves.toMatchObject({ status: "gap", reason: "FORBIDDEN_OPTIONAL" });
     await expect(readCanvasBrowserApi({
       mode: "read", endpoint: "calendarEvents", expectedUserId: 41,
+      calendarContextCode: "user_41",
       calendarStart: "2026-03-01", calendarEnd: "2026-03-01",
     }, denied)).resolves.toMatchObject({ status: "gap", reason: "FORBIDDEN_OPTIONAL" });
   });

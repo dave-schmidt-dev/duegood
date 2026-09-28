@@ -18,9 +18,13 @@ type CaptureResource = {
 type CaptureSnapshot = {
   schemaVersion: number;
   source: string;
+  runId: number;
+  generationId: string;
   capturedAt: string;
   complete: boolean;
   identity: { origin: string; userId: number };
+  activeCourses: { complete: boolean; courseIds: number[] };
+  coverageRequirements: { activeCoursesComplete: boolean; perActiveCourse: string[] };
   resources: CaptureResource[];
   coverage: Array<Record<string, unknown>>;
 };
@@ -41,8 +45,10 @@ async function fixture(body = Buffer.from("synthetic Canvas file body")) {
   await writeFile(path.join(stagingDirectory, stagedFile), body, { mode: 0o600, flag: "wx" });
   await chmod(path.join(stagingDirectory, stagedFile), 0o600);
   const snapshot: CaptureSnapshot = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     source: "canvas-browser",
+    runId: 1,
+    generationId: randomUUID().replaceAll("-", ""),
     capturedAt: "2026-09-27T16:00:00.000Z",
     complete: false,
     identity: { origin: ORIGIN, userId: 41 },
@@ -63,8 +69,17 @@ async function fixture(body = Buffer.from("synthetic Canvas file body")) {
           sourceAuthenticity: "unverified",
         }],
       },
+      { endpoint: "coursesActive", courseId: null, pages: 1, items: [] },
     ],
-    coverage: [{ endpoint: "fileBodies", courseId: null, status: "gap", reason: "not-attempted" }],
+    activeCourses: { complete: true, courseIds: [] },
+    coverageRequirements: {
+      activeCoursesComplete: true,
+      perActiveCourse: ["course", "assignments", "assignmentGroups", "submissions"],
+    },
+    coverage: [
+      { endpoint: "coursesActive", courseId: null, status: "complete" },
+      { endpoint: "fileBodies", courseId: null, status: "gap", reason: "not-attempted" },
+    ],
   };
   return { root, appDirectory, stagingDirectory, stagedFile, body, snapshot };
 }
@@ -75,15 +90,17 @@ afterEach(async () => {
 
 async function currentGeneration(appDirectory: string) {
   const archive = path.join(appDirectory, "canvas-capture-archive");
-  const pointer = JSON.parse(await readFile(path.join(archive, "current.json"), "utf8")) as { generationId: string };
-  return { archive, generationId: pointer.generationId };
+  const pointer = JSON.parse(await readFile(path.join(archive, "current.json"), "utf8")) as {
+    generationId: string; runId: number; snapshotSha256: string; version: number;
+  };
+  return { archive, ...pointer };
 }
 
 describe("private Canvas capture archive", () => {
   it("atomically publishes a hashed generation and retains the prior generation on refresh", async () => {
     const data = await fixture();
     const first = await saveCanvasCaptureGeneration(data);
-    expect(first).toMatchObject({ complete: false, resourceCount: 2, itemCount: 2, blobCount: 1, blobBytes: data.body.length });
+    expect(first).toMatchObject({ complete: false, runId: 1, resourceCount: 3, itemCount: 2, blobCount: 1, blobBytes: data.body.length });
     expect(first).not.toHaveProperty("path");
     const firstItems = (first.archivedSnapshot as ArchivedSnapshot).resources[1]!.items;
     expect(firstItems[0]).toMatchObject({
@@ -105,6 +122,8 @@ describe("private Canvas capture archive", () => {
     await chmod(path.join(secondStaging, secondStagedFile), 0o600);
     const secondHash = createHash("sha256").update(secondBody).digest("hex");
     const secondSnapshot = structuredClone(data.snapshot);
+    secondSnapshot.runId = 2;
+    secondSnapshot.generationId = randomUUID().replaceAll("-", "");
     secondSnapshot.capturedAt = "2026-09-28T16:00:00.000Z";
     secondSnapshot.resources[1]!.items = [{
       fileId: 78,
@@ -134,8 +153,13 @@ describe("private Canvas capture archive", () => {
     const manifest = JSON.parse(await readFile(
       path.join(firstCurrent.archive, "generations", second.generationId, "manifest.json"),
       "utf8",
-    )) as { blobs: Array<{ sha256: string; byteCount: number }>; complete: boolean };
+    )) as { version: number; runId: number; generationId: string; snapshotSha256: string;
+      blobs: Array<{ sha256: string; byteCount: number }>; complete: boolean };
     expect(manifest).toMatchObject({
+      version: 2,
+      runId: 2,
+      generationId: second.generationId,
+      snapshotSha256: secondCurrent.snapshotSha256,
       complete: false,
       blobs: [{ sha256: secondHash, byteCount: secondBody.length }],
     });
@@ -165,6 +189,43 @@ describe("private Canvas capture archive", () => {
     expect(selected.generationId).toBe(first.generationId);
     expect(await readdir(path.join(selected.archive, "generations"))).toEqual([first.generationId]);
     expect(await readdir(path.join(selected.archive, "blobs"))).toHaveLength(1);
+  });
+
+  it("preserves a prior v1 generation without adding invented run linkage during v2 publication", async () => {
+    const data = await fixture();
+    const archive = path.join(data.appDirectory, "canvas-capture-archive");
+    const generationId = randomUUID().replaceAll("-", "");
+    const generation = path.join(archive, "generations", generationId);
+    await mkdir(generation, { recursive: true, mode: 0o700 });
+    await mkdir(path.join(archive, "blobs"), { mode: 0o700 });
+    const legacySnapshot = {
+      schemaVersion: 1,
+      source: "canvas-browser",
+      capturedAt: "2026-09-26T12:00:00.000Z",
+      complete: false,
+      identity: { origin: ORIGIN, userId: 41 },
+      resources: [],
+      coverage: [],
+    };
+    const snapshotBytes = Buffer.from(JSON.stringify(legacySnapshot) + "\n");
+    const snapshotSha256 = createHash("sha256").update(snapshotBytes).digest("hex");
+    await writeFile(path.join(generation, "snapshot.json"), snapshotBytes, { mode: 0o600 });
+    await writeFile(path.join(generation, "manifest.json"), JSON.stringify({
+      format: "duegood-canvas-capture-generation", version: 1, generationId,
+      capturedAt: legacySnapshot.capturedAt, complete: false,
+      identity: { origin: ORIGIN, userId: 41 }, snapshotBytes: snapshotBytes.length,
+      snapshotSha256, resourceCount: 0, itemCount: 0, blobCount: 0, blobBytes: 0, blobs: [],
+    }), { mode: 0o600 });
+    await writeFile(path.join(archive, "current.json"), JSON.stringify({
+      format: "duegood-canvas-capture-current", version: 1, generationId,
+    }), { mode: 0o600 });
+
+    await saveCanvasCaptureGeneration(data);
+
+    expect(await readFile(path.join(generation, "snapshot.json"))).toEqual(snapshotBytes);
+    const manifest = JSON.parse(await readFile(path.join(generation, "manifest.json"), "utf8")) as Record<string, unknown>;
+    expect(manifest.version).toBe(1);
+    expect(manifest).not.toHaveProperty("runId");
   });
 
   it("rejects unreferenced files in the staging directory without promoting a generation", async () => {
@@ -215,9 +276,11 @@ describe("private Canvas capture archive", () => {
     await utimes(staleGeneration, old, old);
     await utimes(staleBlob, old, old);
 
+    const nextSnapshot = { ...data.snapshot, runId: 2, generationId: randomUUID().replaceAll("-", ""),
+      capturedAt: "2026-09-28T16:00:00.000Z" };
     const second = await saveCanvasCaptureGeneration({
       ...data,
-      snapshot: { ...data.snapshot, capturedAt: "2026-09-28T16:00:00.000Z" },
+      snapshot: nextSnapshot,
     });
     expect(await readdir(generations)).toEqual(expect.arrayContaining([first.generationId, second.generationId, path.basename(recentGeneration)]));
     expect(await readdir(generations)).not.toContain(path.basename(staleGeneration));
@@ -249,7 +312,11 @@ describe("private Canvas capture archive", () => {
         ...data,
         snapshot: {
           ...data.snapshot,
-          resources: [{ endpoint: "fileBodies", courseId: null, pages: 1, items }],
+          resources: [
+            data.snapshot.resources[0]!,
+            { endpoint: "fileBodies", courseId: null, pages: 1, items },
+            data.snapshot.resources[2]!,
+          ],
         },
       };
     };

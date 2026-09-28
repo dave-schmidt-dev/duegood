@@ -2,15 +2,25 @@
 
 # Private whole-account Canvas capture tasks
 
+## Owner-selected ship checkpoint (2026-09-28)
+
+Publish the tested v2 capture, native import, archive migration, freshness, and CLI workflow as a bounded source checkpoint. New visible Tauri controls and a new private live capture/import are deferred at the owner's request. The prototype remains design evidence; publication does not claim installed UI or new live adoption. Complete the release gates and stop feature expansion.
+
+## Current evidence and boundaries
+
+The schema-v2 capture-to-native-import path and its three fixed helpers are present in source: `duegood-capture-state` journals and leases capture runs, `duegood-capture-download` handles bounded file transfers, and `duegood-browser-import` validates and publishes a capture into the native store. `npm run canvas:session -- refresh` coordinates capture and import. This work remains unverified until the current staged native gate and a private live import through the installed Tauri app pass; synthetic/source evidence is not live or installed-app acceptance.
+
+The session must remain headed because a separate headless relaunch did not recover the saved Canvas sign-in. Capture reuses the existing Canvas page and does not open a tab per file. Additional calendar/group coverage remains planned until collection passes its phase gate; existing collector endpoints or fixtures do not establish that planned coverage as complete.
+
 ## Phase 1: Guarded browser collection
 - **Phase gate:** `npm run test:local && npm run test:desktop-ui && npm run typecheck && npm run lint && npm run deadcode && npm run check:public-tree && npm run test:membership`
 - **Review focus:** Same-origin API allowlist, session identity, no Canvas state changes, pagination, no credential or signed-URL persistence.
 - **Acceptance:** Synthetic reader and downloader pass first; a content-free owner-signed-in probe proves session continuity/API/file access before broad collector work. Current-term metadata can finish even while historical/file coverage has gaps.
 
 ### Task 1.1: Guarded browser API reader
-- **Status:** ready for phase gate
+- **Status:** accepted capture checkpoint `2a7ef5e`
 - **Type:** implementation
-- **Executor:** switchyard
+- **Executor:** native (owner override while Switchyard work is ongoing)
 - **RequiredCapability:** standard
 - **Blocked by:** none
 - **External blockers:** none
@@ -25,9 +35,9 @@
   - The focused tests and membership check exit 0.
 
 ### Task 1.2: Whole-account inventory, safe links, and capture receipt
-- **Status:** in progress
+- **Status:** accepted capture checkpoint `2a7ef5e`
 - **Type:** implementation
-- **Executor:** switchyard
+- **Executor:** native (owner override while Switchyard work is ongoing)
 - **RequiredCapability:** standard
 - **Blocked by:** Task 1.1
 - **External blockers:** none for metadata collection; authenticated file download remains a separate coverage gap
@@ -41,9 +51,9 @@
   - The focused tests and membership check exit 0.
 
 ### Task 1.3: Guarded file downloader and private archive
-- **Status:** in progress
+- **Status:** accepted capture checkpoint `2a7ef5e`
 - **Type:** implementation
-- **Executor:** switchyard
+- **Executor:** native (owner override while Switchyard work is ongoing)
 - **RequiredCapability:** standard
 - **Blocked by:** none
 - **External blockers:** none
@@ -56,7 +66,7 @@
   - The focused Rust and local tests exit 0.
 
 ### Task 1.4: Browser-authenticated file fallback
-- **Status:** pending synthetic feasibility gate
+- **Status:** accepted capture checkpoint `2a7ef5e`
 - **Type:** implementation
 - **Executor:** native
 - **RequiredCapability:** standard
@@ -73,16 +83,16 @@
 ## Phase 2: Atomic native import and freshness
 - **Phase gate:** `npm run test:tauri && npm run test:ui && npm run deadcode && npm run check:public-tree && npm run test:membership`
 - **Review focus:** Manifest identity, durable failure status, store lock order, iCal recency, legacy file migration, recovery.
-- **Acceptance:** Complete current-term metadata publishes atomically; incomplete attempts keep prior generation but make affected views unverified; file gaps remain separate.
+- **Acceptance:** Complete current-term metadata publishes atomically; incomplete attempts keep prior generation but make affected Canvas views unverified; file gaps remain separate. iCal and personal facts remain independently visible.
 
 ### Task 2.1: Validate and publish browser metadata
-- **Status:** pending
+- **Status:** in progress — v2 run linkage, native import, and freshness
 - **Type:** implementation
-- **Executor:** switchyard
+- **Executor:** native (owner override while Switchyard work is ongoing)
 - **RequiredCapability:** standard
 - **Blocked by:** Task 1.2, Task 1.3
 - **External blockers:** none
-- **Description:** Reject browser import for empty/preview stores. Validate the complete manifest, account binding, monotonic run ID, symlinks, and staged blob hashes, then promote blobs under the native archive lock and merge metadata against the latest generation. Current-term keys come from the authoritative iCal store; browser-only courses get stable validated keys/folders and remain archival until owner activation. Promote folderless iCal courses; preserve personal fields and newer iCal due facts. An unstamped legacy iCal due fact remains selected until a verified iCal refresh supplies a comparable timestamp. Publish current-term metadata atomically, bind per-course/section coverage and the native attempt-status sidecar to run ID/generation, and mark success only after publication. Extract clean seams from touched legacy over-800-line modules in a separate commit, or record a concrete reason if impossible.
+- **Description:** Reject browser import for empty/preview stores. Validate the complete manifest, account binding, monotonic run ID, symlinks, and staged blob hashes, then promote blobs under the native archive lock and merge metadata against the latest generation. Current-term keys come from the authoritative iCal store; browser-only courses get stable validated keys/folders and remain archival until owner activation. Promote folderless iCal courses; preserve personal fields and newer iCal due facts. An unstamped legacy iCal due fact remains selected until a verified iCal refresh supplies a comparable timestamp. Publish current-term metadata atomically, bind per-course/section coverage and the native attempt-status sidecar to run ID/generation, and mark success only after publication. A newer running/failed capture suppresses retained Canvas-owned facts while preserving iCal and personal state. Full native backup includes referenced resource blobs; frozen legacy rollback remains byte-preserving and separate from legacy refresh compatibility. Extract clean seams from touched legacy over-800-line modules in a separate commit, or record a concrete reason if impossible.
 - **Files:** src-tauri/src/browser_capture.rs, src-tauri/src/lib.rs, src-tauri/src/refresh.rs, src-tauri/src/reconcile.rs, src-tauri/src/capture.rs, src-tauri/src/documents.rs, src-tauri/src/config.rs, src/shared/dashboard-projection.ts, test/ui/dashboard.test.ts, test/test-membership.json, INVARIANTS.md, docs/REFRESH-CONTRACT.md
 - **Quick checks:** npm run test:tauri
 - **Done when:**
@@ -93,7 +103,7 @@
 ### Task 2.2: Archive migration, resource resolution, and recovery
 - **Status:** pending
 - **Type:** implementation
-- **Executor:** switchyard
+- **Executor:** native (owner override while Switchyard work is ongoing)
 - **RequiredCapability:** standard
 - **Blocked by:** Task 2.1
 - **External blockers:** none
@@ -108,16 +118,16 @@
 ## Phase 3: Personal Tauri workflow
 - **Phase gate:** `npm run stage:tauri -- --skip-preflight --test test:all`
 - **Review focus:** Distinct iCal/capture actions, content-free progress, stale labels, exact installed candidate.
-- **Acceptance:** Tauri imports a validated fixed-location private bundle and shows coverage/files/links/gaps; live acceptance waits for owner sign-in.
+- **Acceptance:** Tauri imports a validated fixed-location private bundle and shows coverage/files/links/gaps; live acceptance waits for owner sign-in and the installed candidate gate.
 
 ### Task 3.1: Tauri import and coverage controls
 - **Status:** pending
 - **Type:** implementation
-- **Executor:** switchyard
+- **Executor:** native (owner override while Switchyard work is ongoing)
 - **RequiredCapability:** standard
 - **Blocked by:** Task 2.2
 - **External blockers:** none
-- **Description:** Add a Tauri action to import the fixed-location private bundle produced by the personal CLI, without executing mutable checkout scripts. Require local confirmation of the first account identity before a real-store import. Show per-course/section observation, metadata freshness, incomplete file/link gaps, and safe logged links; keep iCal Refresh distinct. Hide stale current-term facts from the daily view. Provide content-free progress and desktop tests for success, expiry, partial capture, and stale views. Extract clean seams from app.ts/dashboard.ts in a separate commit. Update INV-5/7/9/12 and REFRESH-CONTRACT for the personal browser collector. Do not enable public onboarding.
+- **Description:** Add a Tauri action to import the fixed-location private bundle produced by the personal CLI, without executing mutable checkout scripts. Require explicit confirmation for the first real-store import; send only the confirmation boolean and derive account identity from the validated capture in native code. Show per-course/section observation, metadata freshness, incomplete file/link gaps, and safe logged links; keep iCal Refresh distinct. Hide stale current-term facts from the daily view. Provide content-free progress and desktop tests for success, expiry, partial capture, and stale views. Extract clean seams from app.ts/dashboard.ts in a separate commit. Update INV-5/7/9/12 and REFRESH-CONTRACT for the personal browser collector. Do not enable public onboarding.
 - **Files:** src-tauri/src/commands.rs, src-tauri/src/lib.rs, src-tauri/src/resources.rs, src/ui/transport.ts, src/ui/app.ts, src/ui/pages/dashboard.ts, src/ui/styles/components.css, test/native/playwright/desktop-first-run.spec.ts, test/ui/dashboard.test.ts, test/test-membership.json, scripts/check-refresh-contract.mjs, README.md, INVARIANTS.md, docs/REFRESH-CONTRACT.md
 - **Quick checks:** npm run test:ui
 - **Done when:**

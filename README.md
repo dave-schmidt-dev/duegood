@@ -6,9 +6,8 @@ The dashboard provides Timeline, Grades, Inbox, Completed, Courses, Library, Act
 
 ## Current state
 
-- The installed bundle identifier is `com.zerodelta.duegood`. The first iCal-backed native store is live. Candidate `75ef537` corrects the reported Sunday date-only events appearing in Saturday's row at 8:00 PM; it is installed and running against the preserved native store. Owner visual acceptance of the correction remains open.
-- The old local Node listener has been disabled and stopped, leaving `127.0.0.1:2137` for the native one-shot receiver. Its launchd plist and private coursework source remain for rollback.
-- The native feed refresh has run in the installed app and reported a complete refresh with one held event in the owner's screenshot. Repeat-refresh identity and owner acceptance remain open.
+- The installed bundle identifier is `com.zerodelta.duegood`. iCal refresh and Canvas browser capture are separate native workflows and keep independent source facts.
+- The Canvas v2 capture-to-import workflow has separate source, synthetic, live-import, and installed-app acceptance gates. Earlier browser captures do not prove current native publication or installed behavior.
 
 ## First run and recovery
 
@@ -18,7 +17,9 @@ The private coursework, grades, messages, feed URL, credentials, and screenshots
 
 ## Private Canvas capture
 
-Canvas capture uses one headed Chrome profile under the app's private data folder. Sign in in that window once, confirm the account ID reported by `identity`, and bind that ID locally. The download helper is built once from a staged production candidate. Later refreshes reuse the installed helper and account binding:
+Canvas capture uses one headed Chrome profile under the app's private data folder. Sign in in that window, confirm the account ID reported by `identity`, and bind that ID locally. The signed-in browser stays open across commands; capture reuses its existing Canvas page for requests and does not open or close a tab per file. A separate headless relaunch did not restore the signed-in session, so this workflow relies on the headed profile and may need another attended sign-in after SSO expires.
+
+Run `canvas:prepare-helper` once to build and install the three fixed native helpers in the private DueGood Application Support directory: `duegood-capture-state` (capture run/lease), `duegood-capture-download` (bounded file transfer), and `duegood-browser-import` (native import). Later refreshes use those installed helpers and the saved account binding:
 
 ```sh
 npm run canvas:prepare-helper
@@ -31,7 +32,13 @@ npm run canvas:session -- refresh
 npm run canvas:session -- stop
 ```
 
-The browser stays open across commands. `refresh` checks the saved account binding, then writes a private, hashed archive generation and a latest capture snapshot in Application Support. File transfers use the existing Canvas page without opening, navigating, or closing a tab for each file. Capture has a 30-minute budget and the client waits up to 35 minutes. A partial response keeps prior generations available and names gaps in the private snapshot; it does not make the Tauri dashboard current. This capture path has not yet been imported into the native coursework store. `stop` closes the browser and broker. Canvas SSO can expire, so a later refresh may return `SIGN_IN_REQUIRED` and need a visible sign-in again. Output contains only status and counts; never commit the private archive.
+`refresh` begins a durable run before collection, checks the saved account binding, captures a schema-v2 snapshot and hashed private archive, then invokes the native importer. The importer validates the run, account, inventory, required coverage, and file hashes before publishing coursework and projected documents together. Failed or incomplete metadata does not replace retained coursework; file gaps are tracked separately. Capture has a 30-minute budget and the client waits up to 35 minutes. Output contains only status and counts; never commit the private archive.
+
+The native importer is not the iCal refresh. It preserves local completion, notes, and other personal fields, and keeps newer or unstamped iCal due observations selected when Canvas capture overlaps them. A newer running or failed capture makes retained Canvas-owned facts unverified in the daily view, while iCal facts and personal fields remain available. `stop` closes the browser and session broker. Canvas SSO can expire, so a later refresh may need another visible sign-in. A new private live native import and installed-app acceptance remain separate from source verification. Visible import/backup controls and a new live recapture are deferred at the owner-selected ship checkpoint.
+
+The first real-store import requires explicit confirmation in Tauri. The confirmation is a boolean; native code derives the Canvas account identity from the validated capture.
+
+Full native backups include referenced browser-resource blobs and the native store's enriched iCal/personal fields. A frozen legacy rollback export preserves the selected legacy tree for byte-for-byte comparison and recovery; it is distinct from a refresh-compatible legacy export, which may be refused for enriched data. Older migrated file receipts retain `source: "legacy"`, `sourceAuthenticity: "unverified"`, and no observation timestamp; a local hash proves byte integrity only, not Canvas origin.
 
 File checks establish local byte integrity and compatibility with reviewed MIME types: known binary formats use prefix signatures, while declared text formats use UTF-8 and non-HTML checks. They do not prove complete file grammar, Office container structure, or Canvas source authenticity. Archived files are not automatically opened.
 

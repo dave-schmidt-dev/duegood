@@ -122,11 +122,34 @@ function rejectPrivateValues(value, depth = 0) {
 }
 
 function validateSnapshot(snapshot) {
-  if (!isRecord(snapshot) || snapshot.schemaVersion !== 1 || snapshot.source !== "canvas-browser"
+  if (!isRecord(snapshot) || snapshot.schemaVersion !== 2 || snapshot.source !== "canvas-browser"
+      || !Number.isSafeInteger(snapshot.runId) || snapshot.runId <= 0
+      || typeof snapshot.generationId !== "string" || !/^[a-f0-9]{32}$/u.test(snapshot.generationId)
       || snapshot.complete !== false || !isRecord(snapshot.identity) || snapshot.identity.origin !== ORIGIN
       || !Number.isSafeInteger(snapshot.identity.userId) || snapshot.identity.userId <= 0
+      || !isRecord(snapshot.activeCourses) || snapshot.activeCourses.complete !== true
+      || !Array.isArray(snapshot.activeCourses.courseIds)
+      || snapshot.activeCourses.courseIds.some((id) => !Number.isSafeInteger(id) || id <= 0)
+      || new Set(snapshot.activeCourses.courseIds).size !== snapshot.activeCourses.courseIds.length
+      || !isRecord(snapshot.coverageRequirements) || snapshot.coverageRequirements.activeCoursesComplete !== true
+      || JSON.stringify(snapshot.coverageRequirements.perActiveCourse)
+        !== JSON.stringify(["course", "assignments", "assignmentGroups", "submissions"])
       || typeof snapshot.capturedAt !== "string" || Number.isNaN(Date.parse(snapshot.capturedAt))
       || !Array.isArray(snapshot.resources) || !Array.isArray(snapshot.coverage)) throw archiveError("INVALID_SNAPSHOT");
+  const activeResource = snapshot.resources.find((resource) => resource?.endpoint === "coursesActive" && resource.courseId === null);
+  if (!activeResource || !Array.isArray(activeResource.items)
+      || JSON.stringify(activeResource.items.map((item) => item?.id).sort((a, b) => a - b))
+        !== JSON.stringify([...snapshot.activeCourses.courseIds].sort((a, b) => a - b))) {
+    throw archiveError("ACTIVE_COURSE_INVENTORY_MISMATCH");
+  }
+  const completeCoverage = new Set(snapshot.coverage
+    .filter((entry) => entry?.status === "complete")
+    .map((entry) => `${entry.endpoint}:${entry.courseId ?? "account"}`));
+  if (!completeCoverage.has("coursesActive:account")
+      || snapshot.activeCourses.courseIds.some((courseId) =>
+        snapshot.coverageRequirements.perActiveCourse.some((endpoint) => !completeCoverage.has(`${endpoint}:${courseId}`)))) {
+    throw archiveError("REQUIRED_COURSE_COVERAGE_INCOMPLETE");
+  }
   rejectPrivateValues(snapshot);
   let bytes;
   try { bytes = Buffer.from(JSON.stringify(snapshot) + "\n", "utf8"); } catch { throw archiveError("INVALID_SNAPSHOT"); }
@@ -170,14 +193,18 @@ async function safeReadJson(target, maxBytes) {
 async function validateCurrent(root) {
   const pointer = await safeReadJson(path.join(root.path, "current.json"), 4096);
   if (pointer === undefined) return null;
-  if (!isRecord(pointer) || pointer.format !== POINTER_FORMAT || pointer.version !== 1
-      || !UUID.test(pointer.generationId)) throw archiveError("ARCHIVE_STATE_INVALID");
+  if (!isRecord(pointer) || pointer.format !== POINTER_FORMAT || ![1, 2].includes(pointer.version)
+      || !UUID.test(pointer.generationId)
+      || (pointer.version === 2 && (!Number.isSafeInteger(pointer.runId) || pointer.runId <= 0
+        || !HASH.test(pointer.snapshotSha256)))) throw archiveError("ARCHIVE_STATE_INVALID");
   const generations = await inspectDirectory(path.join(root.path, "generations"));
   const generation = await inspectDirectory(path.join(generations.path, pointer.generationId));
   const manifest = await safeReadJson(path.join(generation.path, "manifest.json"), MAX_SNAPSHOT_BYTES);
-  if (!isRecord(manifest) || manifest.format !== ARCHIVE_FORMAT || manifest.version !== 1
+  if (!isRecord(manifest) || manifest.format !== ARCHIVE_FORMAT || manifest.version !== pointer.version
       || manifest.generationId !== pointer.generationId || !HASH.test(manifest.snapshotSha256)
-      || !Number.isSafeInteger(manifest.snapshotBytes) || manifest.snapshotBytes <= 0) {
+      || !Number.isSafeInteger(manifest.snapshotBytes) || manifest.snapshotBytes <= 0
+      || (pointer.version === 2 && (manifest.runId !== pointer.runId
+        || manifest.snapshotSha256 !== pointer.snapshotSha256))) {
     throw archiveError("ARCHIVE_STATE_INVALID");
   }
   const snapshotPath = path.join(generation.path, "snapshot.json");
@@ -188,6 +215,18 @@ async function validateCurrent(root) {
   if (snapshot.length !== manifest.snapshotBytes
       || createHash("sha256").update(snapshot).digest("hex") !== manifest.snapshotSha256) {
     throw archiveError("ARCHIVE_STATE_INVALID");
+  }
+  if (pointer.version === 2) {
+    let parsed;
+    try { parsed = JSON.parse(snapshot.toString("utf8")); } catch { throw archiveError("ARCHIVE_STATE_INVALID"); }
+    if (!isRecord(parsed) || parsed.schemaVersion !== 2 || parsed.runId !== pointer.runId
+      || parsed.generationId !== pointer.generationId
+      || parsed.identity?.origin !== ORIGIN
+        || !Number.isSafeInteger(parsed.identity?.userId) || parsed.identity.userId <= 0
+        || !isRecord(manifest.identity) || manifest.identity.origin !== ORIGIN
+        || parsed.identity.userId !== manifest.identity.userId) {
+      throw archiveError("ARCHIVE_STATE_INVALID");
+    }
   }
   return pointer.generationId;
 }
@@ -332,12 +371,14 @@ async function ensureSpace(root, requestedBytes) {
   }
 }
 
-async function atomicPointer(root, generationId) {
+async function atomicPointer(root, generationId, runId, snapshotSha256) {
   const target = path.join(root.path, "current.json");
   const existing = await lstat(target).catch(() => undefined);
   if (existing) validateFileStat(existing, 4096);
   const temporary = path.join(root.path, ".current-" + randomUUID().replaceAll("-", "") + ".tmp");
-  const bytes = Buffer.from(JSON.stringify({ format: POINTER_FORMAT, version: 1, generationId }) + "\n");
+  const bytes = Buffer.from(JSON.stringify({
+    format: POINTER_FORMAT, version: 2, runId, generationId, snapshotSha256,
+  }) + "\n");
   try {
     await writePrivateFile(temporary, bytes);
     await rename(temporary, target);
@@ -354,7 +395,7 @@ async function atomicPointer(root, generationId) {
  *
  * @param {object} options Capture values.
  * @param {string} options.appDirectory Existing owner-only 0700 Tauri application data directory.
- * @param {object} options.snapshot Sanitized schema-v1 Canvas capture with native file receipts.
+ * @param {object} options.snapshot Sanitized schema-v2 Canvas capture linked to its allocated run and generation.
  * @param {string} options.stagingDirectory Existing owner-only 0700 native blob staging directory.
  * @param {AbortSignal} [options.signal] Cancellation; pending output is removed before return.
  * @returns {Promise<{generationId: string, capturedAt: string, complete: false, resourceCount: number, itemCount: number, blobCount: number, blobBytes: number, archivedSnapshot: object}>} Receipt and archive-referenced snapshot for private local persistence.
@@ -419,7 +460,7 @@ export async function saveCanvasCaptureGeneration({ appDirectory, snapshot, stag
       }
     }
 
-    const generationId = randomUUID().replaceAll("-", "");
+    const generationId = snapshot.generationId;
     const finalPath = path.join(generations.path, generationId);
     pendingGeneration = path.join(generations.path, ".pending-" + randomUUID().replaceAll("-", ""));
     await mkdir(pendingGeneration, { mode: 0o700 });
@@ -433,7 +474,8 @@ export async function saveCanvasCaptureGeneration({ appDirectory, snapshot, stag
     await writePrivateFile(path.join(candidate.path, "snapshot.json"), snapshotBytes);
     const manifest = {
       format: ARCHIVE_FORMAT,
-      version: 1,
+      version: 2,
+      runId: snapshot.runId,
       generationId,
       capturedAt: snapshot.capturedAt,
       complete: false,
@@ -456,9 +498,11 @@ export async function saveCanvasCaptureGeneration({ appDirectory, snapshot, stag
     pendingGeneration = undefined;
     await syncDirectory(generations.path);
     throwIfAborted(signal);
-    await atomicPointer(root, generationId);
+    await atomicPointer(root, generationId, snapshot.runId, snapshotSha256);
     return {
       generationId,
+      runId: snapshot.runId,
+      snapshotSha256,
       capturedAt: snapshot.capturedAt,
       complete: false,
       resourceCount: manifest.resourceCount,

@@ -32,6 +32,8 @@ test("real Playwright progress binding can be installed twice on one isolated pa
   };
   const collect = () => collectCanvasBrowserCapture({
     expectedUserId: 9,
+    runId: 9001,
+    generationId: "9".repeat(32),
     page,
     evaluate,
     reader: async () => undefined,

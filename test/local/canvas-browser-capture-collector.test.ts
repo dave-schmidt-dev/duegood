@@ -1,16 +1,27 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { sanitizeCanvasLink } from "../../scripts/canvas-browser-links.mjs";
-import { collectCanvasBrowserCapture } from "../../scripts/canvas-browser-capture.mjs";
+import { collectCanvasBrowserCapture as collectCanvasBrowserCaptureImpl } from "../../scripts/canvas-browser-capture.mjs";
 
 const USER_ID = 41;
-const COURSE_ID = 88;
+const COURSE_ID = 900001;
 const ORIGIN = "https://marymount.instructure.com";
+const SYNTHETIC_RUN_ID = 701;
+const SYNTHETIC_GENERATION_ID = "c".repeat(32);
+const collectCanvasBrowserCapture = (options: Record<string, unknown>) => collectCanvasBrowserCaptureImpl({
+  runId: SYNTHETIC_RUN_ID,
+  generationId: SYNTHETIC_GENERATION_ID,
+  ...options,
+} as Parameters<typeof collectCanvasBrowserCaptureImpl>[0]);
 
 type ReaderRequest = {
   mode: string;
   endpoint: string;
   expectedUserId: number;
   courseId?: number;
+  groupId?: number;
+  folderId?: number;
+  accountId?: number;
   conversationId?: number;
   fileId?: number;
   assignmentId?: number;
@@ -21,6 +32,7 @@ type ReaderRequest = {
   quizId?: number;
   calendarStart?: string;
   calendarEnd?: string;
+  calendarContextCode?: string;
 };
 
 function fakeHtmlReader({ html, options }: { html: string; options: { source: string; baseUrl: string } }) {
@@ -48,12 +60,12 @@ function successfulResult(request: ReaderRequest) {
   switch (request.endpoint) {
     case "profile": return one({
       id: USER_ID,
-      account_id: 9,
+      account_id: 41,
       name: "Synthetic Student",
       calendar_ics: `${ORIGIN}/feeds/calendar?token=synthetic-feed-secret`,
     });
     case "coursesActive": return list([{ id: COURSE_ID, name: "SYN-101" }], 2);
-    case "coursesCompleted": return list([{ id: 89, name: "SYN-099" }]);
+    case "coursesCompleted": return list([]);
     case "course": return one({ id: request.courseId, name: "Synthetic Course", syllabus_body: "<p>Course overview</p>" });
     case "courseTabs": return list(request.courseId === COURSE_ID ? [{ id: "home", label: "Home" }] : []);
     case "assignments": return list(request.courseId === COURSE_ID
@@ -62,8 +74,8 @@ function successfulResult(request: ReaderRequest) {
         course_id: COURSE_ID,
         name: "Synthetic assignment",
         published: true,
-        description: "<p>Read <a title=\"Guide\" href=\"/courses/88/files/900/download?verifier=synthetic-html-secret\">the guide</a> and <a href=\"/courses/88/files/901/download\">the plain file</a>.</p><script>synthetic-script-secret</script>",
-        discussion_topic: { url: `${ORIGIN}/courses/88/discussion_topics/7?access_token=synthetic-nested-secret` },
+        description: "<p>Read <a title=\"Guide\" href=\"/courses/900001/files/900/download?verifier=synthetic-html-secret\">the guide</a> and <a href=\"/courses/900001/files/901/download\">the plain file</a>.</p><script>synthetic-script-secret</script>",
+        discussion_topic: { url: `${ORIGIN}/courses/900001/discussion_topics/7?access_token=synthetic-nested-secret` },
       }]
       : []);
     case "assignmentGroups": return list(request.courseId === COURSE_ID ? [{ id: 10, name: "Assignments" }] : []);
@@ -84,16 +96,40 @@ function successfulResult(request: ReaderRequest) {
     case "courseFiles": return list([{ id: 900, display_name: "Guide", url: `${ORIGIN}/files/900/download?verifier=synthetic-file-secret` }]);
     case "folders": return list([{ id: 1, name: "Course Files" }]);
     case "groups": return list([{ id: 7, name: "Synthetic Group" }]);
+    case "groupFolders": return list([{ id: 70, name: "Group Files", context_type: "Group", context_id: 7 }]);
+    case "groupFolderFiles": return list([{
+      id: 901,
+      folder_id: request.folderId,
+      context_type: "Group",
+      context_id: request.groupId,
+      display_name: "Group reading",
+      url: `${ORIGIN}/files/901/download?verifier=synthetic-group-file-secret`,
+    }]);
+    case "groupPages": return list([{ page_id: 7, url: "group-overview", title: "Group overview", published: true }]);
+    case "groupPage": return one({ page_id: 7, url: request.pageSlug, title: "Group page", published: true, body: "<p>Group page body</p>" });
+    case "groupDiscussions": return list([{ id: 71, title: "Group discussion", published: true }]);
+    case "groupDiscussionEntries": return list([{ id: 711, message: "<p>Group post</p>" }]);
+    case "groupDiscussionReplies": return list([{ id: 712, parent_id: request.entryId, message: "<p>Group reply</p>" }]);
     case "personalFiles": return list([{ id: 900, display_name: "Personal Guide", url: `${ORIGIN}/files/900/download?verifier=synthetic-personal-file-secret` }]);
     case "personalFolders": return list([{ id: 17, name: "Personal Folder" }]);
-    case "file": return one({ id: request.fileId, display_name: "Course file detail", url: `${ORIGIN}/files/${request.fileId}/download?verifier=synthetic-file-detail-secret` });
+    case "file": return one({
+      id: request.fileId,
+      ...(request.groupId === undefined ? {} : { context_type: "Group", context_id: request.groupId }),
+      display_name: request.groupId === undefined ? "Course file detail" : "Group file detail",
+      url: `${ORIGIN}/files/${request.fileId}/download?verifier=synthetic-file-detail-secret`,
+    });
     case "personalFile": return one({ id: request.fileId, display_name: "Personal file detail", url: `${ORIGIN}/files/${request.fileId}/download?verifier=synthetic-personal-detail-secret` });
     case "inbox": return list([{ id: 300, subject: "Synthetic thread" }]);
     case "inboxAll": return list([{ id: 300, subject: "Unread thread" }, { id: 301, subject: "Read thread" }]);
     case "conversationsSent": return list([{ id: 301, subject: "Sent thread" }, { id: 302, subject: "Another sent thread" }]);
     case "conversationsArchived": return list([{ id: 302, subject: "Archived thread" }, { id: 303, subject: "Other archived thread" }]);
     case "conversation": return one({ id: request.conversationId, subject: "Synthetic thread", messages: [{ body: "<p>Private-looking message content</p>" }] });
-    case "calendarEvents": return list([{ id: 808, title: "Synthetic event", context_code: `user_${USER_ID}`, start_at: `${request.calendarEnd}T12:00:00Z` }]);
+    case "calendarEvents": return list([{
+      id: 808,
+      title: "Synthetic event",
+      context_code: request.calendarContextCode,
+      start_at: "2026-09-27T12:00:00Z",
+    }]);
     default: throw new Error(`Unexpected endpoint ${request.endpoint}`);
   }
 }
@@ -130,13 +166,24 @@ describe("synthetic Canvas metadata collector", () => {
     });
 
     expect(capture).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       source: "canvas-browser",
+      runId: SYNTHETIC_RUN_ID,
+      generationId: SYNTHETIC_GENERATION_ID,
       capturedAt: "2026-09-27T12:00:00.000Z",
       complete: false,
-      identity: { origin: ORIGIN, userId: USER_ID, accountId: 9 },
+      identity: { origin: ORIGIN, userId: USER_ID, accountId: 41 },
+      activeCourses: { complete: true, courseIds: [COURSE_ID] },
+      coverageRequirements: {
+        activeCoursesComplete: true,
+        perActiveCourse: ["course", "assignments", "assignmentGroups", "submissions"],
+      },
     });
     expect(capture.resources.find((resource) => resource.endpoint === "coursesActive")?.pages).toBe(2);
+    expect(capture.coverage).toContainEqual({ endpoint: "coursesActive", courseId: null, status: "complete" });
+    for (const endpoint of ["course", "assignments", "assignmentGroups", "submissions"]) {
+      expect(capture.coverage).toContainEqual({ endpoint, courseId: COURSE_ID, status: "complete" });
+    }
     expect(capture.resources.some((resource) => resource.endpoint === "assignments" && resource.courseId === COURSE_ID)).toBe(true);
     expect(capture.resources.some((resource) => resource.endpoint === "conversation")).toBe(true);
     expect(capture.resources.map((resource) => resource.endpoint)).toEqual(expect.arrayContaining([
@@ -153,11 +200,18 @@ describe("synthetic Canvas metadata collector", () => {
     ]) {
       expect(capture.coverage).toContainEqual({ endpoint, courseId: COURSE_ID, status: "complete" });
     }
-    for (const endpoint of ["groups", "personalFiles", "personalFolders", "personalFile", "file", "inboxAll", "conversationsSent", "conversationsArchived", "calendarEvents"]) {
+    for (const endpoint of ["groups", "personalFiles", "personalFolders", "personalFile", "file", "inboxAll", "conversationsSent", "conversationsArchived"]) {
       expect(capture.coverage).toContainEqual({ endpoint, courseId: null, status: "complete" });
     }
+    for (const endpoint of ["groupFolders", "groupFolderFiles", "groupPages", "groupPage", "groupDiscussions", "groupDiscussionEntries", "groupDiscussionReplies"]) {
+      expect(capture.coverage).toContainEqual({ endpoint, courseId: null, groupId: 7, status: "complete" });
+    }
+    expect(capture.coverage).toContainEqual({ endpoint: "calendarEvents", courseId: null, contextCode: "user_41", status: "complete" });
+    expect(capture.coverage).toContainEqual({ endpoint: "calendarEvents", courseId: null, contextCode: "account_41", status: "complete" });
+    expect(capture.coverage).toContainEqual({ endpoint: "calendarEvents", courseId: COURSE_ID, contextCode: `course_${COURSE_ID}`, status: "complete" });
+    expect(capture.coverage).toContainEqual({ endpoint: "calendarEvents", courseId: null, groupId: 7, contextCode: "group_7", status: "complete" });
     expect(capture.coverage).toContainEqual({ endpoint: "fileBodies", courseId: null, status: "gap", reason: "not-attempted" });
-    expect(capture.coverage).toContainEqual({ endpoint: "calendarEventsHistory", courseId: null, status: "gap", reason: "not-attempted" });
+    expect(capture.coverage.some((entry) => entry.endpoint === "calendarEventsHistory")).toBe(false);
     expect(capture.coverage).toContainEqual({ endpoint: "assignmentGroups", courseId: COURSE_ID, status: "complete" });
     expect(capture.coverage).toContainEqual({ endpoint: "calendar", courseId: COURSE_ID, status: "gap", reason: "not-attempted" });
 
@@ -188,10 +242,11 @@ describe("synthetic Canvas metadata collector", () => {
       "synthetic-personal-file-secret",
       "synthetic-file-detail-secret",
       "synthetic-personal-detail-secret",
+      "synthetic-group-file-secret",
       "synthetic-script-secret",
       "calendar_ics",
     ]) expect(serialized).not.toContain(privateValue);
-    expect(serialized).not.toContain("/courses/88/files/900/download");
+    expect(serialized).not.toContain("/courses/900001/files/900/download");
     expect(serialized).not.toContain("/files/900/download");
     expect(JSON.stringify(deps.progressEvents)).not.toMatch(/https?:|synthetic/u);
     expect(deps.progressEvents.filter((event) => event.phase === "request-start")).toHaveLength(deps.reader.mock.calls.length);
@@ -205,11 +260,23 @@ describe("synthetic Canvas metadata collector", () => {
     const conversationRequests = requests.filter((request) => request.endpoint === "conversation");
     expect(conversationRequests.map((request) => request.conversationId)).toEqual([300, 301, 302, 303]);
     expect(requests.filter((request) => request.endpoint === "file" && request.fileId === 900)).toHaveLength(1);
+    expect(requests.filter((request) => request.endpoint === "file" && request.fileId === 901 && request.groupId === 7)).toHaveLength(1);
     expect(requests.filter((request) => request.endpoint === "personalFile" && request.fileId === 900)).toHaveLength(1);
     expect(requests.find((request) => request.endpoint === "calendarEvents")).toMatchObject({
-      calendarStart: "2026-06-30",
-      calendarEnd: "2026-09-27",
+      allEvents: true,
+      calendarContextCode: "user_41",
     });
+    expect(requests.filter((request) => request.endpoint === "calendarEvents").map((request) => request.calendarContextCode))
+      .toEqual(["user_41", "account_41", "course_900001", "group_7"]);
+    expect(capture.resources).toContainEqual(expect.objectContaining({ endpoint: "calendarEvents", contextCode: "group_7", groupId: 7 }));
+    expect(capture.resources).toContainEqual(expect.objectContaining({ endpoint: "courseFiles", groupId: 7 }));
+    expect(capture.resources).toContainEqual(expect.objectContaining({ endpoint: "pages", groupId: 7 }));
+    expect(capture.resources).toContainEqual(expect.objectContaining({ endpoint: "discussions", groupId: 7 }));
+    const schema = JSON.parse(readFileSync(new URL("../../docs/CANVAS-CAPTURE-SCHEMA.json", import.meta.url), "utf8")) as {
+      properties: { resources: { items: { properties: { endpoint: { enum: string[] } } } } };
+    };
+    const allowedResourceEndpoints = new Set(schema.properties.resources.items.properties.endpoint.enum);
+    expect(capture.resources.every((resource) => allowedResourceEndpoints.has(resource.endpoint))).toBe(true);
     expect(requests.every((request) => request.expectedUserId === USER_ID)).toBe(true);
     const requestFor = (endpoint: string) => deps.reader.mock.calls
       .map(([input]) => input as ReaderRequest)
@@ -220,6 +287,37 @@ describe("synthetic Canvas metadata collector", () => {
     expect(requestFor("discussionReplies")).toMatchObject({ topicId: 6, entryId: 61 });
     expect(requestFor("submission")?.assignmentId).toBe(501);
     expect(requestFor("quiz")?.quizId).toBe(101);
+  });
+
+  it("requires a native run and reserved generation ID before collecting", async () => {
+    // @ts-expect-error Missing lease linkage is the behavior this case rejects.
+    await expect(collectCanvasBrowserCaptureImpl({ expectedUserId: USER_ID,
+      evaluate: vi.fn(), reader: vi.fn(), htmlReader: vi.fn() })).rejects.toThrow("CAPTURE_LINKAGE_REQUIRED");
+  });
+
+  it("stages group-owned file bodies through the shared file capture callback", async () => {
+    const deps = testDependencies();
+    const downloadFile = vi.fn(async ({ fileId }: { fileId: number }) => ({
+      kind: "staged",
+      fileId,
+      byteCount: 1,
+      stagedFile: "d".repeat(32) + ".blob",
+      sha256: "e".repeat(64),
+      contentType: "application/pdf",
+      sourceAuthenticity: "unverified",
+    }));
+    const capture = await collectCanvasBrowserCapture({
+      expectedUserId: USER_ID,
+      evaluate: deps.evaluate,
+      reader: deps.reader,
+      htmlReader: deps.htmlReader,
+      downloadFile,
+    });
+    expect(downloadFile.mock.calls.some(([request]) => request.fileId === 901)).toBe(true);
+    expect(capture.resources.find((resource) => resource.endpoint === "fileBodies")?.items)
+      .toContainEqual(expect.objectContaining({ fileId: 901, status: "staged" }));
+    expect(capture.resources).toContainEqual(expect.objectContaining({ endpoint: "courseFiles", groupId: 7 }));
+    expect(capture.resources).toContainEqual(expect.objectContaining({ endpoint: "file", groupId: 7 }));
   });
 
   it("requires the owner-confirmed user ID and stops before course reads on a profile mismatch", async () => {
@@ -299,9 +397,12 @@ describe("synthetic Canvas metadata collector", () => {
       expect(capture.coverage).toContainEqual({ endpoint, courseId: COURSE_ID, status: "gap", reason: "not-attempted" });
     }
     expect(capture.coverage).toContainEqual({ endpoint: "submission", courseId: COURSE_ID, status: "gap", reason: "forbidden-optional" });
-    for (const endpoint of ["groups", "personalFiles", "personalFolders", "inboxAll", "conversationsSent", "conversationsArchived", "calendarEvents", "conversation", "file"]) {
+    for (const endpoint of ["groups", "personalFiles", "personalFolders", "inboxAll", "conversationsSent", "conversationsArchived", "conversation", "file"]) {
       expect(capture.coverage).toContainEqual({ endpoint, courseId: null, status: "gap", reason: "forbidden-optional" });
     }
+    expect(capture.coverage).toContainEqual({ endpoint: "calendarEvents", courseId: null, contextCode: "user_41", status: "gap", reason: "forbidden-optional" });
+    expect(capture.coverage).toContainEqual({ endpoint: "calendarEvents", courseId: null, contextCode: "account_41", status: "gap", reason: "forbidden-optional" });
+    expect(capture.coverage).toContainEqual({ endpoint: "calendarEvents", courseId: COURSE_ID, contextCode: `course_${COURSE_ID}`, status: "gap", reason: "forbidden-optional" });
     expect(capture.coverage).toContainEqual({ endpoint: "personalFile", courseId: null, status: "gap", reason: "not-attempted" });
 
     const failedRead = testDependencies({
@@ -525,7 +626,9 @@ describe("synthetic Canvas metadata collector", () => {
       sourceAuthenticity: "unverified",
     };
     const captureWithDelay = (delayMs: number) => {
-      const deps = testDependencies();
+      const deps = testDependencies({ resultFor: (request) => request.endpoint === "groups"
+        ? { status: "ok", identity: { userId: USER_ID }, pages: 1, items: [] }
+        : successfulResult(request) });
       return collectCanvasBrowserCapture({
         expectedUserId: USER_ID,
         evaluate: deps.evaluate,

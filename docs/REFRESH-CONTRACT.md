@@ -20,25 +20,17 @@ Every row below is a plain claim with a **Status**:
 
 ## Personal browser-session source for Tauri
 
-The owner may run a private, visible Chrome session as an operator source for local Tauri capture.
-It is not a browser application, public onboarding route, or background refresh service. Chrome
-retains its own session cookies in the dedicated capture profile; the reader performs bounded,
-same-origin API GETs from inside that browser and never exports cookies or uses Playwright's Node
-request context. The fixed capture schema is version 1. The broker's `identity` command reports
-the authenticated numeric Canvas user ID so the owner can confirm the first binding. `bind <id>`
-writes that binding privately only after comparing it with the current session identity. Every
-later `refresh` checks the saved binding against the live identity before collection. Collection
-uses bounded same-origin API reads and records explicit coverage gaps. Discoverable Canvas files
-pass through the bounded browser/native download path into a private, hashed archive generation;
-transient signed URLs are never written to that archive. A prior generation remains available if
-a later capture fails. The probe alone does not establish a completed file capture. A current live
-partial capture and private archive publication have been verified. Native-store import has not
-been implemented or verified; the Tauri dashboard must not claim freshness from this archive.
+The personal source uses one dedicated, headed Chrome profile. Its saved session is reused across commands; capture makes requests from the existing Canvas page and does not open, navigate, or close a tab for each file, leaving keyboard and mouse input available. A separate headless relaunch did not restore the signed-in session, so the supported capture session stays headed. Session cookies remain inside Chrome; neither cookies nor storageState are exported. SSO may expire and require another attended sign-in. This is an operator source for the Tauri app, with no public onboarding or scheduler.
 
-Calendar/iCal remains an independently authoritative source. Browser Canvas observations can
-complement it in the native store but cannot silently replace iCal facts or student-owned progress.
-The Tauri app remains the only product interface; the browser session is an operator-controlled
-source that may eventually feed that app through the versioned local capture contract.
+`npm run canvas:prepare-helper` installs three fixed native helpers in the private DueGood Application Support directory: `duegood-capture-state` journals and leases a run, `duegood-capture-download` streams bounded file bytes, and `duegood-browser-import` validates and publishes the capture into the native store. `npm run canvas:session -- refresh` starts the run, captures, then invokes the native importer; capture success by itself does not make Canvas facts current. The iCal refresh remains a separate source and action.
+
+The candidate capture contract is schema version 2. A fixed native helper allocates a monotonic run before browser collection and holds the capture lock until a bounded terminal result. Snapshot, current pointer, generation manifest, account identity, and captured-at receipt agree on run ID, generation ID, and snapshot hash. Version 1 history remains private but cannot be imported as verified v2 data. The already running legacy broker receives a transient v1 response adapter; its durable archive remains v2.
+
+Native import validates explicit active-course inventory and complete required metadata for configured iCal courses. The first real-store import requires explicit confirmation; the caller sends a boolean and native code derives account identity from the validated capture. It holds locks in capture, snapshot, then write order, preserves personal state and newer or unstamped iCal due facts, and journals coursework, projected documents, account binding, and section coverage together. A failed or running newer attempt hides retained Canvas grades, submission state, Inbox, and current resources from the daily projection; retained iCal facts and personal fields remain available. Missing files are independent coverage gaps. Additional calendar/group coverage is planned until collection passes its phase gate; the current capture or synthetic endpoint checks do not close that work.
+
+Files use private content hashes for local integrity, not Canvas authenticity. Saved copies are rehashed while streaming and quarantined; they are never automatically opened. New store generations reference the archive instead of copying verified bulk materials. Migrated legacy file receipts preserve `source: "legacy"`, `sourceAuthenticity: "unverified"`, and `observedAt: null`; these fields record provenance limits, not proof that the bytes came from Canvas. Full native backups preserve the enriched store and include referenced blobs. A frozen legacy rollback export preserves the selected legacy tree for exact comparison/recovery; a refresh-compatible legacy export is a distinct operation and may refuse enriched data. Archive garbage collection is deferred; declared byte limits refuse further growth.
+
+The source and synthetic checks are candidate evidence until the staged gate and private live import complete. Historic probe and capture evidence does not establish native publication or an installed UI.
 
 ## Course import
 

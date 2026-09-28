@@ -18,6 +18,9 @@ use crate::store::{
     StoreError,
 };
 
+#[path = "native_export.rs"]
+mod native_export;
+
 /// Bounded, content-free copy progress.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -271,6 +274,7 @@ fn copy_entry(
     destination: &Path,
     include_manifest: bool,
     at_root: bool,
+    destination_root_exists: bool,
     progress: &mut dyn FnMut(ExportProgress),
     totals: &mut ExportProgress,
 ) -> Result<(), StoreError> {
@@ -279,7 +283,9 @@ fn copy_entry(
         return Err(StoreError::Invalid("a store copy contains a symlink"));
     }
     if metadata.is_dir() {
-        create_private_dir(destination, false)?;
+        if !(at_root && destination_root_exists) {
+            create_private_dir(destination, false)?;
+        }
         for entry in fs::read_dir(source)? {
             let entry = entry?;
             let name = entry.file_name();
@@ -298,6 +304,7 @@ fn copy_entry(
                 &entry.path(),
                 &destination.join(name),
                 include_manifest,
+                false,
                 false,
                 progress,
                 totals,
@@ -335,6 +342,42 @@ pub fn copy_tree(
     include_manifest: bool,
     progress: &mut dyn FnMut(ExportProgress),
 ) -> Result<ExportProgress, StoreError> {
+    copy_tree_with_root(source, destination, include_manifest, false, progress)
+}
+
+pub(super) fn copy_tree_into_private_root(
+    source: &Path,
+    destination: &Path,
+    include_manifest: bool,
+    progress: &mut dyn FnMut(ExportProgress),
+) -> Result<ExportProgress, StoreError> {
+    let metadata = fs::symlink_metadata(destination)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(StoreError::Invalid(
+            "the export root is not a private folder",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.permissions().mode() & 0o7777 != 0o700
+        {
+            return Err(StoreError::Invalid(
+                "the export root is not a private folder",
+            ));
+        }
+    }
+    copy_tree_with_root(source, destination, include_manifest, true, progress)
+}
+
+fn copy_tree_with_root(
+    source: &Path,
+    destination: &Path,
+    include_manifest: bool,
+    destination_root_exists: bool,
+    progress: &mut dyn FnMut(ExportProgress),
+) -> Result<ExportProgress, StoreError> {
     let mut totals = ExportProgress::default();
     let mut last_reported = ExportProgress::default();
     copy_entry(
@@ -342,6 +385,7 @@ pub fn copy_tree(
         destination,
         include_manifest,
         true,
+        destination_root_exists,
         &mut |current| {
             if current.files_done == 1
                 || current.files_done.saturating_sub(last_reported.files_done) >= 64
@@ -442,11 +486,29 @@ pub fn export_legacy(
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     );
     let output = parent.join(name);
-    let result = copy_tree(&store.store_dir(), &output, false, progress);
+    let result = native_export::copy_store_with_referenced_blobs(
+        store,
+        &store.store_dir(),
+        &output,
+        progress,
+    );
     if result.is_err() {
         let _ = fs::remove_dir_all(&output);
     }
     result
+}
+
+/// Exports a private native backup without the legacy-refresh compatibility restriction.
+///
+/// This preserves the exact native coursework documents, including iCal provenance and personal
+/// fields, then adds only the Canvas blobs referenced by the copied manifests and legacy receipts.
+/// The caller-facing directory is clearly named as a native backup and remains owner-selected.
+pub fn export_native_store(
+    store: &Store,
+    parent: &Path,
+    progress: &mut dyn FnMut(ExportProgress),
+) -> Result<ExportProgress, StoreError> {
+    native_export::export_native_store(store, parent, progress)
 }
 
 /// Copies a demoted store while the caller holds its exclusive OS write lock.
@@ -498,7 +560,9 @@ pub fn export_legacy_frozen(
         if source_after != frozen_before || exported != frozen_before {
             return Err(StoreError::StoreChanged);
         }
-        Ok(copied)
+        crate::browser_export::export_referenced_blobs_from_root(
+            store, &source, &output, copied, progress,
+        )
     })();
     if result.is_err() {
         let _ = fs::remove_dir_all(&output);
@@ -706,10 +770,7 @@ mod tests {
         let destination = Path::new(&destination);
         let fixture_root = Path::new(&fixture_root);
         assert!(source.is_absolute() && destination.is_absolute() && fixture_root.is_absolute());
-        assert!(
-            source.starts_with(fixture_root)
-                && destination.starts_with(fixture_root)
-        );
+        assert!(source.starts_with(fixture_root) && destination.starts_with(fixture_root));
         let store_root = destination.join(TEST_BUNDLE_IDENTIFIER);
         let store = Store::open(&store_root, Duration::from_millis(200)).unwrap();
         let options = ImportOptions {

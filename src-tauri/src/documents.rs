@@ -21,6 +21,45 @@ const HISTORY_FILE: &str = "coursework-refresh-history.json";
 const CONVERSATIONS_FILE: &str = "canvas-conversations.json";
 const PROFILE_FILE: &str = "canvas-profile.json";
 const CLASSES_DIR: &str = "classes";
+
+/// Failure to read the capture bookkeeping hides freshness without hiding the calendar.
+fn read_browser_freshness(store: &Store) -> crate::browser_freshness::BrowserFreshness {
+    let imported_document = store.read_document("browser-capture-status.json", 1024 * 1024);
+    let imported = imported_document
+        .as_ref()
+        .ok()
+        .and_then(|document| document.as_ref())
+        .and_then(|document| serde_json::from_slice::<Value>(&document.bytes).ok());
+    let binding = match imported_document {
+        Ok(None) => crate::browser_freshness::ExistingAccountBinding::Unbound,
+        Ok(Some(document)) => serde_json::from_slice::<Value>(&document.bytes)
+            .ok()
+            .filter(|value| value["format"] == "duegood-browser-import" && value["version"] == 1)
+            .and_then(|value| value["userId"].as_u64())
+            .filter(|user_id| *user_id > 0)
+            .map(crate::browser_freshness::ExistingAccountBinding::Bound)
+            .unwrap_or(crate::browser_freshness::ExistingAccountBinding::Unverifiable),
+        Err(_) => crate::browser_freshness::ExistingAccountBinding::Unverifiable,
+    };
+    let attempt_result = crate::capture_run::read_attempt_unlocked(store.data_root());
+    let attempt_read_ok = attempt_result.is_ok();
+    let attempt = attempt_result.ok().flatten();
+    let attempt_json = attempt
+        .as_ref()
+        .and_then(|receipt| serde_json::to_value(receipt).ok());
+    let summary = attempt.as_ref().and_then(|receipt| {
+        crate::capture_run::summarize_current_capture(store.data_root(), receipt).ok()
+    });
+    let freshness =
+        crate::browser_freshness::project_freshness(imported.as_ref(), attempt_json.as_ref());
+    crate::browser_freshness::with_capture_availability(
+        freshness,
+        attempt_read_ok,
+        attempt.as_ref(),
+        summary.as_ref(),
+        binding,
+    )
+}
 /// Bytes of the avatar file returned for image-signature validation (never the image itself).
 pub const AVATAR_HEAD_BYTES: usize = 16;
 /// Maximum avatar bytes returned to the webview, matching the shared projection.
@@ -128,6 +167,8 @@ pub struct DashboardDocuments {
     pub conversations: Option<String>,
     pub profile: Option<String>,
     pub avatar: Option<AvatarHeader>,
+    /// Verified browser sections, independent of retained source documents and iCal facts.
+    pub browser_freshness: crate::browser_freshness::BrowserFreshness,
     /// Keyed by course folder name (`classes/<name>`).
     pub course_exports: BTreeMap<String, CourseExportTexts>,
 }
@@ -216,6 +257,7 @@ pub fn read_dashboard_documents(
     let conversations = reader.text(CONVERSATIONS_FILE)?;
     let profile = reader.text(PROFILE_FILE)?;
     let avatar = avatar_header(store, profile.as_deref())?;
+    let browser_freshness = read_browser_freshness(store);
     let mut course_exports = BTreeMap::new();
     for folder in course_folders(store, limits)? {
         let base = format!("{CLASSES_DIR}/{folder}/canvas-export");
@@ -235,6 +277,7 @@ pub fn read_dashboard_documents(
         conversations,
         profile,
         avatar,
+        browser_freshness,
         course_exports,
     })
 }
@@ -416,6 +459,7 @@ mod tests {
                 "conversations",
                 "profile",
                 "avatar",
+                "browserFreshness",
                 "courseExports"
             ]
         );

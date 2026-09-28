@@ -38,6 +38,8 @@ pub const CANVAS_CAPTURE_RUN_COUNTER_FILE: &str = "canvas-capture-run-counter.js
 pub const CANVAS_CAPTURE_ATTEMPT_FILE: &str = "canvas-capture-attempt.json";
 /// Short-lived lock serializing capture-state sidecar updates.
 pub const CANVAS_CAPTURE_STATE_LOCK_FILE: &str = "duegood.capture-state.lock";
+/// Shared native/browser archive root under the fixed DueGood application-support folder.
+pub const CANVAS_CAPTURE_ARCHIVE_DIR: &str = "canvas-capture-archive";
 /// Journal recording an in-flight preview replacement, used for crash recovery on open.
 pub const REPLACE_JOURNAL_FILE: &str = "replace-journal.json";
 /// Prefix of the import staging directory created inside the data root.
@@ -242,6 +244,31 @@ pub fn canvas_capture_attempt_path(data_root: &Path) -> PathBuf {
 /// Returns the short-lived Canvas capture-state lock path under the fixed app-data root.
 pub fn canvas_capture_state_lock_path(data_root: &Path) -> PathBuf {
     data_root.join(CANVAS_CAPTURE_STATE_LOCK_FILE)
+}
+
+/// Resolves the immutable browser archive root. Production derives this from the OS account home;
+/// test builds keep it below their explicit `.test` data root.
+pub fn canvas_capture_archive_root(data_root: &Path) -> Result<PathBuf, String> {
+    #[cfg(feature = "test-overrides")]
+    {
+        let _ = data_root;
+        Ok(data_root.join(CANVAS_CAPTURE_ARCHIVE_DIR))
+    }
+    #[cfg(all(not(feature = "test-overrides"), target_os = "macos"))]
+    {
+        let home = current_account_home()
+            .ok_or_else(|| "the Canvas archive folder is unavailable".to_string())?;
+        Ok(home
+            .join("Library")
+            .join("Application Support")
+            .join("DueGood")
+            .join(CANVAS_CAPTURE_ARCHIVE_DIR))
+    }
+    #[cfg(all(not(feature = "test-overrides"), not(target_os = "macos")))]
+    {
+        let _ = data_root;
+        Err("Canvas capture is available only on macOS".into())
+    }
 }
 
 /// Validates an explicit data root (tests and staged smokes only): absolute, named for the test

@@ -7,6 +7,7 @@ import {
   type DashboardDocumentBundle,
   type DashboardProjectionOptions,
 } from "../shared/dashboard-projection";
+import { parseBrowserFreshness } from "../shared/browser-freshness";
 import type { TauriChannelFactory, TauriInvoke } from "./tauri";
 
 type DesktopStoreState = "empty" | "preview" | "authoritative" | "damaged" | "unknown";
@@ -82,6 +83,7 @@ export interface NativeTransport {
   storeStatus(): Promise<DesktopStoreStatus>;
   setCanvasRefreshEnabled(enabled: boolean): Promise<CanvasRefreshSetting>;
   startCanvasRefresh(onProgress: (progress: CanvasRefreshProgress) => void): Promise<CanvasRefreshResult>;
+  importBrowserCapture(onProgress: (progress: BrowserImportProgress) => void, confirmFirstAccount: boolean): Promise<BrowserImportResult>;
   startIcalRefresh(onProgress: (progress: IcalRefreshProgress) => void): Promise<IcalRefreshResult>;
   /** Opens the native folder picker in Rust; resolves whether a legacy folder is selected. */
   chooseLegacyRoot(): Promise<boolean>;
@@ -98,6 +100,7 @@ export interface NativeTransport {
   listSnapshots(): Promise<readonly DesktopSnapshot[]>;
   restoreSnapshot(id: string): Promise<void>;
   exportLegacy(onProgress: (progress: { readonly filesDone: number; readonly bytesDone: number }) => void): Promise<{ readonly filesDone: number; readonly bytesDone: number }>;
+  exportNativeStore(onProgress: (progress: { readonly filesDone: number; readonly bytesDone: number }) => void): Promise<{ readonly filesDone: number; readonly bytesDone: number }>;
   /** Native folder picker plus an exact content-tree comparison. Proof stays in memory only. */
   prepareStorePromotion(onProgress: (progress: StoreTransitionProgress) => void): Promise<PromotionReadiness>;
   /** Consumes a one-use proof and asks for a second confirmation in a native OS dialog. */
@@ -125,6 +128,22 @@ export interface CanvasRefreshProgress {
   readonly completed: number;
   readonly total: number | null;
   readonly bytesDone: number | null;
+}
+
+type BrowserImportPhase = "validating" | "copying" | "reconciling" | "publishing" | "complete";
+interface BrowserImportProgress {
+  readonly phase: BrowserImportPhase;
+  readonly filesDone: number;
+  readonly bytesDone: number;
+}
+interface BrowserImportResult {
+  readonly runId: number;
+  readonly importedCourses: number;
+  readonly archivedCourses: number;
+  readonly promotedBlobs: number;
+  readonly reusedBlobs: number;
+  readonly bytesVerified: number;
+  readonly alreadyCurrent: boolean;
 }
 
 interface CanvasRefreshResult {
@@ -351,6 +370,33 @@ function parseIcalRefreshResult(value: unknown): IcalRefreshResult {
   return { status: oneOf(row.status, ["complete"] as const, "calendar refresh status"), updatedAt: row.updatedAt, added: count(row.added, "calendar additions"), updated: count(row.updated, "calendar updates"), held: count(row.held, "calendar holds"), removed: 0 };
 }
 
+function parseBrowserImportProgress(value: unknown): BrowserImportProgress | null {
+  try {
+    const row = objectOf(value, "browser import progress");
+    return {
+      phase: oneOf(row.phase, ["validating", "copying", "reconciling", "publishing", "complete"] as const, "browser import phase"),
+      filesDone: count(row.filesDone, "browser import progress"),
+      bytesDone: count(row.bytesDone, "browser import progress"),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseBrowserImportResult(value: unknown): BrowserImportResult {
+  const row = objectOf(value, "browser import result");
+  if (typeof row.alreadyCurrent !== "boolean") throw malformed("browser import result");
+  return {
+    runId: count(row.runId, "browser import run ID"),
+    importedCourses: count(row.importedCourses, "browser import course count"),
+    archivedCourses: count(row.archivedCourses, "browser archive course count"),
+    promotedBlobs: count(row.promotedBlobs, "promoted file count"),
+    reusedBlobs: count(row.reusedBlobs, "reused file count"),
+    bytesVerified: count(row.bytesVerified, "verified byte count"),
+    alreadyCurrent: row.alreadyCurrent,
+  };
+}
+
 function parseAvatar(value: unknown): AvatarHeader | null {
   if (value === null) return null;
   const record = objectOf(value, "avatar header");
@@ -381,6 +427,7 @@ export function parseDocumentBundle(value: unknown): DashboardDocumentBundle {
   const record = objectOf(value, "document bundle");
   const coursework = objectOf(record.coursework, "coursework document");
   if (typeof coursework.text !== "string" || typeof coursework.version !== "string" || !/^[0-9a-f]{64}$/.test(coursework.version)) throw malformed("coursework document");
+  const browserFreshness = record.browserFreshness === undefined ? undefined : parseBrowserFreshness(record.browserFreshness);
   return {
     storeState: oneOf(record.storeState, ["preview", "authoritative"], "store state"),
     coursework: { text: coursework.text, version: coursework.version },
@@ -388,6 +435,7 @@ export function parseDocumentBundle(value: unknown): DashboardDocumentBundle {
     conversations: nullableString(record.conversations, "Inbox document"),
     profile: nullableString(record.profile, "profile document"),
     avatar: parseAvatar(record.avatar),
+    ...(browserFreshness === undefined ? {} : { browserFreshness }),
     courseExports: parseCourseExports(record.courseExports),
   };
 }
@@ -420,6 +468,16 @@ export function createNativeTransport(invoke: TauriInvoke, createChannel: TauriC
         if (progress !== null) onProgress(progress);
       });
       return parseCanvasRefreshResult(await call("start_canvas_refresh", { onProgress: channel }));
+    },
+    async importBrowserCapture(onProgress, confirmFirstAccount) {
+      if (typeof confirmFirstAccount !== "boolean") {
+        throw new DesktopCommandError("invalid-confirmation", "The Canvas account confirmation is invalid.");
+      }
+      const channel = createChannel((message) => {
+        const progress = parseBrowserImportProgress(message);
+        if (progress !== null) onProgress(progress);
+      });
+      return parseBrowserImportResult(await call("import_browser_capture", { confirmFirstAccount, onProgress: channel }));
     },
     async startIcalRefresh(onProgress) {
       const channel = createChannel((message) => {
@@ -471,6 +529,10 @@ export function createNativeTransport(invoke: TauriInvoke, createChannel: TauriC
     async exportLegacy(onProgress) {
       const channel = createChannel((event) => { try { onProgress(parseExportProgress(event)); } catch { /* invalid advisory event */ } });
       return parseExportProgress(await call("export_legacy_folder", { onProgress: channel }));
+    },
+    async exportNativeStore(onProgress) {
+      const channel = createChannel((event) => { try { onProgress(parseExportProgress(event)); } catch { /* invalid advisory event */ } });
+      return parseExportProgress(await call("export_native_store", { onProgress: channel }));
     },
     async prepareStorePromotion(onProgress) { return parsePromotionReadiness(await call("prepare_store_promotion", { onProgress: progressChannel(onProgress) })); },
     async confirmStorePromotion(proofId, onProgress) { return parsePromotionResult(await call("confirm_store_promotion", { proofId, onProgress: progressChannel(onProgress) })); },

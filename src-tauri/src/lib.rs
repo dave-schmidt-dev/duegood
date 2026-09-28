@@ -5,10 +5,22 @@
 //! native resources and clipboard, snapshots, and rollback export.
 //! The store lives in the fixed application-data folder for the bundle identifier.
 
+mod browser_account_projection;
+mod browser_bundle;
+mod browser_export;
+mod browser_export_io;
+mod browser_freshness;
+mod browser_import;
+mod browser_import_helper;
+mod browser_projection;
+mod browser_reconcile;
+mod browser_resources;
+mod browser_resources_io;
 mod canvas;
 mod capture;
 mod capture_archive;
 mod capture_media;
+pub mod capture_run;
 mod clipboard;
 mod commands;
 mod config;
@@ -24,11 +36,18 @@ mod locking;
 mod reconcile;
 mod refresh;
 mod resources;
+mod resources_save;
 mod snapshots;
 mod store;
 
 #[cfg(test)]
 mod phase4_smoke;
+
+pub use browser_import::{BrowserImportPhase, BrowserImportProgress, BrowserImportResult};
+pub use browser_import_helper::{
+    read_confirmation as read_browser_import_confirmation, run_import as run_browser_import,
+    BrowserImportHelperError,
+};
 
 use tauri::Manager;
 
@@ -220,6 +239,13 @@ pub fn capture_state_paths(
         config::canvas_capture_attempt_path(data_root),
         config::canvas_capture_state_lock_path(data_root),
     )
+}
+
+/// Returns the fixed browser archive location used by capture and native import.
+pub fn canvas_capture_archive_root(
+    data_root: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    config::canvas_capture_archive_root(data_root)
 }
 
 const CAPTURE_DOWNLOAD_REQUEST_MAX_BYTES: usize = 64 * 1024;

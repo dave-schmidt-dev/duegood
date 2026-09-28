@@ -6,6 +6,8 @@ const COURSE_ID = 88;
 const FILE_ID = 900;
 const ORIGIN = "https://marymount.instructure.com";
 const FILE_URL = `${ORIGIN}/files/${FILE_ID}/download?verifier=synthetic-file-secret`;
+const SYNTHETIC_RUN_ID = 702;
+const SYNTHETIC_GENERATION_ID = "d".repeat(32);
 
 type Request = { endpoint: string; courseId?: number; fileId?: number };
 type ReaderResult = { status: "ok"; identity: { userId: number }; pages: number; items: Array<Record<string, unknown>> };
@@ -53,6 +55,8 @@ function testCollector(options: { downloadFile?: (input: { fileId: number; sourc
   const progress = vi.fn(async (event: Record<string, unknown>) => { progressEvents.push(event); });
   const capture = collectCanvasBrowserCapture({
     expectedUserId: USER_ID,
+    runId: SYNTHETIC_RUN_ID,
+    generationId: SYNTHETIC_GENERATION_ID,
     reader,
     htmlReader,
     evaluate: async (fn: (input: never) => unknown, input: never) => {

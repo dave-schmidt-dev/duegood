@@ -26,8 +26,10 @@ const COMMANDS: &[&str] = &[
     "list_snapshots",
     "restore_snapshot",
     "export_legacy_folder",
+    "export_native_store",
     "set_canvas_refresh_enabled",
     "start_canvas_refresh",
+    "import_browser_capture",
     "start_ical_refresh",
     "prepare_store_promotion",
     "confirm_store_promotion",
@@ -90,6 +92,8 @@ fn main() {
             "duegood-desktop",
             "duegood-refresh",
             "duegood-capture-download",
+            "duegood-capture-state",
+            "duegood-browser-import",
         ] {
             println!("cargo:rustc-link-arg-bin={binary}=-sectcreate");
             println!("cargo:rustc-link-arg-bin={binary}=__TEXT");

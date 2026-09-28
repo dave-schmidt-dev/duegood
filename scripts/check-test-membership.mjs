@@ -112,6 +112,20 @@ let tauriTestCount = 0;
     ["ical::bootstrap", "ical_bootstrap.rs"],
     ["ical_apply::bootstrap", "ical_apply_bootstrap.rs"],
     ["downloads::tests", "downloads_tests.rs"],
+    ["commands::browser_commands", "commands_browser_tests.rs"],
+    ["browser_bundle::tests", "browser_bundle_tests.rs"],
+    ["browser_import::tests", "browser_import_tests.rs"],
+    ["browser_import_helper::tests", "browser_import_helper_tests.rs"],
+    ["browser_projection::tests", "browser_projection_tests.rs"],
+    ["browser_account_projection::tests", "browser_account_projection_tests.rs"],
+    ["browser_reconcile::tests", "browser_reconcile_tests.rs"],
+    ["browser_resources::tests", "browser_resources_tests.rs"],
+    ["browser_resources::legacy", "browser_legacy_resources_tests.rs"],
+    ["browser_freshness::tests", "browser_freshness_tests.rs"],
+    ["browser_export::tests", "browser_export_tests.rs"],
+    ["capture_run::tests", "capture_run_tests.rs"],
+    ["capture_run::archive", "capture_run_archive_tests.rs"],
+    ["resources::tests", "resources_tests.rs"],
   ]);
   for (const match of discovery.matchAll(/^([A-Za-z0-9_:]+): test$/gm)) {
     const modulePath = match[1];

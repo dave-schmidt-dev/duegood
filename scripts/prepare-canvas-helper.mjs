@@ -24,6 +24,14 @@ export function fixedCanvasDownloadHelperPath(homeDirectory = homedir()) {
   return path.join(homeDirectory, "Library", "Application Support", "DueGood", "bin", "duegood-capture-download");
 }
 
+export function fixedCanvasCaptureStateHelperPath(homeDirectory = homedir()) {
+  return path.join(homeDirectory, "Library", "Application Support", "DueGood", "bin", "duegood-capture-state");
+}
+
+export function fixedCanvasBrowserImportHelperPath(homeDirectory = homedir()) {
+  return path.join(homeDirectory, "Library", "Application Support", "DueGood", "bin", "duegood-browser-import");
+}
+
 function checkInterrupted(signal) {
   if (signal?.aborted) throw new Error("operation interrupted");
 }
@@ -127,10 +135,16 @@ async function compileReleaseHelper({ checkoutDirectory, targetDirectory, platfo
   const args = [
     "build", "--locked", "--release", "--no-default-features",
     "--manifest-path", path.join(checkoutDirectory, "src-tauri", "Cargo.toml"),
-    "--bin", "duegood-capture-download",
+    "--bin", "duegood-capture-download", "--bin", "duegood-capture-state",
+    "--bin", "duegood-browser-import",
   ];
   await runWithHeartbeat("compiling production helper", "cargo", args);
-  return path.join(targetDirectory, "release", platform === "win32" ? "duegood-capture-download.exe" : "duegood-capture-download");
+  const extension = platform === "win32" ? ".exe" : "";
+  return {
+    downloadBinaryPath: path.join(targetDirectory, "release", `duegood-capture-download${extension}`),
+    stateBinaryPath: path.join(targetDirectory, "release", `duegood-capture-state${extension}`),
+    importBinaryPath: path.join(targetDirectory, "release", `duegood-browser-import${extension}`),
+  };
 }
 
 async function createTauriSidecarPlaceholders(checkoutDirectory, targetTriple, platform) {
@@ -209,7 +223,11 @@ async function prepareInstallDirectory(homeDirectory) {
   await ensureDirectory(applicationSupport);
   await ensureDirectory(dueGood, { privateMode: true });
   await ensureDirectory(bin, { privateMode: true });
-  return path.join(bin, "duegood-capture-download");
+  return {
+    downloadHelperPath: path.join(bin, "duegood-capture-download"),
+    stateHelperPath: path.join(bin, "duegood-capture-state"),
+    importHelperPath: path.join(bin, "duegood-browser-import"),
+  };
 }
 
 async function installAtomically(binaryPath, targetPath, signal, platform) {
@@ -221,7 +239,7 @@ async function installAtomically(binaryPath, targetPath, signal, platform) {
     throw new Error("existing helper destination is not a regular file");
   }
 
-  const temporaryPath = path.join(path.dirname(targetPath), `.duegood-capture-download.${randomUUID()}.tmp`);
+  const temporaryPath = path.join(path.dirname(targetPath), `.${path.basename(targetPath)}.${randomUUID()}.tmp`);
   try {
     await copyFile(binaryPath, temporaryPath, constants.COPYFILE_EXCL);
     await chmod(temporaryPath, 0o700);
@@ -240,7 +258,7 @@ async function installAtomically(binaryPath, targetPath, signal, platform) {
  * @param {{ sourceCheckout?: string, homeDirectory?: string, platform?: NodeJS.Platform,
  *   signal?: AbortSignal, progress?: (message: string) => void, stage?: typeof stageCandidate,
  *   untrackedPaths?: typeof listUntrackedPaths, compile?: typeof compileReleaseHelper, run?: ToolRunner }} [options]
- * @returns {Promise<{ path: string, sha256: string, byteCount: number }>} */
+ * @returns {Promise<{ path: string, sha256: string, byteCount: number, stateHelperPath: string, stateHelperSha256: string, stateHelperByteCount: number, importPath: string, importSha256: string, importByteCount: number }>} */
 export async function prepareCanvasHelper({
   sourceCheckout = scriptRoot,
   homeDirectory = homedir(),
@@ -291,29 +309,46 @@ export async function prepareCanvasHelper({
 
     phase = "compiling";
     progress("compiling production helper");
-    const binaryPath = await compile({ checkoutDirectory, targetDirectory: ownedStage.cargoTargetDir, platform, signal, progress, run });
+    const binaries = await compile({ checkoutDirectory, targetDirectory: ownedStage.cargoTargetDir, platform, signal, progress, run });
     checkInterrupted(signal);
 
     phase = "verifying";
-    progress("verifying release binary and build marker");
-    await inspectBinary(binaryPath, platform);
+    progress("verifying release helpers and build marker");
+    const binaryPaths = [binaries.downloadBinaryPath, binaries.stateBinaryPath, binaries.importBinaryPath];
+    if (binaryPaths.some((binaryPath) => typeof binaryPath !== "string")) throw new Error("release helpers are missing");
+    for (const binaryPath of binaryPaths) await inspectBinary(binaryPath, platform);
     checkInterrupted(signal);
 
     if (platform === "darwin") {
       phase = "signing";
-      progress("applying ad hoc signature");
-      await signAdHoc(binaryPath, { signal, run, checkoutDirectory });
-      await inspectBinary(binaryPath, platform);
+    progress("applying ad hoc signatures");
+      for (const binaryPath of binaryPaths) {
+        await signAdHoc(binaryPath, { signal, run, checkoutDirectory });
+        await inspectBinary(binaryPath, platform);
+      }
     }
     checkInterrupted(signal);
 
     phase = "installing";
     progress("installing helper atomically");
-    const destination = await prepareInstallDirectory(homeDirectory);
+    const destinations = await prepareInstallDirectory(homeDirectory);
     checkInterrupted(signal);
-    const installed = await installAtomically(binaryPath, destination, signal, platform);
-    progress("helper installed and ready");
-    result = { path: destination, ...installed };
+    const [downloadHelper, stateHelper, importHelper] = await Promise.all([
+      installAtomically(binaries.downloadBinaryPath, destinations.downloadHelperPath, signal, platform),
+      installAtomically(binaries.stateBinaryPath, destinations.stateHelperPath, signal, platform),
+      installAtomically(binaries.importBinaryPath, destinations.importHelperPath, signal, platform),
+    ]);
+    progress("helpers installed and ready");
+    result = {
+      path: destinations.downloadHelperPath,
+      ...downloadHelper,
+      stateHelperPath: destinations.stateHelperPath,
+      stateHelperSha256: stateHelper.sha256,
+      stateHelperByteCount: stateHelper.byteCount,
+      importPath: destinations.importHelperPath,
+      importSha256: importHelper.sha256,
+      importByteCount: importHelper.byteCount,
+    };
   } catch (error) {
     failure = new Error(`helper preparation failed during ${phase}`);
     failure.cause = error;

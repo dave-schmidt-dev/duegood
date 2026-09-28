@@ -35,6 +35,8 @@ const PUBLIC_ERROR_CODES = new Set([
   "INVALID_PAGE_IDENTITY", "INVALID_PAGE_SLUG", "PAGE_IDENTITY_MISMATCH", "INVALID_MODULE_IDENTITY",
   "INVALID_DISCUSSION_IDENTITY", "INVALID_DISCUSSION_ENTRY_IDENTITY", "DISCUSSION_ENTRY_IDENTITY_MISMATCH",
   "INVALID_QUIZ_IDENTITY", "QUIZ_IDENTITY_MISMATCH", "FILE_IDENTITY_MISMATCH", "DETAIL_BUDGET_EXCEEDED",
+  "INVALID_GROUP_ID", "GROUP_IDENTITY_MISMATCH", "INVALID_GROUP_FOLDER_ID", "DUPLICATE_GROUP_FOLDER_ID",
+  "INVALID_GROUP_FILE_ID", "GROUP_PAGE_IDENTITY_MISMATCH", "INVALID_GROUP_DISCUSSION_ID", "INVALID_GROUP_DISCUSSION_ENTRY_ID",
   "INVALID_CONVERSATION_ID", "CONVERSATION_BUDGET_EXCEEDED",
   "COURSE_IDENTITY_MISMATCH", "CONVERSATION_IDENTITY_MISMATCH", "INVALID_CAPTURE_TIME",
   "SESSION_FAILURE", "HTML_OR_SSO_REJECTED", "INVALID_JSON", "NOT_FOUND", "INCOMPLETE_REQUIRED_AREA",
@@ -46,6 +48,8 @@ const OPTIONAL_ENDPOINTS = new Set([
   "discussions", "discussionEntries", "discussionReplies", "announcements", "quizzes", "quiz",
   "courseFiles", "folders", "groups", "personalFiles", "personalFolders", "personalFile", "file",
   "inbox", "inboxAll", "conversationsSent", "conversationsArchived", "conversation", "calendarEvents",
+  "groupFolders", "groupFolderFiles", "groupPages", "groupPage", "groupDiscussions",
+  "groupDiscussionEntries", "groupDiscussionReplies",
 ]);
 const COURSE_ENDPOINTS = Object.freeze([
   "course", "courseTabs", "assignments", "assignmentGroups", "submissions", "pages", "modules",
@@ -92,12 +96,18 @@ function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** @typedef {{endpoint: string, courseId: number | null, groupId?: number, contextCode?: string, pages: number, items: Array<Record<string, unknown>>}} CanvasCaptureResource */
+/** @typedef {{endpoint: string, courseId: number | null, groupId?: number, contextCode?: string, status: "complete" | "gap", reason?: string}} CanvasCaptureCoverage */
+/** @typedef {{schemaVersion: 2, source: "canvas-browser", runId: number, generationId: string, capturedAt: string, complete: false, identity: {origin: string, userId: number, accountId?: number}, activeCourses: {complete: true, courseIds: number[]}, coverageRequirements: {activeCoursesComplete: true, perActiveCourse: string[]}, resources: CanvasCaptureResource[], coverage: CanvasCaptureCoverage[]}} CanvasBrowserCapture */
+
 /**
  * Collect a bounded synthetic-testable metadata snapshot through fixed Canvas reader endpoints.
  * No output is returned until identity, pagination, and required course sections all validate.
  *
  * @param {object} options
  * @param {number} options.expectedUserId Owner-confirmed Canvas user ID.
+ * @param {number} options.runId Native capture run allocated before collection.
+ * @param {string} options.generationId Reserved archive generation identifier.
  * @param {object} [options.page] Playwright page used when `evaluate` is omitted.
  * @param {Function} [options.evaluate] Injectable page.evaluate-compatible function.
  * @param {Function} [options.reader] Fixed self-contained browser API reader.
@@ -105,10 +115,12 @@ function isRecord(value) {
  * @param {Function} [options.downloadFile] Receives transient `{fileId, sourceUrl, expectedSize}` and returns a staged receipt.
  * @param {Function} [options.progress] Receives content-free request-boundary events.
  * @param {Function} [options.now] Injectable clock for deterministic synthetic tests.
- * @returns {Promise<{schemaVersion: number, source: string, capturedAt: string, complete: false, identity: object, resources: Array<{endpoint: string, courseId: number | null, items: Array<object>, pages: number}>, coverage: Array<{endpoint: string, courseId: number | null, status: string, reason?: string}>}>} A schema-v1 partial capture; it is not written to disk.
+ * @returns {Promise<CanvasBrowserCapture>} A schema-v2 partial capture; it is not written to disk.
  */
 export async function collectCanvasBrowserCapture({
   expectedUserId,
+  runId,
+  generationId,
   page = undefined,
   evaluate = undefined,
   reader = readCanvasBrowserApi,
@@ -118,6 +130,10 @@ export async function collectCanvasBrowserCapture({
   now = () => new Date(),
 } = {}) {
   if (!positiveId(expectedUserId)) throw captureError("EXPECTED_USER_ID_REQUIRED");
+  if (!positiveId(runId) || !Number.isSafeInteger(runId)
+      || typeof generationId !== "string" || !/^[a-f0-9]{32}$/u.test(generationId)) {
+    throw captureError("CAPTURE_LINKAGE_REQUIRED");
+  }
   if (typeof reader !== "function" || typeof htmlReader !== "function"
       || (downloadFile !== undefined && typeof downloadFile !== "function")
       || typeof progress !== "function" || typeof now !== "function") {
@@ -139,18 +155,19 @@ export async function collectCanvasBrowserCapture({
   const coverage = [];
   const recordedGaps = new Set();
 
-  const addNotAttemptedGap = (endpoint, courseId) => {
-    const key = `${endpoint}:${courseId ?? "account"}`;
+  const addNotAttemptedGap = (endpoint, courseId, groupId = undefined) => {
+    const key = `${endpoint}:${courseId ?? "account"}:${groupId ?? ""}`;
     if (recordedGaps.has(key)) return;
     recordedGaps.add(key);
-    coverage.push({ endpoint, courseId: courseId ?? null, status: "gap", reason: "not-attempted" });
+    coverage.push({ endpoint, courseId: courseId ?? null,
+      ...(groupId === undefined ? {} : { groupId }), status: "gap", reason: "not-attempted" });
   };
 
-  const reserveDetailRequest = (endpoint, courseId) => {
+  const reserveDetailRequest = (endpoint, courseId, groupId = undefined) => {
     const cap = DETAIL_REQUEST_CAPS[endpoint];
     const count = detailRequestCounts.get(endpoint) ?? 0;
     if (cap === undefined || count >= cap || detailRequestCount >= MAX_DETAIL_REQUESTS || requestCount >= MAX_REQUESTS) {
-      addNotAttemptedGap(endpoint, courseId);
+      addNotAttemptedGap(endpoint, courseId, groupId);
       return false;
     }
     detailRequestCounts.set(endpoint, count + 1);
@@ -201,8 +218,18 @@ export async function collectCanvasBrowserCapture({
       const code = publicErrorCode(error);
       await emitProgress({ phase: "request-failed", requestId, endpoint, errorCode: code });
       if (optional && (code === "REQUEST_FAILED" || code === "NOT_FOUND")) {
-        coverage.push({ endpoint, courseId: values.courseId ?? null, status: "gap",
+        coverage.push({ endpoint, courseId: values.courseId ?? null,
+          ...(values.groupId === undefined ? {} : { groupId: values.groupId }),
+          ...(values.calendarContextCode === undefined ? {} : { contextCode: values.calendarContextCode }), status: "gap",
           reason: code === "NOT_FOUND" ? "not-found" : "request-failed" });
+        return { result: { status: "gap", items: [], pages: 0 }, gap: true };
+      }
+      if (endpoint === "calendarEvents" && code === "BUDGET_EXCEEDED") {
+        coverage.push({ endpoint, courseId: values.courseId ?? null,
+          ...(values.groupId === undefined ? {} : { groupId: values.groupId }),
+          ...(values.calendarContextCode === undefined ? {} : { contextCode: values.calendarContextCode }),
+          status: "incomplete", reason: "capture-budget" });
+        await emitProgress({ phase: "request-complete", requestId, endpoint, status: "incomplete", pages: 0, itemCount: 0 });
         return { result: { status: "gap", items: [], pages: 0 }, gap: true };
       }
       throw captureError(code);
@@ -219,11 +246,15 @@ export async function collectCanvasBrowserCapture({
       throw captureError("INVALID_READ_RESULT");
     }
     if (result.status === "gap" && optional && result.reason === "FORBIDDEN_OPTIONAL" && result.items.length === 0) {
-      coverage.push({ endpoint, courseId: values.courseId ?? null, status: "gap", reason: "forbidden-optional" });
+      coverage.push({ endpoint, courseId: values.courseId ?? null,
+        ...(values.groupId === undefined ? {} : { groupId: values.groupId }),
+        ...(values.calendarContextCode === undefined ? {} : { contextCode: values.calendarContextCode }),
+        status: "gap", reason: "forbidden-optional" });
       await emitProgress({ phase: "request-complete", requestId, endpoint, status: "gap", pages: result.pages, itemCount: 0 });
       return { result, gap: true };
     }
-    if (result.status !== "ok" || result.pages < 1 || result.items.some((item) => !isRecord(item))) {
+    const sampledCalendar = endpoint === "calendarEvents" && result.status === "sampled";
+    if ((result.status !== "ok" && !sampledCalendar) || result.pages < 1 || result.items.some((item) => !isRecord(item))) {
       const code = result.status === "sampled" ? "PAGINATION_INCOMPLETE" : "REQUIRED_SECTION_INCOMPLETE";
       await emitProgress({ phase: "request-failed", requestId, endpoint, errorCode: code });
       throw captureError(code);
@@ -233,19 +264,23 @@ export async function collectCanvasBrowserCapture({
       throw captureError("CAPTURE_ITEM_BUDGET_EXCEEDED");
     }
     captureItemCount += result.items.length;
-    coverage.push({ endpoint, courseId: values.courseId ?? null, status: "complete" });
+    coverage.push({ endpoint, courseId: values.courseId ?? null,
+      ...(values.groupId === undefined ? {} : { groupId: values.groupId }),
+      ...(values.calendarContextCode === undefined ? {} : { contextCode: values.calendarContextCode }),
+      status: sampledCalendar ? "incomplete" : "complete",
+      ...(sampledCalendar ? { reason: "pagination-budget" } : {}) });
     await emitProgress({
       phase: "request-complete",
       requestId,
       endpoint,
-      status: "complete",
+      status: sampledCalendar ? "incomplete" : "complete",
       pages: result.pages,
       itemCount: result.items.length,
     });
     return { result, gap: false };
   };
 
-  const addResource = async (endpoint, courseId, result) => {
+  const addResource = async (endpoint, courseId, result, { groupId = undefined, contextCode = undefined } = {}) => {
     if (FILE_METADATA_ENDPOINTS.has(endpoint)) {
       for (const item of result.items) await fileCapture.capture(item);
     }
@@ -259,7 +294,10 @@ export async function collectCanvasBrowserCapture({
         htmlReader,
       }));
     }
-    resources.push({ endpoint, courseId, items: safeItems, pages: result.pages });
+    resources.push({ endpoint, courseId,
+      ...(groupId === undefined ? {} : { groupId }),
+      ...(contextCode === undefined ? {} : { contextCode }),
+      items: safeItems, pages: result.pages });
   };
 
   let output;
@@ -289,6 +327,11 @@ export async function collectCanvasBrowserCapture({
     const completedRead = await readEndpoint("coursesCompleted", {}, { optional: false });
     await addResource("coursesActive", null, activeRead.result);
     await addResource("coursesCompleted", null, completedRead.result);
+    const activeCourseIds = new Set();
+    for (const course of activeRead.result.items) {
+      if (!positiveId(course.id)) throw captureError("INVALID_COURSE_ID");
+      activeCourseIds.add(course.id);
+    }
     const courseIds = new Set();
     for (const course of [...activeRead.result.items, ...completedRead.result.items]) {
       if (!positiveId(course.id)) throw captureError("INVALID_COURSE_ID");
@@ -460,7 +503,9 @@ export async function collectCanvasBrowserCapture({
       addNotAttemptedGap,
       reserveDetailRequest,
       courseFileIds,
-      capturedAt,
+      courseIds,
+      expectedUserId,
+      accountId: observedAccountId,
     });
 
     const fileBodyReceipts = fileCapture.finish();
@@ -472,11 +517,18 @@ export async function collectCanvasBrowserCapture({
     const identity = { origin: ORIGIN, userId: expectedUserId };
     if (observedAccountId !== undefined) identity.accountId = observedAccountId;
     output = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       source: "canvas-browser",
+      runId,
+      generationId,
       capturedAt: capturedAt.toISOString(),
       complete: false,
       identity,
+      activeCourses: { complete: true, courseIds: [...activeCourseIds].sort((left, right) => left - right) },
+      coverageRequirements: {
+        activeCoursesComplete: true,
+        perActiveCourse: ["course", "assignments", "assignmentGroups", "submissions"],
+      },
       resources,
       coverage,
     };

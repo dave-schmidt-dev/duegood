@@ -33,13 +33,15 @@ use crate::store::{atomic_write, node_json_bytes, read_capped, Store, StoreCondi
 use crate::store::{ManualGradeResult, MutationResult, PendingLinkResult};
 use crate::{clipboard, export, resources, snapshots};
 
+#[path = "commands_browser.rs"]
+mod browser_commands;
 #[path = "commands_ical.rs"]
 mod ical_commands;
 
 /// Every command the webview may invoke; `capabilities/default.json` grants exactly these and
 /// `build.rs` generates one permission per name (tests assert all three agree).
 #[cfg(test)]
-pub const COMMAND_NAMES: [&str; 22] = [
+pub const COMMAND_NAMES: [&str; 24] = [
     "store_status",
     "choose_legacy_root",
     "dry_run_import",
@@ -55,8 +57,10 @@ pub const COMMAND_NAMES: [&str; 22] = [
     "list_snapshots",
     "restore_snapshot",
     "export_legacy_folder",
+    "export_native_store",
     "set_canvas_refresh_enabled",
     "start_canvas_refresh",
+    "import_browser_capture",
     "start_ical_refresh",
     "prepare_store_promotion",
     "confirm_store_promotion",
@@ -1995,8 +1999,10 @@ pub fn register_handlers<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Build
         list_snapshots,
         restore_snapshot,
         export_legacy_folder,
+        browser_commands::export_native_store,
         set_canvas_refresh_enabled,
         start_canvas_refresh,
+        browser_commands::import_browser_capture,
         start_ical_refresh,
         prepare_store_promotion,
         confirm_store_promotion,

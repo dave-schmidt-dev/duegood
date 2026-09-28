@@ -6,6 +6,17 @@ import type { ConversationAttachment, ConversationMessage, NormalizedConversatio
 import type { AssignmentListItem } from "../db/types";
 import type { LocalCourse, LocalSnapshot } from "./coursework-types";
 import { pendingSourceLinks } from "./pending-links";
+import {
+  areActiveBrowserCoursesCurrent,
+  hasIndependentIcalDue,
+  isBrowserCourseCoverageCurrent,
+  isBrowserLibraryFactCurrent,
+  isBrowserSectionCurrent,
+  LIBRARY_ENDPOINTS,
+  maskStaleBrowserGrade,
+  REQUIRED_COURSEWORK_ENDPOINTS,
+  type BrowserFreshness,
+} from "./browser-freshness";
 
 type JsonObject = Record<string, unknown>;
 type LocalGradeGroup = NonNullable<LocalCourse["gradeGroups"]>[number];
@@ -90,6 +101,8 @@ export interface DashboardDocumentBundle {
   readonly conversations: string | null;
   readonly profile: string | null;
   readonly avatar: AvatarHeader | null;
+  /** Present only when the native store can bind these documents to its latest capture attempt. */
+  readonly browserFreshness?: BrowserFreshness;
   /** Keyed by course folder name (`classes/<name>`). */
   readonly courseExports: Readonly<Record<string, CourseExportTexts>>;
 }
@@ -141,10 +154,52 @@ export interface DashboardBody {
     readonly label: string;
     readonly detail: string;
     readonly lastRefreshAt: string | null;
-    readonly coursework: "synced";
+    readonly coursework: "synced" | "not_synced";
     readonly library: "synced" | "not_synced";
     readonly inbox: LocalConversationSnapshot["status"];
+    readonly browserFreshness?: BrowserFreshness;
   };
+}
+
+interface ProjectedCourse extends LocalCourse {
+  readonly active: boolean;
+  readonly canvasCourseId: number | null;
+}
+
+interface ProjectedEvent extends LocalTimelineEvent {
+  /** Internal provenance bit for the selected due fact; it is stripped from the dashboard body. */
+  readonly independentDue: boolean;
+}
+
+interface ProjectedSnapshot extends Omit<LocalSnapshot, "courses" | "events"> {
+  readonly courses: readonly ProjectedCourse[];
+  readonly events: readonly ProjectedEvent[];
+}
+
+function applyBrowserFreshness(snapshot: ProjectedSnapshot, freshness: BrowserFreshness | undefined): ProjectedSnapshot {
+  if (freshness === undefined) return snapshot;
+  const byCourse = new Map(snapshot.courses.map((course) => [course.id, course] as const));
+  const courses = snapshot.courses.map((course) => course.active && !isBrowserCourseCoverageCurrent(freshness, course, ["assignmentGroups"])
+    ? { ...course, gradeGroups: [] }
+    : course);
+  const events = snapshot.events.map((event) => {
+    const course = byCourse.get(event.courseId);
+    return course === undefined ? event : maskStaleBrowserGrade(event, course, freshness);
+  });
+  const assignments = snapshot.assignments.map((assignment) => {
+    const course = byCourse.get(assignment.courseId);
+    return course === undefined ? assignment : maskStaleBrowserGrade(assignment, course, freshness);
+  });
+  return { ...snapshot, courses, events, assignments };
+}
+
+function publicTimelineEvent(event: ProjectedEvent): LocalTimelineEvent {
+  return Object.fromEntries(Object.entries(event).filter(([key]) => key !== "independentDue")) as unknown as LocalTimelineEvent;
+}
+
+/** Keeps capture-only course metadata internal to filtering and freshness checks. */
+function publicCourse(course: ProjectedCourse): LocalCourse {
+  return Object.fromEntries(Object.entries(course).filter(([key]) => key !== "active" && key !== "canvasCourseId")) as LocalCourse;
 }
 
 const CHANGE_FIELD_LABELS: Readonly<Record<string, string>> = {
@@ -252,6 +307,16 @@ function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function projectedCanvasCourseId(course: JsonObject, key: string, label: string): number | null {
+  if (Object.hasOwn(course, "canvasCourseId")) {
+    if (typeof course.canvasCourseId !== "number" || !Number.isSafeInteger(course.canvasCourseId) || course.canvasCourseId <= 0) {
+      throw new Error(`${label}.canvasCourseId must be a positive safe integer`);
+    }
+    return course.canvasCourseId;
+  }
+  return /^[1-9][0-9]{0,15}$/.test(key) && Number.isSafeInteger(Number(key)) ? Number(key) : null;
+}
+
 /** Mirrors the Node store so browser and desktop projections reject the same malformed record. */
 function manualGradeObservation(value: unknown, label: string): { readonly version: 1; readonly value: string; readonly source: "manual" | "pdf" } | null {
   if (value === undefined) return null;
@@ -289,21 +354,24 @@ function dueAt(item: JsonObject): Pick<AssignmentListItem, "dueAt" | "dueAtState
  * the same structural errors (non-object document, duplicate course keys or item IDs, unknown
  * course references, non-string due dates).
  */
-function projectCoursework(value: unknown, version: string): LocalSnapshot {
+function projectCoursework(value: unknown, version: string): ProjectedSnapshot {
   const document = requireObject(value, "coursework document");
   const rawCourses = requireArray(document.courses, "courses");
   const rawItems = requireArray(document.items, "items");
-  const coursesByKey = new Map<string, LocalCourse>();
+  const coursesByKey = new Map<string, ProjectedCourse>();
   for (const [index, candidate] of rawCourses.entries()) {
     const course = requireObject(candidate, `courses[${index}]`);
     if (typeof course.key !== "string" || course.key.length === 0) throw new Error(`courses[${index}].key must be a nonempty string`);
     if (coursesByKey.has(course.key)) throw new Error(`duplicate course key: ${course.key}`);
+    if (course.active !== undefined && typeof course.active !== "boolean") throw new Error(`courses[${index}].active must be a boolean`);
     coursesByKey.set(course.key, {
       id: course.key,
       courseCode: stringOrNull(course.code),
       title: stringOrNull(course.title),
       color: stringOrNull(course.color),
       folder: stringOrNull(course.folder),
+      active: course.active !== false,
+      canvasCourseId: projectedCanvasCourseId(course, course.key, `courses[${index}]`),
       lastSuccessfulCheckAt: typeof document.generated === "string" ? Date.parse(document.generated) || null : null,
       gradeGroups: gradeGroups(course.gradeGroups),
       syncing: false,
@@ -312,14 +380,14 @@ function projectCoursework(value: unknown, version: string): LocalSnapshot {
 
   const ids = new Set<string>();
   const assignments: LocalGradeRecord[] = [];
-  const events: LocalTimelineEvent[] = [];
+  const events: ProjectedEvent[] = [];
   for (const [index, candidate] of rawItems.entries()) {
     const item = requireObject(candidate, `items[${index}]`);
     if (typeof item.id !== "string" || item.id.length === 0) throw new Error(`items[${index}].id must be a nonempty string`);
     if (ids.has(item.id)) throw new Error(`duplicate item id: ${item.id}`);
     ids.add(item.id);
     if (typeof item.course !== "string" || !coursesByKey.has(item.course)) throw new Error(`item ${item.id} references an unknown course`);
-    const course = coursesByKey.get(item.course) as LocalCourse;
+    const course = coursesByKey.get(item.course) as ProjectedCourse;
     if (item.kind === "milestone") continue;
     const localGrade = manualGradeObservation(item.manualGradeObservation, `item ${item.id}.manualGradeObservation`);
     const projected: LocalGradeRecord = {
@@ -344,18 +412,21 @@ function projectCoursework(value: unknown, version: string): LocalSnapshot {
       assignmentGroupName: stringOrNull(item.assignmentGroupName),
       assignmentGroupWeight: numberOrNull(item.assignmentGroupWeight),
     };
-    const event: LocalTimelineEvent = {
+    const event: ProjectedEvent = {
       ...projected,
       type: item.kind === "session" ? "class" : "deadline",
       kind: typeof item.kind === "string" ? item.kind : null,
+      independentDue: hasIndependentIcalDue(item),
       detail: stringOrNull(item.detail),
       place: null,
       notes: stringOrNull(item.notes),
       discussionPostDone: item.discussionPostDone === true,
       discussionRepliesDone: item.discussionRepliesDone === true,
     };
-    events.push(event);
-    if (event.type === "deadline") assignments.push(projected);
+    if (course.active) {
+      events.push(event);
+      if (event.type === "deadline") assignments.push(projected);
+    }
   }
   assignments.sort((left, right) => (left.dueAt ?? "9999").localeCompare(right.dueAt ?? "9999"));
   events.sort((left, right) => (left.dueAt ?? "9999").localeCompare(right.dueAt ?? "9999"));
@@ -368,7 +439,18 @@ function projectCoursework(value: unknown, version: string): LocalSnapshot {
 export function projectCourseResources(course: Pick<LocalCourse, "id" | "courseCode">, documents: CourseExportDocuments, resourceOpenPrefix: string | null): LocalResource[] {
   const resources: LocalResource[] = [];
   const manifest = entries(documents.downloadManifest);
-  const localFilesByCanvasId = new Map(manifest.filter((item) => item.status === "downloaded" || item.status === "reused").map((item) => [String(item.id), item] as const));
+  const localFilesByCanvasId = new Set(manifest.flatMap((item) => {
+    if ((item.status === "downloaded" || item.status === "reused") && (typeof item.id === "string" || typeof item.id === "number")) return [String(item.id)];
+    const fileId = item.fileId;
+    const contentType = typeof item.contentType === "string" ? item.contentType : "";
+    const validNativeReceipt = item.status === "saved"
+      && (typeof fileId === "number" && Number.isSafeInteger(fileId) && fileId > 0 || typeof fileId === "string" && /^[1-9][0-9]{0,15}$/.test(fileId))
+      && typeof item.sha256 === "string" && /^[0-9a-f]{64}$/.test(item.sha256)
+      && typeof item.byteCount === "number" && Number.isSafeInteger(item.byteCount) && item.byteCount > 0
+      && item.sourceAuthenticity === "unverified"
+      && contentType.length <= 120 && /^[a-z0-9.+-]+\/[a-z0-9.+-]+(?:\s*;\s*[a-z0-9._=+-]+)*$/i.test(contentType);
+    return validNativeReceipt ? [String(fileId)] : [];
+  }));
 
   for (const item of entries(documents.files)) {
     const title = text(item.display_name) ?? text(item.filename);
@@ -536,7 +618,9 @@ function exportDocuments(texts: CourseExportTexts): CourseExportDocuments {
  * `test/local/tauri-documents.test.ts` asserts it). Throws when the coursework document is invalid.
  */
 export function projectDashboardDocuments(bundle: DashboardDocumentBundle, options: DashboardProjectionOptions): DashboardBody {
-  const snapshot = projectCoursework(JSON.parse(bundle.coursework.text) as unknown, bundle.coursework.version);
+  const unfilteredSnapshot = projectCoursework(JSON.parse(bundle.coursework.text) as unknown, bundle.coursework.version);
+  const snapshot = applyBrowserFreshness(unfilteredSnapshot, bundle.browserFreshness);
+  const coursesById = new Map(snapshot.courses.map((course) => [course.id, course] as const));
   const collected: LocalResource[] = [];
   for (const course of snapshot.courses) {
     const slug = courseFolderSlug(course.folder);
@@ -545,17 +629,42 @@ export function projectDashboardDocuments(bundle: DashboardDocumentBundle, optio
     if (texts === undefined) continue;
     for (const resource of projectCourseResources(course, exportDocuments(texts), options.resourceOpenPrefix)) collected.push(resource);
   }
-  const resources = finalizeResources(collected);
-  const conversationsDocument = parseJsonText(bundle.conversations);
+  const resources = finalizeResources(bundle.browserFreshness === undefined
+    ? collected
+    : collected.filter((resource) => isBrowserLibraryFactCurrent(resource, coursesById, bundle.browserFreshness as BrowserFreshness)));
+  const inboxCurrent = bundle.browserFreshness === undefined
+    || isBrowserSectionCurrent(bundle.browserFreshness, null, "inboxAll");
+  const conversationsDocument = inboxCurrent ? parseJsonText(bundle.conversations) : null;
   const refreshes = projectRefreshes(parseJsonText(bundle.refreshHistory), conversationsDocument);
   const inbox = projectConversations(conversationsDocument);
   const profile = projectProfile(parseJsonText(bundle.profile), bundle.avatar, options.avatarPath);
   const latestRefreshAt = refreshes[0]?.finishedAt ?? refreshes[0]?.startedAt ?? null;
-  const dashboardCourses = snapshot.courses.filter((course) => snapshot.events.some((event) => event.courseId === course.id));
+  const selectedEvents = bundle.browserFreshness === undefined ? snapshot.events : snapshot.events.filter((event) => {
+    if (event.source !== "canvas" || event.independentDue) return true;
+    const course = coursesById.get(event.courseId);
+    return course !== undefined && isBrowserCourseCoverageCurrent(bundle.browserFreshness as BrowserFreshness, course, REQUIRED_COURSEWORK_ENDPOINTS);
+  });
+  const dailyEvents = selectedEvents.map(publicTimelineEvent);
+  const dashboardCourses = snapshot.courses
+    .filter((course) => dailyEvents.some((event) => event.courseId === course.id))
+    .map(publicCourse);
+  const courseworkCurrent = bundle.browserFreshness === undefined
+    || areActiveBrowserCoursesCurrent(bundle.browserFreshness, snapshot.courses, REQUIRED_COURSEWORK_ENDPOINTS);
+  const libraryCurrent = bundle.browserFreshness === undefined
+    ? resources.length > 0
+    : areActiveBrowserCoursesCurrent(bundle.browserFreshness, snapshot.courses, LIBRARY_ENDPOINTS);
+  const browserDetail = bundle.browserFreshness === undefined ? "" : !bundle.browserFreshness.current
+    ? ` · Canvas capture unverified (${bundle.browserFreshness.reason})`
+    : !courseworkCurrent ? " · Canvas coursework coverage incomplete"
+      : !libraryCurrent ? " · Canvas library coverage incomplete" : "";
+  const state: DashboardBody["sourceStatus"]["state"] = !courseworkCurrent
+    ? "not_synced"
+    : inbox.status === "partial" || (bundle.browserFreshness !== undefined && !libraryCurrent) ? "partial"
+      : inbox.status === "not_synced" ? "not_synced" : "ready";
   return {
     version: snapshot.version,
     courses: dashboardCourses,
-    events: snapshot.events,
+    events: dailyEvents,
     pendingSourceLinks: snapshot.pendingSourceLinks,
     resources,
     conversations: inbox.conversations,
@@ -565,13 +674,14 @@ export function projectDashboardDocuments(bundle: DashboardDocumentBundle, optio
     icalImportAvailable: false,
     icalFeedStatus: null,
     sourceStatus: {
-      state: inbox.status === "partial" ? "partial" : inbox.status === "not_synced" ? "not_synced" : "ready",
+      state,
       label: options.sourceLabel,
-      detail: `${String(snapshot.events.length)} timeline events · ${String(resources.length)} library items · ${inboxDetail(inbox.status, options.dataOrigin)}`,
-      lastRefreshAt: latestRefreshAt,
-      coursework: "synced",
-      library: resources.length > 0 ? "synced" : "not_synced",
+      detail: `${String(dailyEvents.length)} timeline events · ${String(resources.length)} library items · ${inboxDetail(inbox.status, options.dataOrigin)}${browserDetail}`,
+      lastRefreshAt: !courseworkCurrent ? null : latestRefreshAt,
+      coursework: courseworkCurrent ? "synced" : "not_synced",
+      library: libraryCurrent ? "synced" : "not_synced",
       inbox: inbox.status,
+      ...(bundle.browserFreshness === undefined ? {} : { browserFreshness: bundle.browserFreshness }),
     },
   };
 }

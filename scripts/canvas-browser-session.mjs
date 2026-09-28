@@ -124,9 +124,19 @@ function isRecord(value) {
 }
 
 function validateCapture(snapshot, expectedUserId) {
-  if (!isRecord(snapshot) || snapshot.schemaVersion !== 1 || snapshot.source !== "canvas-browser"
+  if (!isRecord(snapshot) || snapshot.schemaVersion !== 2 || snapshot.source !== "canvas-browser"
+      || !Number.isSafeInteger(snapshot.runId) || snapshot.runId <= 0
+      || typeof snapshot.generationId !== "string" || !/^[a-f0-9]{32}$/u.test(snapshot.generationId)
       || !isRecord(snapshot.identity) || snapshot.identity.origin !== ORIGIN
       || snapshot.identity.userId !== expectedUserId
+      || !isRecord(snapshot.activeCourses) || snapshot.activeCourses.complete !== true
+      || !Array.isArray(snapshot.activeCourses.courseIds)
+      || snapshot.activeCourses.courseIds.some((id) => !Number.isSafeInteger(id) || id <= 0)
+      || new Set(snapshot.activeCourses.courseIds).size !== snapshot.activeCourses.courseIds.length
+      || !isRecord(snapshot.coverageRequirements)
+      || snapshot.coverageRequirements.activeCoursesComplete !== true
+      || JSON.stringify(snapshot.coverageRequirements.perActiveCourse)
+        !== JSON.stringify(["course", "assignments", "assignmentGroups", "submissions"])
       || !Array.isArray(snapshot.resources) || !Array.isArray(snapshot.coverage)) {
     throw new Error("CAPTURE_IDENTITY_OR_SHAPE_REJECTED");
   }
@@ -134,6 +144,20 @@ function validateCapture(snapshot, expectedUserId) {
       || !["complete", "gap"].includes(entry.status)
       || (entry.status === "gap" && !["forbidden-optional", "disabled", "not-attempted", "not-found", "request-failed"].includes(entry.reason)))) {
     throw new Error("CAPTURE_COVERAGE_INCOMPLETE");
+  }
+  const activeInventory = snapshot.resources.find((resource) => resource?.endpoint === "coursesActive" && resource.courseId === null);
+  if (!activeInventory || !Array.isArray(activeInventory.items)
+      || JSON.stringify(activeInventory.items.map((item) => item?.id).sort((a, b) => a - b))
+        !== JSON.stringify([...snapshot.activeCourses.courseIds].sort((a, b) => a - b))) {
+    throw new Error("ACTIVE_COURSE_INVENTORY_MISMATCH");
+  }
+  const completeCoverage = new Set(snapshot.coverage
+    .filter((entry) => entry.status === "complete")
+    .map((entry) => `${entry.endpoint}:${entry.courseId ?? "account"}`));
+  if (!completeCoverage.has("coursesActive:account")
+      || snapshot.activeCourses.courseIds.some((courseId) =>
+        snapshot.coverageRequirements.perActiveCourse.some((endpoint) => !completeCoverage.has(`${endpoint}:${courseId}`)))) {
+    throw new Error("REQUIRED_COURSE_COVERAGE_INCOMPLETE");
   }
   const coverage = snapshot.coverage.map((entry) => ({ ...entry }));
   const fileBodyEntries = coverage.filter((entry) => entry.endpoint === "fileBodies");
@@ -431,6 +455,7 @@ export async function startSessionBroker({
             const snapshot = await capture({
               context,
               expectedUserId: request.expectedUserId,
+              protocolVersion: 2,
               progress: reportProgress,
             });
             const validated = validateCapture(snapshot, request.expectedUserId);

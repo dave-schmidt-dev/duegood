@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Due Good — Saved Canvas capture</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --paper:#0d141b; --deep:#081827; --surface:#17232d; --raised:#1c2b36;
+      --ink:#eef3f5; --muted:#acb9c3; --blue:#8fb8df; --gold:#d2ad72;
+      --sage:#8fbd8d; --clay:#e4937f; --line:#3a4b57;
+      --display:Charter,"Iowan Old Style",Georgia,serif;
+      --body:"Avenir Next",Avenir,Inter,system-ui,-apple-system,sans-serif;
+      --utility:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; background:var(--paper); color:var(--ink); font:14px/1.45 var(--body); }
+    button { color:inherit; font:inherit; }
+    button:focus-visible, a:focus-visible, input:focus-visible { outline:3px solid var(--gold); outline-offset:3px; }
+    .app { min-height:100vh; display:grid; grid-template-columns:236px minmax(0,1fr); }
+    .sidebar { position:sticky; top:0; height:100vh; display:flex; flex-direction:column; padding:24px 18px; background:var(--deep); border-right:1px solid #1b3343; }
+    .brand { display:flex; align-items:center; gap:11px; margin-bottom:28px; }
+    .brand-mark { display:grid; place-items:center; width:38px; height:38px; flex:0 0 auto; border:1px solid #ffffff44; border-radius:11px; background:var(--gold); color:#18232c; font:700 21px var(--display); }
+    .brand-name { font:700 20px var(--display); }
+    .brand-note { color:var(--muted); font-size:11px; }
+    nav { display:grid; gap:5px; }
+    nav button { display:flex; align-items:center; gap:12px; min-height:42px; padding:0 12px; border:0; border-radius:10px; background:transparent; color:#c4d0d8; text-align:left; cursor:pointer; }
+    nav button:hover { background:#ffffff0b; }
+    nav button.active { background:#ffffff16; color:white; }
+    .nav-icon { width:18px; color:var(--gold); font:14px var(--utility); text-align:center; }
+    .local-note { margin-top:auto; padding:14px 8px 0; border-top:1px solid #ffffff24; color:var(--muted); font-size:11px; }
+    .local-note strong { display:block; margin-bottom:3px; color:var(--ink); font:10px var(--utility); letter-spacing:.08em; text-transform:uppercase; }
+    .workspace { min-width:0; }
+    .topbar { min-height:64px; display:flex; align-items:center; justify-content:space-between; gap:18px; padding:10px clamp(20px,4vw,52px); border-bottom:1px solid var(--line); background:#0d141bed; }
+    .term { color:var(--muted); font-size:12px; }
+    .term strong { color:var(--ink); }
+    .top-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:9px; }
+    .calendar-state { color:var(--muted); font-size:11px; }
+    .button { min-height:38px; padding:0 13px; border:1px solid var(--line); border-radius:9px; background:var(--surface); color:var(--blue); font-weight:700; cursor:pointer; }
+    .button:hover { background:var(--raised); }
+    .button.primary { border-color:#8fb8df; background:var(--blue); color:#07131d; }
+    .button.primary:hover { background:#a4c9e9; }
+    .button:disabled { cursor:not-allowed; opacity:.55; }
+    main { width:min(1180px,100%); margin:0 auto; padding:30px clamp(18px,4vw,48px) 72px; }
+    .page-head { display:flex; align-items:flex-end; justify-content:space-between; gap:20px; margin-bottom:21px; }
+    .eyebrow { margin:0 0 5px; color:var(--clay); font:700 10px var(--utility); letter-spacing:.12em; text-transform:uppercase; }
+    h1 { margin:0; color:var(--blue); font:700 clamp(29px,4vw,38px)/1.08 var(--display); letter-spacing:-.025em; }
+    h2 { margin:0; color:var(--ink); font:700 20px var(--display); }
+    h3 { margin:0; color:var(--ink); font-size:14px; }
+    p { margin:6px 0 0; color:var(--muted); }
+    .page-copy { max-width:660px; font-size:13px; }
+    .updated { color:var(--muted); text-align:right; font:10px var(--utility); letter-spacing:.06em; text-transform:uppercase; }
+    .layout { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(270px,.8fr); gap:15px; align-items:start; }
+    .stack { display:grid; gap:15px; min-width:0; }
+    .panel { min-width:0; border:1px solid var(--line); border-radius:15px; background:var(--surface); overflow:hidden; }
+    .panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:18px 19px 15px; border-bottom:1px solid var(--line); background:#111b24; }
+    .panel-body { padding:18px 19px; }
+    .panel-foot { padding:13px 19px; border-top:1px solid var(--line); background:#111b24; color:var(--muted); font-size:12px; }
+    .status-row { display:flex; align-items:center; gap:10px; }
+    .dot { width:9px; height:9px; flex:0 0 auto; border-radius:50%; background:var(--status-color,var(--gold)); box-shadow:0 0 0 4px color-mix(in srgb,var(--status-color,var(--gold)) 17%,transparent); }
+    .status-label { color:var(--status-color,var(--gold)); font:700 10px var(--utility); letter-spacing:.08em; text-transform:uppercase; }
+    .status-strip { margin-bottom:15px; padding:13px 15px; border:1px solid color-mix(in srgb,var(--status-color,var(--gold)) 55%,var(--line)); border-left:4px solid var(--status-color,var(--gold)); border-radius:11px; background:color-mix(in srgb,var(--status-color,var(--gold)) 7%,var(--surface)); }
+    .status-strip strong { display:block; color:var(--ink); }
+    .status-strip p { font-size:12px; }
+    .metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; margin:15px 0; }
+    .metric { min-width:0; padding:12px; border:1px solid var(--line); border-radius:10px; background:#111b24; }
+    .metric strong { display:block; color:var(--ink); font:700 20px var(--display); }
+    .metric span { display:block; margin-top:2px; color:var(--muted); font-size:11px; }
+    .account-note { margin:14px 0; padding:12px 13px; border:1px solid #8fb8df55; border-radius:10px; background:#8fb8df0c; color:#d3e1eb; font-size:12px; }
+    .account-note strong { display:block; margin-bottom:2px; color:var(--blue); }
+    .action-row { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-top:16px; }
+    .hint { color:var(--muted); font-size:11px; }
+    .progress-wrap { margin-top:14px; }
+    progress { display:block; width:100%; height:8px; accent-color:var(--blue); }
+    .list { display:grid; }
+    .resource-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; align-items:center; padding:13px 0; border-bottom:1px solid #ffffff15; }
+    .resource-row:last-child { border-bottom:0; }
+    .resource-title { font-weight:700; }
+    .resource-meta { margin-top:3px; color:var(--muted); font-size:11px; }
+    .badge { display:inline-flex; align-items:center; min-height:22px; padding:0 8px; border:1px solid var(--line); border-radius:99px; color:var(--muted); font:700 9px var(--utility); letter-spacing:.04em; text-transform:uppercase; white-space:nowrap; }
+    .badge.good { border-color:#8fbd8d66; color:var(--sage); }
+    .badge.gap { border-color:#e4937f77; color:var(--clay); }
+    .retained { display:grid; gap:11px; }
+    .retained-item { padding:12px 13px; border:1px solid var(--line); border-radius:10px; background:#111b24; }
+    .retained-item strong { display:block; font-size:12px; }
+    .retained-item span { display:block; margin-top:3px; color:var(--muted); font-size:11px; }
+    .source-tag { display:inline-block; margin-right:6px; color:var(--gold); font:700 9px var(--utility); letter-spacing:.05em; text-transform:uppercase; }
+    .scenario { margin-top:15px; padding:13px; border:1px dashed #50616b; border-radius:11px; background:#111b24; }
+    .scenario summary { color:var(--muted); font:700 10px var(--utility); letter-spacing:.06em; text-transform:uppercase; cursor:pointer; }
+    .scenario-controls { display:flex; flex-wrap:wrap; gap:7px; margin-top:11px; }
+    .scenario-controls button { min-height:32px; padding:0 9px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--muted); font-size:11px; cursor:pointer; }
+    .scenario-controls button[aria-pressed="true"] { border-color:var(--blue); color:var(--ink); }
+    .fail-toggle { display:flex; align-items:center; gap:8px; margin-top:10px; color:var(--muted); font-size:11px; cursor:pointer; }
+    .fail-toggle input { accent-color:var(--clay); }
+    .empty { padding:18px; border:1px dashed var(--line); border-radius:11px; color:var(--muted); background:#111b24; }
+    .empty strong { display:block; margin-bottom:4px; color:var(--ink); }
+    .view-tabs { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 15px; }
+    .view-tabs button { min-height:34px; padding:0 12px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--muted); cursor:pointer; }
+    .view-tabs button.active { background:var(--deep); color:var(--ink); }
+    dialog { width:min(480px,calc(100% - 28px)); padding:0; border:1px solid var(--line); border-radius:15px; background:var(--surface); color:var(--ink); box-shadow:0 24px 80px #0009; }
+    dialog::backdrop { background:#02080cb8; }
+    .dialog-body { padding:23px; }
+    .dialog-body p { font-size:13px; }
+    .dialog-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; margin-top:20px; }
+    .screen-reader { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+    @media (max-width:860px) {
+      .app { display:flex; flex-direction:column; }
+      .sidebar { position:fixed; z-index:5; inset:auto 0 0; height:auto; padding:7px 8px calc(7px + env(safe-area-inset-bottom)); border:0; border-top:1px solid var(--line); }
+      .brand,.local-note { display:none; }
+      nav { display:flex; gap:4px; overflow-x:auto; overscroll-behavior-x:contain; }
+      nav button { min-width:70px; flex-direction:column; justify-content:center; gap:2px; min-height:51px; padding:4px; font-size:9px; text-align:center; }
+      .nav-icon { width:auto; }
+      .workspace { padding-bottom:70px; }
+      .topbar { padding:9px 14px; }
+      .calendar-state { display:none; }
+      main { padding:23px 14px 32px; }
+    }
+    @media (max-width:650px) {
+      .layout { grid-template-columns:1fr; }
+      .page-head { align-items:flex-start; }
+      .updated { display:none; }
+      .topbar { align-items:flex-start; flex-direction:column; gap:8px; }
+      .top-actions { width:100%; justify-content:space-between; }
+      .metrics { grid-template-columns:repeat(3,minmax(0,1fr)); }
+      .panel-head,.panel-body { padding-left:15px; padding-right:15px; }
+    }
+    @media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto !important; animation-duration:.01ms !important; transition-duration:.01ms !important; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" aria-label="Due Good navigation">
+      <div class="brand"><div class="brand-mark" aria-hidden="true">D</div><div><div class="brand-name">Due Good</div><div class="brand-note">Personal workspace</div></div></div>
+      <nav id="navigation">
+        <button data-view="Timeline"><span class="nav-icon">▥</span>Timeline</button>
+        <button data-view="Grades"><span class="nav-icon">▦</span>Grades</button>
+        <button data-view="Inbox"><span class="nav-icon">✉</span>Inbox</button>
+        <button data-view="Done"><span class="nav-icon">✓</span>Done</button>
+        <button data-view="Courses"><span class="nav-icon">◫</span>Courses</button>
+        <button data-view="Library"><span class="nav-icon">≡</span>Library</button>
+        <button data-view="Activity"><span class="nav-icon">↻</span>Activity</button>
+        <button class="active" data-view="Recovery" aria-current="page"><span class="nav-icon">↺</span>Recovery</button>
+      </nav>
+      <div class="local-note"><strong>Saved on this device</strong>Canvas imports and personal planning stay in your local app store.</div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <div class="term"><strong>Local coursework</strong> · personal account</div>
+        <div class="top-actions">
+          <span class="calendar-state" id="calendarState" role="status" aria-live="polite">iCal · Updated 10:05 PM</span>
+          <button class="button" id="calendarRefresh">Refresh calendar</button>
+          <button class="button" id="nativeExport">Export</button>
+          <button class="button" id="recoveryButton" aria-current="page">Recovery</button>
+        </div>
+      </header>
+      <main id="main" tabindex="-1"></main>
+    </div>
+  </div>
+
+  <dialog id="confirmDialog" aria-labelledby="confirmTitle">
+    <div class="dialog-body">
+      <p class="eyebrow">First import</p><h2 id="confirmTitle">Confirm this Canvas account</h2>
+      <p>This saved capture will bind the local coursework store to the Canvas account currently used on this device. The account details are not shown in this preview.</p>
+      <div class="account-note"><strong>Personal local store</strong>Importing does not change your iCal feed or personal notes.</div>
+      <div class="dialog-actions"><button class="button" id="cancelConfirm">Cancel</button><button class="button primary" id="confirmAccount">Confirm account and import</button></div>
+    </div>
+  </dialog>
+  <dialog id="noticeDialog" aria-labelledby="noticeTitle">
+    <div class="dialog-body"><p class="eyebrow" id="noticeEyebrow">Preview action</p><h2 id="noticeTitle">Saved copy</h2><p id="noticeCopy"></p><div class="dialog-actions"><button class="button primary" id="closeNotice">Done</button></div></div>
+  </dialog>
+
+  <script>
+    // All views derive from this one synthetic record; no network requests or personal account IDs.
+    const model = {
+      view: "Recovery",
+      firstAccountConfirmed: false,
+      failNextImport: false,
+      capture: {
+        phase: "ready", lastAttempt: "ready", importedAt: null,
+        fileGaps: 2, files: [
+          { id:"resource-1", name:"Course reading.pdf", status:"saved" },
+          { id:"resource-2", name:"Assignment guide.docx", status:"saved" },
+          { id:"resource-3", name:"Reference sheet.xlsx", status:"saved" },
+          { id:"resource-4", name:"File body unavailable", status:"gap" },
+          { id:"resource-5", name:"File body unavailable", status:"gap" }
+        ],
+        links: [
+          { id:"link-1", label:"Course resource link", status:"logged" },
+          { id:"link-2", label:"External reading link", status:"logged" },
+          { id:"link-3", label:"Reference link", status:"logged" }
+        ]
+      },
+      calendar: { phase:"current", lastUpdated:"10:05 PM" },
+      retained: [
+        { id:"ical-event-1", source:"iCal", title:"Study block", detail:"Monday · 9:00 AM · Calendar item retained" },
+        { id:"personal-note-1", source:"Personal", title:"My study note", detail:"Outline the next study session · Saved locally" }
+      ],
+      coursework: { id:"canvas-assignment-1", title:"Case study draft", course:"Sample course", due:"Wednesday · 8:00 PM", grade:"92%", submission:"Submitted" }
+    };
+
+    const main = document.querySelector("#main");
+    const confirmDialog = document.querySelector("#confirmDialog");
+    const noticeDialog = document.querySelector("#noticeDialog");
+    const views = ["Timeline","Grades","Inbox","Done","Courses","Library","Activity","Recovery"];
+    const esc = (value) => String(value).replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[char]);
+    const isCanvasAvailable = () => model.capture.phase === "imported";
+    const calendarText = () => `iCal · ${model.calendar.phase === "refreshing" ? "Refreshing…" : `Updated ${model.calendar.lastUpdated}`}`;
+
+    function header(title, copy, eyebrow = "PERSONAL WORKSPACE") {
+      return `<header class="page-head"><div><p class="eyebrow">${eyebrow}</p><h1>${esc(title)}</h1><p class="page-copy">${esc(copy)}</p></div><div class="updated">Private · This device</div></header>`;
+    }
+    function statusStrip() {
+      const states = {
+        unverified: { color:"var(--clay)", label:"Capture unverified", title:model.capture.lastAttempt === "failed" ? "Last import failed" : "Canvas coursework is not available", copy:model.capture.lastAttempt === "failed" ? "Previous Canvas assignments, grades, and submission states stay hidden until a capture validates." : "No saved capture has passed validation. Canvas assignments, grades, and submission states are hidden." },
+        ready: { color:"var(--blue)", label:"Ready to import", title:"A saved capture is ready", copy:"The capture passed local validation. Canvas content stays hidden until you confirm and import it." },
+        importing: { color:"var(--gold)", label:"Importing", title:"Import in progress", copy:"Your saved capture is being adopted into this local store. iCal and personal planning remain available." },
+        imported: { color:"var(--sage)", label:"Imported", title:"Saved capture imported", copy:`Imported ${model.capture.importedAt}. ${model.capture.fileGaps} file bodies were unavailable; those files are marked as gaps.` }
+      }[model.capture.phase];
+      return `<div class="status-strip" style="--status-color:${states.color}" role="status" aria-live="polite"><div class="status-row"><span class="dot" aria-hidden="true"></span><span class="status-label">${states.label}</span></div><strong>${states.title}</strong><p>${states.copy}</p></div>`;
+    }
+    function preservedPanel() {
+      return `<section class="panel" aria-labelledby="retainedHeading"><div class="panel-head"><div><p class="eyebrow">Unaffected by Canvas import</p><h2 id="retainedHeading">Still here</h2></div><span class="badge good">Retained</span></div><div class="panel-body retained">${model.retained.map((item) => `<article class="retained-item" data-record-id="${item.id}"><span class="source-tag">${esc(item.source)}</span><strong>${esc(item.title)}</strong><span>${esc(item.detail)}</span></article>`).join("")}</div><div class="panel-foot">Calendar refresh is separate. Importing Canvas does not replace iCal events or personal notes.</div></section>`;
+    }
+    function capturePanel() {
+      const phase = model.capture.phase;
+      const summary = phase === "unverified"
+        ? `<div class="empty"><strong>${model.capture.lastAttempt === "failed" ? "Last import failed" : "No verified capture"}</strong>${model.capture.lastAttempt === "failed" ? "Previous Canvas assignments, grades, and submission states remain hidden until a capture validates." : "Run a Canvas capture first. Unverified data is not displayed."}</div>`
+        : `<div class="metrics"><div class="metric"><strong>${phase === "importing" ? "…" : "3"}</strong><span>Files saved</span></div><div class="metric"><strong>${model.capture.fileGaps}</strong><span>File gaps</span></div><div class="metric"><strong>${model.capture.links.length}</strong><span>Links logged</span></div></div><div class="account-note"><strong>Fixed local account</strong>The capture belongs to the Canvas account used on this device. No account number is shown.</div>`;
+      const action = phase === "ready"
+        ? `<div class="action-row"><button class="button primary" id="importCapture">Import saved Canvas capture</button><span class="hint">Calendar refresh remains separate.</span></div>`
+        : phase === "importing"
+          ? `<div class="progress-wrap"><progress max="100" value="64" aria-label="Import progress"></progress><p class="hint">Verifying saved course and resource data…</p></div>`
+          : phase === "imported"
+            ? `<div class="action-row"><span class="badge good">Imported ${esc(model.capture.importedAt)}</span><span class="hint">A later capture can be imported from Recovery.</span></div>`
+            : `<div class="action-row"><button class="button" disabled>Import unavailable</button><span class="hint">A verified saved capture is required.</span></div>`;
+      return `<section class="panel" aria-labelledby="captureHeading"><div class="panel-head"><div><p class="eyebrow">Recovery · Canvas</p><h2 id="captureHeading">Saved Canvas capture</h2></div><span class="badge ${phase === "imported" ? "good" : phase === "unverified" ? "gap" : ""}">${phase === "imported" ? "Current" : phase === "unverified" ? "Not verified" : phase === "importing" ? "Working" : "Validated"}</span></div><div class="panel-body">${statusStrip()}${summary}${action}</div><div class="panel-foot">This local import does not refresh the Canvas site. It uses only the saved capture currently available on this device.</div></section>`;
+    }
+    function fileList() {
+      return `<div class="list">${model.capture.files.map((file) => `<div class="resource-row" data-record-id="${file.id}"><div><div class="resource-title">${esc(file.name)}</div><div class="resource-meta">${file.status === "saved" ? "Saved in the private resource archive" : "Canvas file was listed; body was not available"}</div></div>${file.status === "saved" ? `<button class="button" data-save="${file.id}">Save copy</button>` : `<span class="badge gap">File gap</span>`}</div>`).join("")}</div>`;
+    }
+    function libraryPanel() {
+      if (!isCanvasAvailable()) return `<div class="empty"><strong>Canvas resources are hidden</strong>${model.capture.phase === "ready" ? "Import the verified capture to make its saved files and link log available." : "A verified import is required before Canvas files or links can be shown."}</div>`;
+      return `${fileList()}<div class="panel-foot"><strong>${model.capture.links.length} links logged</strong> · Links are recorded as references; no page is opened automatically.</div><div class="list">${model.capture.links.map((link) => `<div class="resource-row" data-record-id="${link.id}"><div><div class="resource-title">${esc(link.label)}</div><div class="resource-meta">Canvas link · recorded for later</div></div><span class="badge">Link logged</span></div>`).join("")}</div>`;
+    }
+    function timelineView() {
+      const canvas = isCanvasAvailable()
+        ? `<article class="retained-item" data-record-id="${model.coursework.id}"><span class="source-tag">Canvas</span><strong>${esc(model.coursework.title)}</strong><span>${esc(model.coursework.course)} · ${esc(model.coursework.due)} · Submission: ${esc(model.coursework.submission)}</span></article>`
+        : `<div class="empty"><strong>Canvas coursework hidden</strong>Assignments and submission states are not shown until a capture is imported and verified.</div>`;
+      return `${header("Timeline","One row per day. Personal planning and iCal remain available when Canvas data is unverified.")}<div class="layout"><div class="stack"><section class="panel"><div class="panel-head"><div><p class="eyebrow">COURSEWORK</p><h2>Canvas items</h2></div></div><div class="panel-body">${canvas}</div></section><section class="panel"><div class="panel-head"><div><p class="eyebrow">PERSONAL + ICAL</p><h2>Calendar and notes</h2></div></div><div class="panel-body retained">${model.retained.map((item) => `<article class="retained-item" data-record-id="${item.id}"><span class="source-tag">${esc(item.source)}</span><strong>${esc(item.title)}</strong><span>${esc(item.detail)}</span></article>`).join("")}</div></section></div><div class="stack">${statusStrip()}<section class="panel"><div class="panel-head"><h2>Source state</h2></div><div class="panel-body"><span class="badge ${isCanvasAvailable() ? "good" : "gap"}">${isCanvasAvailable() ? "Canvas verified" : "Canvas unverified"}</span><p class="hint">${esc(calendarText())}</p></div></section></div></div>`;
+    }
+    function gradesView() {
+      const content = isCanvasAvailable()
+        ? `<article class="retained-item" data-record-id="${model.coursework.id}"><span class="source-tag">Canvas · Sample course</span><strong>Current grade · ${esc(model.coursework.grade)}</strong><span>Submission: ${esc(model.coursework.submission)} · From imported capture ${esc(model.capture.importedAt)}</span></article>`
+        : `<div class="empty"><strong>No Canvas grade data shown</strong>Grades and submission states stay empty until a saved capture is verified and imported. No earlier Canvas values are reused.</div>`;
+      return `${header("Grades","Canvas grade values are shown only from a verified imported capture.")}<section class="panel"><div class="panel-head"><div><p class="eyebrow">CANVAS SOURCE</p><h2>Grade details</h2></div>${statusBadge()}</div><div class="panel-body">${content}</div></section><section style="margin-top:15px">${preservedPanel()}</section>`;
+    }
+    function statusBadge() { return `<span class="badge ${isCanvasAvailable() ? "good" : "gap"}">${isCanvasAvailable() ? "Verified" : "Unavailable"}</span>`; }
+    function genericView(name) {
+      const copy = name === "Library" ? "Saved files and recorded links from the imported capture." : `${name} data follows the same verified Canvas capture state as the Timeline and Grades views.`;
+      const panel = name === "Library"
+        ? `<section class="panel"><div class="panel-head"><div><p class="eyebrow">FILES + LINKS</p><h2>Canvas resources</h2></div>${statusBadge()}</div><div class="panel-body">${libraryPanel()}</div></section>`
+        : `<section class="panel"><div class="panel-head"><div><p class="eyebrow">${esc(name.toUpperCase())}</p><h2>${esc(name)} view</h2></div>${statusBadge()}</div><div class="panel-body">${isCanvasAvailable() ? `<div class="empty"><strong>Nothing to display in this sample</strong>The capture is verified; this synthetic preview has no ${esc(name.toLowerCase())} records.</div>` : `<div class="empty"><strong>Canvas data unavailable</strong>Unverified Canvas records are withheld here too.</div>`}</div></section>`;
+      return `${header(name,copy)}<div class="layout"><div class="stack">${panel}</div><div class="stack">${preservedPanel()}${statusStrip()}</div></div>`;
+    }
+    function recoveryView() {
+      const importing = model.capture.phase === "importing";
+      const disabled = importing ? "disabled" : "";
+      return `${header("Import saved Canvas capture","Review a locally saved capture, then import it into this Tauri app. Calendar refresh is a separate action.","RECOVERY · LOCAL DATA")}<div class="layout"><div class="stack">${capturePanel()}<section class="panel"><div class="panel-head"><div><p class="eyebrow">RESOURCE RESULTS</p><h2>Files and links</h2></div>${isCanvasAvailable() ? `<span class="badge good">Imported</span>` : `<span class="badge">After import</span>`}</div><div class="panel-body">${libraryPanel()}</div></section><details class="scenario"><summary>Prototype controls · synthetic data only</summary><div class="scenario-controls" role="group" aria-label="Preview states"><button data-scenario="unverified" ${disabled} aria-pressed="${model.capture.phase === "unverified"}">Unverified</button><button data-scenario="ready" ${disabled} aria-pressed="${model.capture.phase === "ready"}">Ready to import</button><button data-scenario="imported" ${disabled} aria-pressed="${model.capture.phase === "imported"}">Imported · 2 file gaps</button></div><label class="fail-toggle"><input id="failNext" type="checkbox" ${disabled} ${model.failNextImport ? "checked" : ""}>Fail the next import to preview freshness behavior</label></details></div><div class="stack">${preservedPanel()}<section class="panel"><div class="panel-head"><div><p class="eyebrow">CALENDAR SOURCE</p><h2>iCal refresh</h2></div><span class="badge good">Separate</span></div><div class="panel-body"><p id="calendarDetail">${esc(calendarText())}</p><p class="hint">Use “Refresh calendar” above to update only the iCal feed. It does not import Canvas coursework.</p></div></section></div></div>`;
+    }
+    function render() {
+      const scenarioOpen = main.querySelector("details.scenario")?.open ?? false;
+      document.querySelectorAll("#navigation [data-view]").forEach((button) => {
+        const selected = button.dataset.view === model.view;
+        button.classList.toggle("active", selected);
+        if (selected) button.setAttribute("aria-current", "page"); else button.removeAttribute("aria-current");
+      });
+      document.querySelector("#calendarState").textContent = calendarText();
+      document.querySelector("#recoveryButton").setAttribute("aria-current", model.view === "Recovery" ? "page" : "false");
+      main.innerHTML = model.view === "Recovery" ? recoveryView()
+        : model.view === "Timeline" ? timelineView()
+          : model.view === "Grades" ? gradesView()
+            : genericView(model.view);
+      const scenario = main.querySelector("details.scenario");
+      if (scenario) scenario.open = scenarioOpen;
+      main.querySelectorAll("[data-save]").forEach((button) => button.addEventListener("click", () => {
+        openNotice("Saved copy", "In the Tauri app, a native save panel lets you choose where this saved file is copied. This preview does not write a file.");
+      }));
+      main.querySelectorAll("[data-scenario]").forEach((button) => button.addEventListener("click", () => setScenario(button.dataset.scenario)));
+      const failToggle = main.querySelector("#failNext");
+      if (failToggle) failToggle.addEventListener("change", () => { model.failNextImport = failToggle.checked; });
+      const importButton = main.querySelector("#importCapture");
+      if (importButton) importButton.addEventListener("click", beginImport);
+    }
+    function setScenario(phase) {
+      if (phase === "unverified") { model.capture.phase = "unverified"; model.capture.lastAttempt = "unknown"; model.capture.importedAt = null; }
+      if (phase === "ready") { model.capture.phase = "ready"; model.capture.lastAttempt = "ready"; model.capture.importedAt = null; }
+      if (phase === "imported") { model.capture.phase = "imported"; model.capture.lastAttempt = "complete"; model.capture.importedAt = "Sep 27, 2026 · 11:42 PM"; model.firstAccountConfirmed = true; }
+      render();
+    }
+    function beginImport() {
+      if (!model.firstAccountConfirmed) { confirmDialog.showModal(); return; }
+      runImport();
+    }
+    function runImport() {
+      confirmDialog.close();
+      model.capture.phase = "importing";
+      model.capture.lastAttempt = "running";
+      render();
+      window.setTimeout(() => {
+        if (model.failNextImport) {
+          model.failNextImport = false;
+          model.capture.phase = "unverified";
+          model.capture.lastAttempt = "failed";
+          model.capture.importedAt = null;
+        } else {
+          model.capture.phase = "imported";
+          model.capture.lastAttempt = "complete";
+          model.capture.importedAt = "Sep 27, 2026 · 11:42 PM";
+          model.firstAccountConfirmed = true;
+        }
+        render();
+      }, 850);
+    }
+    function openNotice(title, copy) {
+      document.querySelector("#noticeTitle").textContent = title;
+      document.querySelector("#noticeCopy").textContent = copy;
+      noticeDialog.showModal();
+    }
+    document.querySelector("#navigation").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-view]");
+      if (!button) return;
+      model.view = button.dataset.view;
+      render();
+      main.focus({ preventScroll:true });
+    });
+    document.querySelector("#recoveryButton").addEventListener("click", () => { model.view = "Recovery"; render(); main.focus({ preventScroll:true }); });
+    document.querySelector("#nativeExport").addEventListener("click", () => {
+      openNotice("Backup exported", "A full native backup includes local coursework, personal planning, iCal data, and archived file copies. This preview does not write a file.");
+    });
+    document.querySelector("#calendarRefresh").addEventListener("click", (event) => {
+      const button = event.currentTarget;
+      if (model.calendar.phase === "refreshing") return;
+      model.calendar.phase = "refreshing"; button.disabled = true; render();
+      window.setTimeout(() => {
+        model.calendar.phase = "current"; model.calendar.lastUpdated = "just now"; button.disabled = false; render();
+      }, 650);
+    });
+    document.querySelector("#confirmAccount").addEventListener("click", () => { model.firstAccountConfirmed = true; runImport(); });
+    document.querySelector("#cancelConfirm").addEventListener("click", () => confirmDialog.close());
+    document.querySelector("#closeNotice").addEventListener("click", () => noticeDialog.close());
+    render();
+  </script>
+</body>
+</html>
