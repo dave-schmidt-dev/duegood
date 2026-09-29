@@ -75,14 +75,20 @@ fn selected_ical_fact(
     if let Some(selected) = item
         .get("fieldObservations")
         .and_then(|value| value.get("at"))
-        .and_then(|value| value.get("selected"))
+        .map(|value| value.get("selected").unwrap_or(value))
     {
         return Ok((selected
             .get("owner")
             .and_then(|owner| owner.get("source"))
             .and_then(Value::as_str)
             == Some("ical"))
-        .then(|| selected.clone()));
+        .then(|| {
+            let mut fact = selected.clone();
+            if let Some(fact) = fact.as_object_mut() {
+                fact.remove("alternatives");
+            }
+            fact
+        }));
     }
     if item.get("fieldObservations").is_some()
         || item.get("source").and_then(Value::as_str) != Some("ical")
@@ -207,10 +213,15 @@ fn restore_selected_fact(item: &mut Value, ical_fact: &Value) -> Result<(), Brow
         .and_then(|value| value.get("at"))
         .and_then(|value| value.as_object())
         .ok_or(BrowserReconcileError)?;
-    let canvas_fact = current
+    let mut canvas_fact = current
         .get("selected")
-        .filter(|fact| fact.get("owner").is_some() && fact.get("value").is_some())
         .cloned()
+        .unwrap_or_else(|| Value::Object(current.clone()));
+    if let Some(fact) = canvas_fact.as_object_mut() {
+        fact.remove("alternatives");
+    }
+    let canvas_fact = Some(canvas_fact)
+        .filter(|fact| fact.get("owner").is_some() && fact.get("value").is_some())
         .ok_or(BrowserReconcileError)?;
     if canvas_fact["owner"]["source"].as_str() != Some("canvas") {
         return Ok(());
@@ -232,8 +243,15 @@ fn restore_selected_fact(item: &mut Value, ical_fact: &Value) -> Result<(), Brow
         .filter(|value| valid_json_value(value))
         .cloned()
         .ok_or(BrowserReconcileError)?;
-    let mut observation = Map::new();
-    observation.insert("selected".into(), ical_fact.clone());
+    let mut observation = current.clone();
+    if observation.contains_key("selected") {
+        observation.insert("selected".into(), ical_fact.clone());
+    } else {
+        observation.remove("owner");
+        observation.remove("value");
+        observation.remove("observedAt");
+        observation.extend(ical_fact.as_object().ok_or(BrowserReconcileError)?.clone());
+    }
     if !alternatives.is_empty() {
         observation.insert("alternatives".into(), Value::Array(alternatives));
     }

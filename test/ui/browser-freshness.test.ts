@@ -7,6 +7,8 @@ import {
 import { projectDashboardDocuments, type DashboardDocumentBundle } from "../../src/shared/dashboard-projection";
 import { parseDashboard } from "../../src/ui/app";
 import { nativeProjectionOptions, parseDocumentBundle } from "../../src/ui/transport";
+import type { ElementDescriptor } from "../../src/ui/dom";
+import { renderDashboard, type DashboardHandlers, type DashboardState } from "../../src/ui/pages/dashboard";
 
 const CURRENT = {
   current: true,
@@ -27,13 +29,13 @@ const CURRENT = {
   ],
 } as const;
 
-function nativeBundle(browserFreshness?: unknown): Record<string, unknown> {
+function nativeBundle(browserFreshness?: unknown, canvasCourseId: unknown = 530): Record<string, unknown> {
   return {
     storeState: "authoritative",
     coursework: { version: "0".repeat(64), text: JSON.stringify({
       generated: "2026-09-27T20:00:00Z",
       courses: [
-        { key: "it530", code: "IT530", title: "Current course", folder: "classes/it530", canvasCourseId: 530, gradeGroups: [{ id: "g1", name: "Projects", weight: 100 }] },
+        { key: "it530", code: "IT530", title: "Current course", folder: "classes/it530", canvasCourseId, gradeGroups: [{ id: "g1", name: "Projects", weight: 100 }] },
         { key: "archive-42", code: "OLD42", title: "Archived course", folder: "classes/archive-42", canvasCourseId: 42, active: false },
       ],
       items: [
@@ -58,6 +60,50 @@ function nativeBundle(browserFreshness?: unknown): Record<string, unknown> {
 }
 
 describe("browser freshness projection", () => {
+  it("renders a retained syllabus class with its full time range through native dashboard projection", () => {
+    const raw = nativeBundle({ current: false, reason: "capture-unverified", runId: null, observedAt: null, sections: [] });
+    const coursework = raw.coursework as { text: string; version: string };
+    const document = JSON.parse(coursework.text);
+    const session = {
+      id: "synthetic-syllabus-session", course: "it530", kind: "session", source: "syllabus",
+      title: "Class session", at: "2026-09-28T18:00:00-04:00", endsAt: "2026-09-28T20:30:00-04:00", done: false,
+    };
+    document.items.push(session);
+    coursework.text = JSON.stringify(document);
+    const bundle = parseDocumentBundle(raw);
+    const data = parseDashboard(projectDashboardDocuments(bundle, nativeProjectionOptions(bundle.storeState)));
+    expect(data.events.find((event) => event.id === session.id)).toMatchObject({
+      kind: "class", startsAt: session.at, endsAt: session.endsAt, source: "syllabus", completed: false,
+    });
+    const noop = (): void => {};
+    const handlers: DashboardHandlers = {
+      onNavigate: noop, onEventMode: noop, onCourseFilter: noop, onGradeCourseFilter: noop, onGradeMode: noop,
+      onResourceFilter: noop, onToggleEvent: noop, onToggleCompletion: noop, onToggleDiscussion: noop,
+      onEditManualGrade: noop, onManualGradeDraft: noop, onSaveManualGrade: noop, onCancelManualGrade: noop,
+      onSelectConversation: noop, onSelectRefresh: noop, onRefresh: noop, onCopyAssignment: noop,
+    };
+    const state: DashboardState = {
+      page: "timeline", loading: false, data, now: Date.parse("2026-09-28T12:00:00-04:00"),
+      eventMode: "all", courseFilter: "all", gradeCourseFilter: "all", gradeMode: "all", resourceFilter: "all",
+      expandedEventIds: new Set(), pendingCompletionIds: new Set(), failedCompletionIds: new Set(),
+      pendingDiscussionIds: new Set(), failedDiscussionIds: new Set(), pendingManualGradeIds: new Set(),
+      failedManualGradeIds: new Set(), refreshState: "idle",
+      desktop: { storeState: "authoritative", dataFolder: "Synthetic", importedAt: null },
+    };
+    const rendered = renderDashboard(state, handlers);
+    const descendants = (node: ElementDescriptor): ElementDescriptor[] => [node, ...(node.children ?? []).flatMap(descendants)];
+    const card = descendants(rendered).find((node) => String(node.attrs?.class).split(" ").includes("class-meeting"));
+    expect(card).toBeDefined();
+    const time = descendants(card!).find((node) => node.attrs?.class === "event-time");
+    const formattedEnd = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(new Date(session.endsAt));
+    expect(time?.text).toContain(`–${formattedEnd}`);
+    expect(descendants(card!).some((node) => node.attrs?.class === "event-check")).toBe(false);
+    document.items.at(-1).endsAt = 42;
+    coursework.text = JSON.stringify(document);
+    expect(() => projectDashboardDocuments(parseDocumentBundle(raw), nativeProjectionOptions(bundle.storeState)))
+      .toThrow("item.endsAt must be a string or null");
+  });
+
   it("treats legacy bundles without a report as unverified", () => {
     const freshness = parseBrowserFreshness(undefined);
     expect(freshness).toEqual({ current: false, reason: "not-reported", runId: null, observedAt: null, sections: [] });
@@ -136,6 +182,49 @@ describe("browser freshness projection", () => {
     expect(dashboard.events.find((event) => event.sourceItemId === "canvas-item")?.grade).toBe("90%");
     expect(dashboard.resources.some((resource) => resource.title === "Current file.pdf")).toBe(true);
     expect(parseDashboard(dashboard).sourceStatus.browserFreshness).toEqual(CURRENT);
+  });
+
+  it("projects canonical string course IDs like numbers without changing freshness or personal and iCal facts", () => {
+    const stale = { current: false, reason: "capture-unverified", runId: null, observedAt: null, sections: [] };
+    for (const freshness of [CURRENT, stale]) {
+      const numericBundle = parseDocumentBundle(nativeBundle(freshness));
+      const stringBundle = parseDocumentBundle(nativeBundle(freshness, "530"));
+      const numeric = projectDashboardDocuments(numericBundle, nativeProjectionOptions(numericBundle.storeState));
+      const dashboard = projectDashboardDocuments(stringBundle, nativeProjectionOptions(stringBundle.storeState));
+      expect(dashboard).toEqual(numeric);
+      expect(dashboard.courses.map((course) => course.id)).toEqual(["it530"]);
+      expect(dashboard.sourceStatus.coursework).toBe(freshness.current ? "synced" : "not_synced");
+      expect(dashboard.events.some((event) => event.sourceItemId === "canvas-item")).toBe(freshness.current);
+      expect(dashboard.events.find((event) => event.sourceItemId === "canvas-ical-due")).toMatchObject({
+        dueAt: "2026-10-01T18:00:00Z", manualGrade: "A-", completed: true, notes: "Keep this note",
+      });
+      expect(dashboard.events.find((event) => event.sourceItemId === "ical-item")).toMatchObject({
+        dueAt: "2026-09-29T20:00:00Z", score: 7, grade: "B", submissionState: "known_not_submitted",
+      });
+      expect(dashboard.events.find((event) => event.sourceItemId === "manual-item")?.notes).toBe("Keep manual event");
+    }
+  });
+
+  it.each([
+    null, true, false, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1,
+    "", "0", "-1", "1.5", "530.0", " 530", "530 ", "530\n", "\t530", "0530", "5.3e2", "530e0", "530x", "+530", "9007199254740992",
+  ])("rejects malformed explicit Canvas course ID %j", (canvasCourseId) => {
+    const bundle = parseDocumentBundle(nativeBundle(CURRENT, canvasCourseId));
+    expect(() => projectDashboardDocuments(bundle, nativeProjectionOptions(bundle.storeState)))
+      .toThrow("courses[0].canvasCourseId must be a positive safe integer");
+  });
+
+  it.each([1, Number.MAX_SAFE_INTEGER])("accepts canonical string ID %j at the safe integer bounds", (canvasCourseId) => {
+    const freshness = { ...CURRENT, sections: CURRENT.sections.map((section) => ({
+      ...section, courseId: section.courseId === 530 ? canvasCourseId : section.courseId,
+    })) };
+    const numericBundle = parseDocumentBundle(nativeBundle(freshness, canvasCourseId));
+    const stringBundle = parseDocumentBundle(nativeBundle(freshness, String(canvasCourseId)));
+    const numeric = projectDashboardDocuments(numericBundle, nativeProjectionOptions(numericBundle.storeState));
+    const dashboard = projectDashboardDocuments(stringBundle, nativeProjectionOptions(stringBundle.storeState));
+    expect(dashboard).toEqual(numeric);
+    expect(dashboard.sourceStatus.coursework).toBe("synced");
+    expect(dashboard.events.some((event) => event.sourceItemId === "canvas-item")).toBe(true);
   });
 
   it("hides stale Canvas grade, Inbox, and active library facts while preserving iCal, personal state, and archives", () => {

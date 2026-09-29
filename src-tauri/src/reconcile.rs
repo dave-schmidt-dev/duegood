@@ -751,14 +751,23 @@ fn merge_canvas_due_fact(
     };
 
     let next = if let Some(existing) = existing {
+        let mut record = existing
+            .as_object()
+            .cloned()
+            .ok_or_else(|| invalid("field observations are malformed"))?;
+        let nested = record.contains_key("selected");
         let selected = existing
             .get("selected")
-            .and_then(Value::as_object)
+            .unwrap_or(&existing)
+            .as_object()
             .ok_or_else(|| invalid("field observations are malformed"))?;
         let selected_owner = selected
             .get("owner")
             .and_then(Value::as_object)
             .ok_or_else(|| invalid("field observations are malformed"))?;
+        if !selected.contains_key("value") {
+            return Err(invalid("field observations are malformed"));
+        }
         let selected_is_canvas =
             selected_owner == canvas_reference.as_object().expect("reference object");
         if selected_is_canvas && selected.get("value") == Some(&local) {
@@ -770,18 +779,44 @@ fn merge_canvas_due_fact(
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
+            let previous_canvas = alternatives
+                .iter()
+                .find(|fact| fact.get("owner") == Some(&canvas_reference))
+                .and_then(Value::as_object)
+                .cloned();
             alternatives.retain(|fact| fact.get("owner") != Some(&canvas_reference));
-            // The old selected iCal fact remains auditable after the fresh Canvas observation
-            // becomes visible. A Canvas replacement keeps its previous Canvas fact too.
+            // Keep the prior selected source auditable when Canvas takes over. Updating the
+            // same Canvas owner retains its metadata without duplicating that source identity.
             alternatives.retain(|fact| fact.get("owner") != selected.get("owner"));
-            alternatives.push(Value::Object(selected.clone()));
-            let mut record = Map::new();
-            record.insert(
-                "selected".into(),
-                canvas_fact(local.clone(), Some(&observed_at)),
+            let mut previous = selected.clone();
+            previous.remove("alternatives");
+            if !selected_is_canvas {
+                alternatives.push(Value::Object(previous));
+            }
+            let mut incoming = if selected_is_canvas {
+                selected.clone()
+            } else {
+                previous_canvas.unwrap_or_default()
+            };
+            incoming.remove("alternatives");
+            incoming.extend(
+                canvas_fact(local.clone(), Some(&observed_at))
+                    .as_object()
+                    .unwrap()
+                    .clone(),
             );
+            if nested {
+                record.insert("selected".into(), Value::Object(incoming));
+            } else {
+                record.remove("owner");
+                record.remove("value");
+                record.remove("observedAt");
+                record.extend(incoming);
+            }
             if !alternatives.is_empty() {
                 record.insert("alternatives".into(), Value::Array(alternatives));
+            } else {
+                record.remove("alternatives");
             }
             Value::Object(record)
         }
@@ -790,11 +825,10 @@ fn merge_canvas_due_fact(
         if let Some(ical_owner) = item_ical_owner(target)? {
             alternatives.push(json!({"owner": ical_owner, "value": old_visible}));
         }
-        let mut record = Map::new();
-        record.insert(
-            "selected".into(),
-            canvas_fact(local.clone(), Some(&observed_at)),
-        );
+        let mut record = canvas_fact(local.clone(), Some(&observed_at))
+            .as_object()
+            .unwrap()
+            .clone();
         if !alternatives.is_empty() {
             record.insert("alternatives".into(), Value::Array(alternatives));
         }
@@ -802,7 +836,8 @@ fn merge_canvas_due_fact(
     };
     let selected = next
         .get("selected")
-        .and_then(|value| value.get("value"))
+        .unwrap_or(&next)
+        .get("value")
         .cloned()
         .ok_or_else(|| invalid("field observations are malformed"))?;
     target
@@ -1263,6 +1298,94 @@ mod tests {
         let again = reconcile_coursework(&once, &captures, captured_at()).expect("no-op reconcile");
         assert_eq!(again, once);
         assert_eq!(again["sync"]["lastSync"], once["sync"]["lastSync"]);
+    }
+
+    #[test]
+    fn flat_canvas_due_observations_preserve_metadata_alternatives_and_no_op_identity() {
+        let (mut base, captures) = fixture_capture();
+        let owner = json!({"institution":"synthetic.institution.invalid","course":"demo-alpha","source":"canvas","id":"70001"});
+        let alternative = json!({"owner":{"institution":"synthetic.institution.invalid","course":"demo-alpha","source":"ical","id":"assignment:70001"},"value":"2030-01-29T23:59Z","extension":{"keep":true}});
+        base["items"][0]["sourceReferences"] = json!([owner.clone(), alternative["owner"].clone()]);
+        base["items"][0]["fieldObservations"] = json!({"at":{
+            "owner":owner,"value":base["items"][0]["at"].clone(),"observedAt":"2020-01-01T00:00:00Z",
+            "extension":{"keep":true},"alternatives":[alternative.clone()]
+        },"otherExtension":{"keep":true}});
+        let result = reconcile_coursework(&base, &captures, captured_at()).expect("flat merge");
+        let item = result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == base["items"][0]["id"])
+            .unwrap();
+        let observation = &item["fieldObservations"]["at"];
+        assert!(observation.get("selected").is_none());
+        assert_eq!(observation["owner"]["source"], "canvas");
+        assert_eq!(observation["extension"], json!({"keep":true}));
+        assert_eq!(observation["alternatives"], json!([alternative]));
+        assert_eq!(
+            item["fieldObservations"]["otherExtension"],
+            json!({"keep":true})
+        );
+        let repeated =
+            reconcile_coursework(&result, &captures, SystemTime::now()).expect("flat no-op");
+        assert_eq!(repeated, result);
+
+        for nested in [false, true] {
+            let (mut base, captures) = fixture_capture();
+            let owner = json!({"institution":"synthetic.institution.invalid","course":"demo-alpha","source":"canvas","id":"70001"});
+            let mut observation = json!({"owner":owner.clone(),"value":base["items"][0]["at"].clone(),
+                "observedAt":"2020-01-01T00:00:00Z","extension":{"keep":true}});
+            if nested {
+                observation = json!({"selected":observation});
+            }
+            observation["recordExtension"] = json!("keep");
+            observation["alternatives"] =
+                json!([{"owner":owner.clone(),"value":"stale Canvas date"}]);
+            base["items"][0]["sourceReferences"] = json!([owner]);
+            base["items"][0]["fieldObservations"] = json!({"at":observation});
+            let result = reconcile_coursework(&base, &captures, captured_at())
+                .expect("clear stale Canvas alternative");
+            let item = result["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["id"] == base["items"][0]["id"])
+                .unwrap();
+            let observation = &item["fieldObservations"]["at"];
+            assert_eq!(observation.get("selected").is_some(), nested);
+            assert!(observation.get("alternatives").is_none());
+            assert_eq!(observation["recordExtension"], "keep");
+            let selected = observation.get("selected").unwrap_or(observation);
+            assert_eq!(selected["value"], "2026-11-27T23:59");
+            assert_eq!(selected["extension"], json!({"keep":true}));
+            assert_eq!(
+                reconcile_coursework(&result, &captures, SystemTime::now())
+                    .expect("repeat cleared alternatives"),
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_flat_and_nested_due_observations_still_fail_closed() {
+        for observation in [
+            Value::Null,
+            json!({}),
+            json!({"owner":null,"value":"date"}),
+            json!({"owner":{},"alternatives":[]}),
+            json!({"selected":null}),
+            json!({"selected":{"value":"date"}}),
+        ] {
+            let (mut base, captures) = fixture_capture();
+            base["items"][0]["sourceReferences"] = json!([{"institution":"synthetic.institution.invalid","course":"demo-alpha","source":"canvas","id":"70001"}]);
+            base["items"][0]["fieldObservations"] = json!({"at":observation});
+            assert_eq!(
+                reconcile_coursework(&base, &captures, captured_at())
+                    .unwrap_err()
+                    .to_string(),
+                "field observations are malformed"
+            );
+        }
     }
 
     #[test]

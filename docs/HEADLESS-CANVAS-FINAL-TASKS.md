@@ -4,13 +4,13 @@
 
 ## Owner-selected ship checkpoint (2026-09-28)
 
-Publish the tested v2 capture, native import, archive migration, freshness, and CLI workflow as a bounded source checkpoint. New visible Tauri controls and a new private live capture/import are deferred at the owner's request. The prototype remains design evidence; publication does not claim installed UI or new live adoption. Complete the release gates and stop feature expansion.
+Published as parser extraction commit `46577d2` and source commit `d6a5c739c7847f6a344823f054faa3f81b1391b6`, with exact staged tree `625923224d607acb5d17b5ccc27528e0dedcd8e3`. The full staged source gate passed; remote HEAD matched the source commit, the checkout was clean, and the stage was removed. Private verification evidence is retained locally. Visible Tauri controls, helper/app installation, a new live v2 capture/import, and owner acceptance remain deferred. This checkpoint records source publication only.
 
 ## Current evidence and boundaries
 
-The schema-v2 capture-to-native-import path and its three fixed helpers are present in source: `duegood-capture-state` journals and leases capture runs, `duegood-capture-download` handles bounded file transfers, and `duegood-browser-import` validates and publishes a capture into the native store. `npm run canvas:session -- refresh` coordinates capture and import. This work remains unverified until the current staged native gate and a private live import through the installed Tauri app pass; synthetic/source evidence is not live or installed-app acceptance.
+The schema-v2 capture-to-native-import path and its fixed helpers are implemented in source: `duegood-capture-state` journals and leases capture runs, `duegood-capture-download` handles bounded file transfers, and `duegood-browser-import` validates and publishes a capture into the native store. `npm run canvas:session -- refresh` coordinates capture and import. The exact staged tree passed the synthetic source gate (57 UI, 323 local, 285 active Rust with 3 ignored, 17 Python, and 61 Playwright tests). Subsequent local verification established production helper/app installation and a private live capture/import. Optional acquisition gaps remain explicitly partial; this does not establish complete account coverage or owner acceptance of the installed interface.
 
-The session must remain headed because a separate headless relaunch did not recover the saved Canvas sign-in. Capture reuses the existing Canvas page and does not open a tab per file. Additional calendar/group coverage remains planned until collection passes its phase gate; existing collector endpoints or fixtures do not establish that planned coverage as complete.
+The session must remain headed because a separate headless relaunch did not recover the saved Canvas sign-in. Capture reuses the existing Canvas page and does not open a tab per file. Calendar and group collection are implemented in source and passed their synthetic/source phase gate; this does not establish private live account coverage.
 
 ## Phase 1: Guarded browser collection
 - **Phase gate:** `npm run test:local && npm run test:desktop-ui && npm run typecheck && npm run lint && npm run deadcode && npm run check:public-tree && npm run test:membership`
@@ -86,14 +86,14 @@ The session must remain headed because a separate headless relaunch did not reco
 - **Acceptance:** Complete current-term metadata publishes atomically; incomplete attempts keep prior generation but make affected Canvas views unverified; file gaps remain separate. iCal and personal facts remain independently visible.
 
 ### Task 2.1: Validate and publish browser metadata
-- **Status:** in progress — v2 run linkage, native import, and freshness
+- **Status:** accepted source checkpoint `d6a5c73` — staged synthetic gate passed; live/installed acceptance deferred
 - **Type:** implementation
 - **Executor:** native (owner override while Switchyard work is ongoing)
 - **RequiredCapability:** standard
 - **Blocked by:** Task 1.2, Task 1.3
 - **External blockers:** none
 - **Description:** Reject browser import for empty/preview stores. Validate the complete manifest, account binding, monotonic run ID, symlinks, and staged blob hashes, then promote blobs under the native archive lock and merge metadata against the latest generation. Current-term keys come from the authoritative iCal store; browser-only courses get stable validated keys/folders and remain archival until owner activation. Promote folderless iCal courses; preserve personal fields and newer iCal due facts. An unstamped legacy iCal due fact remains selected until a verified iCal refresh supplies a comparable timestamp. Publish current-term metadata atomically, bind per-course/section coverage and the native attempt-status sidecar to run ID/generation, and mark success only after publication. A newer running/failed capture suppresses retained Canvas-owned facts while preserving iCal and personal state. Full native backup includes referenced resource blobs; frozen legacy rollback remains byte-preserving and separate from legacy refresh compatibility. Extract clean seams from touched legacy over-800-line modules in a separate commit, or record a concrete reason if impossible.
-- **Files:** src-tauri/src/browser_capture.rs, src-tauri/src/lib.rs, src-tauri/src/refresh.rs, src-tauri/src/reconcile.rs, src-tauri/src/capture.rs, src-tauri/src/documents.rs, src-tauri/src/config.rs, src/shared/dashboard-projection.ts, test/ui/dashboard.test.ts, test/test-membership.json, INVARIANTS.md, docs/REFRESH-CONTRACT.md
+- **Files:** src-tauri/src/browser_import.rs, src-tauri/src/browser_bundle.rs, src-tauri/src/browser_resources.rs, src-tauri/src/lib.rs, src-tauri/src/refresh.rs, src-tauri/src/reconcile.rs, src-tauri/src/capture.rs, src-tauri/src/documents.rs, src-tauri/src/config.rs, src/shared/dashboard-projection.ts, test/ui/dashboard.test.ts, test/test-membership.json, INVARIANTS.md, docs/REFRESH-CONTRACT.md
 - **Quick checks:** npm run test:tauri
 - **Done when:**
   - Native tests return the prior generation ID and identical personal fields after partial or invalid capture.
@@ -101,14 +101,14 @@ The session must remain headed because a separate headless relaunch did not reco
   - UI tests return `current=false` after a failed attempt despite retained prior facts.
 
 ### Task 2.2: Archive migration, resource resolution, and recovery
-- **Status:** pending
+- **Status:** accepted source checkpoint `d6a5c73` — staged synthetic gate passed; live/installed acceptance deferred
 - **Type:** implementation
 - **Executor:** native (owner override while Switchyard work is ongoing)
 - **RequiredCapability:** standard
 - **Blocked by:** Task 2.1
 - **External blockers:** none
 - **Description:** Copy/hash existing generation materials once into the content-addressed archive, marking prior un-hashed bytes as locally integral but not Canvas-source-verified. Omit bulk bytes from new generations while preserving old ones. Resolve by validated blob IDs, reject missing/hash-mismatched blobs and unsupported file signatures, and quarantine saved copies. Native snapshots hold references only; full owner exports include referenced blobs. Defer garbage collection and enforce a declared total disk cap. After snapshot restore, report a missing resource rather than opening an unverified path.
-- **Files:** src-tauri/src/capture_archive.rs, src-tauri/src/resources.rs, src-tauri/src/export.rs, src-tauri/src/snapshots.rs, src-tauri/src/refresh.rs, src-tauri/src/config.rs, src-tauri/src/browser_capture.rs, INVARIANTS.md, README.md
+- **Files:** src-tauri/src/capture_archive.rs, src-tauri/src/resources.rs, src-tauri/src/export.rs, src-tauri/src/snapshots.rs, src-tauri/src/refresh.rs, src-tauri/src/config.rs, src-tauri/src/browser_resources.rs, src-tauri/src/browser_bundle.rs, INVARIANTS.md, README.md
 - **Quick checks:** npm run test:tauri
 - **Done when:**
   - Native tests return matching bytes from the archive while the new generation contains no copied blob.
@@ -121,7 +121,7 @@ The session must remain headed because a separate headless relaunch did not reco
 - **Acceptance:** Tauri imports a validated fixed-location private bundle and shows coverage/files/links/gaps; live acceptance waits for owner sign-in and the installed candidate gate.
 
 ### Task 3.1: Tauri import and coverage controls
-- **Status:** pending
+- **Status:** pending — owner-deferred visible controls, helper/app installation, and live acceptance
 - **Type:** implementation
 - **Executor:** native (owner override while Switchyard work is ongoing)
 - **RequiredCapability:** standard

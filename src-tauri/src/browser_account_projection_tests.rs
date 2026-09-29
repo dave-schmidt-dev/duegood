@@ -109,6 +109,36 @@ fn projects_actual_producer_shape_into_legacy_profile_and_inbox_documents() {
 }
 
 #[test]
+fn scoped_calendar_rows_do_not_change_profile_or_inbox_documents() {
+    let mut snapshot = account_snapshot();
+    let expected = project_account_documents(&snapshot).expect("baseline account documents");
+    for row in [
+        json!({"endpoint":"calendarEvents","courseId":null,"contextCode":"user_41","status":"complete"}),
+        json!({"endpoint":"calendarEvents","courseId":101,"contextCode":"course_101","status":"gap","reason":"forbidden-optional"}),
+        json!({"endpoint":"calendarEvents","courseId":null,"groupId":900,"contextCode":"group_900","status":"incomplete","reason":"pagination-budget"}),
+    ] {
+        snapshot["coverage"]
+            .as_array_mut()
+            .unwrap()
+            .push(row.clone());
+        let mut resource = row;
+        let object = resource.as_object_mut().unwrap();
+        object.remove("status");
+        object.remove("reason");
+        object.insert("pages".to_owned(), json!(1));
+        object.insert("items".to_owned(), json!([]));
+        snapshot["resources"].as_array_mut().unwrap().push(resource);
+    }
+    let documents =
+        project_account_documents(&snapshot).expect("calendar contexts are independent");
+    assert_eq!(documents, expected);
+    assert_eq!(
+        documents.keys().map(String::as_str).collect::<Vec<_>>(),
+        [INBOX, PROFILE]
+    );
+}
+
+#[test]
 fn missing_profile_or_required_list_coverage_omits_replacement_documents() {
     let mut snapshot = account_snapshot();
     snapshot["coverage"]

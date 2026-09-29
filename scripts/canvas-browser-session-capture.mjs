@@ -6,6 +6,7 @@ import { collectCanvasBrowserCapture } from "./canvas-browser-capture.mjs";
 import { downloadCanvasFile } from "./canvas-browser-file-pipeline.mjs";
 import { saveCanvasCaptureGeneration } from "./canvas-browser-archive.mjs";
 import { withCanvasRunLease } from "./canvas-browser-run-lease.mjs";
+import { deriveCapturedSyllabusSessions } from "./canvas-syllabus-documents.mjs";
 
 const ORIGIN = "https://marymount.instructure.com";
 const APP_DIR = path.join(homedir(), "Library", "Application Support", "DueGood");
@@ -49,6 +50,7 @@ export async function runCanvasCapture({
   browserFileDownload = downloadCanvasFile,
   saveGeneration = saveCanvasCaptureGeneration,
   withRunLease = withCanvasRunLease,
+  extractPdfText = undefined,
 }) {
   const stateHelper = await lstat(stateHelperPath).catch(() => undefined);
   if (!stateHelper?.isFile() || stateHelper.isSymbolicLink() || (stateHelper.mode & 0o111) === 0
@@ -108,6 +110,12 @@ export async function runCanvasCapture({
             stagedBytes += receipt.byteCount;
             return receipt;
           },
+        });
+        snapshot.syllabusSessions = await deriveCapturedSyllabusSessions({
+          snapshot,
+          stagingDirectory,
+          extractPdfText,
+          progress: () => progress("CAPTURE_RUNNING"),
         });
         phase = "archiving";
         progress("CAPTURE_SAVING");

@@ -21,7 +21,8 @@ describe("content-free probe classification", () => {
 describe("guarded Canvas browser API reader", () => {
   it("uses only the explicit course, submission, page, module, discussion, announcement, and quiz GET shapes", async () => {
     const cases = [
-      { input: { endpoint: "syllabus", courseId: 88 }, path: "/api/v1/courses/88", search: "" },
+      { input: { endpoint: "course", courseId: 88 }, path: "/api/v1/courses/88", search: "?include%5B%5D=syllabus_body" },
+      { input: { endpoint: "syllabus", courseId: 88 }, path: "/api/v1/courses/88", search: "?include%5B%5D=syllabus_body" },
       { input: { endpoint: "courseTabs", courseId: 88 }, path: "/api/v1/courses/88/tabs", search: "?per_page=100" },
       { input: { endpoint: "assignmentGroups", courseId: 88 }, path: "/api/v1/courses/88/assignment_groups", search: "?per_page=100" },
       { input: { endpoint: "submissions", courseId: 88 }, path: "/api/v1/courses/88/students/submissions", search: "?per_page=100" },
@@ -41,7 +42,9 @@ describe("guarded Canvas browser API reader", () => {
         const url = new URL(String(value));
         calls.push({ url, init });
         if (url.pathname === "/api/v1/users/self/profile") return profile();
-        if (input.endpoint === "syllabus") return json({ id: 88, course_id: 88, syllabus_body: "<p>synthetic</p>" });
+        if (input.endpoint === "course" || input.endpoint === "syllabus") {
+          return json({ id: 88, course_id: 88, syllabus_body: "<p>synthetic</p>" });
+        }
         if (input.endpoint === "submission") return json({ id: 701, course_id: 88, assignment_id: 501, user_id: 41, submission_comments: [] });
         if (input.endpoint === "page") return json({ id: 607, course_id: 88, url: "week-one", body: "<p>synthetic</p>" });
         if (input.endpoint === "quiz") return json({ id: 73, course_id: 88, title: "Synthetic quiz" });

@@ -1,6 +1,6 @@
 {
   "name": "duegood",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -47,7 +47,8 @@
     "check:package": "python3 scripts/check_package.py && python3 -m unittest discover -s tests -v",
     "check:public-tree": "node scripts/check-public-tree.mjs",
     "check:staged-public-tree": "node scripts/check-staged-public-tree.mjs",
-    "integrity:baseline": "node scripts/check-baseline-integrity.mjs"
+    "integrity:baseline": "node scripts/check-baseline-integrity.mjs",
+    "build:personal-sessions": "cargo build --locked --manifest-path src-tauri/Cargo.toml --release --bin duegood-personal-sessions"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",

@@ -186,7 +186,6 @@ fn account_endpoint(endpoint: &str) -> Option<&'static str> {
         | "groups"
         | "personalFiles"
         | "personalFolders"
-        | "calendarEvents"
         | "inbox"
         | "inboxAll"
         | "conversationsSent"
@@ -195,7 +194,6 @@ fn account_endpoint(endpoint: &str) -> Option<&'static str> {
             "groups" => "groups",
             "personalFiles" => "personalFiles",
             "personalFolders" => "personalFolders",
-            "calendarEvents" => "calendarEvents",
             "inbox" => "inbox",
             "inboxAll" => "inboxAll",
             "conversationsSent" => "conversationsSent",

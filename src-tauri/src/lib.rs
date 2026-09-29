@@ -33,12 +33,14 @@ mod ical_apply;
 pub mod ical_receiver;
 mod import;
 mod locking;
+mod personal_sessions;
 mod reconcile;
 mod refresh;
 mod resources;
 mod resources_save;
 mod snapshots;
 mod store;
+mod syllabus_sessions;
 
 #[cfg(test)]
 mod phase4_smoke;
@@ -47,6 +49,10 @@ pub use browser_import::{BrowserImportPhase, BrowserImportProgress, BrowserImpor
 pub use browser_import_helper::{
     read_confirmation as read_browser_import_confirmation, run_import as run_browser_import,
     BrowserImportHelperError,
+};
+pub use personal_sessions::{
+    read_personal_session_request, run_personal_sessions, PersonalSessionHelperError,
+    PersonalSessionProgress, PersonalSessionRequest, PersonalSessionResult,
 };
 
 use tauri::Manager;

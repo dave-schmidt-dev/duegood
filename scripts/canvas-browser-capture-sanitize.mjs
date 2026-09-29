@@ -60,6 +60,7 @@ export async function sanitizeCanvasCaptureItem(item, {
 }) {
   const links = [];
   const seenLinks = new Set();
+  const syllabusFileIds = new Set();
   const omitFileUrls = FILE_METADATA_ENDPOINTS.has(endpoint);
   let linksTruncated = false;
   let textTruncated = false;
@@ -67,6 +68,17 @@ export async function sanitizeCanvasCaptureItem(item, {
   const sourcePrefix = `${endpoint}${courseId === null ? "" : `/${courseId}`}/${item.id ?? itemIndex}`;
   const addLink = (link) => {
     if (omitFileUrls) return;
+    if (endpoint === "course" && link.source === sourcePrefix + "//syllabus_body"
+        && typeof link.safeTarget === "string") {
+      try {
+        const target = new URL(link.safeTarget);
+        const match = /^\/(?:api\/v1\/)?(?:courses\/([1-9]\d*)\/)?files\/([1-9]\d*)(?:\/(?:download|preview))?\/?$/u.exec(target.pathname);
+        const fileId = match && Number(match[2]);
+        if (target.origin === ORIGIN && !target.username && !target.password && !target.search && !target.hash
+            && match && (match[1] === undefined || Number(match[1]) === courseId)
+            && Number.isSafeInteger(fileId) && fileId > 0) syllabusFileIds.add(fileId);
+      } catch { /* An opaque or cross-course link cannot select a syllabus file. */ }
+    }
     const safeLink = stripCanvasFileUrl(link);
     if (links.length >= MAX_LINKS_PER_ITEM) {
       linksTruncated = true;
@@ -138,6 +150,7 @@ export async function sanitizeCanvasCaptureItem(item, {
   const clean = await sanitizeValue(item, "", "", 0);
   if (!isRecord(clean)) throw captureError("INVALID_RESOURCE_ITEM");
   clean._canvasLinks = links;
+  if (endpoint === "course") clean._canvasSyllabusFileIds = [...syllabusFileIds].slice(0, MAX_LINKS_PER_ITEM);
   if (linksTruncated) clean._canvasLinksTruncated = true;
   if (textTruncated) clean._canvasTextTruncated = true;
   return clean;

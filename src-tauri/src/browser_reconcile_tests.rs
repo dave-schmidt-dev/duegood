@@ -72,9 +72,58 @@ fn assignment_item(document: &Value) -> &Value {
 }
 
 fn selected_source(item: &Value) -> &str {
-    item["fieldObservations"]["at"]["selected"]["owner"]["source"]
+    let observation = &item["fieldObservations"]["at"];
+    observation.get("selected").unwrap_or(observation)["owner"]["source"]
         .as_str()
         .expect("selected source")
+}
+
+#[test]
+fn flat_ical_due_observations_keep_freshness_metadata_and_immutable_identity() {
+    for stamp in [
+        Some("2030-01-10T12:00:00Z"),
+        None,
+        Some("2020-01-10T12:00:00Z"),
+    ] {
+        let (mut latest, captures) = fixture();
+        let mut fact = latest["items"][0]["fieldObservations"]["at"]["selected"].clone();
+        let object = fact.as_object_mut().unwrap();
+        object.remove("observedAt");
+        if let Some(stamp) = stamp {
+            object.insert("observedAt".into(), json!(stamp));
+        }
+        object.insert("extension".into(), json!({"keep":true}));
+        let original_fact = fact.clone();
+        latest["items"][0]["fieldObservations"]["at"] = fact;
+        latest["items"][0]["notes"] = json!("Keep personal note");
+        latest["items"][0]["done"] = json!(true);
+        let result =
+            reconcile_browser_coursework(&latest, &captures, captured_at()).expect("flat merge");
+        let item = assignment_item(&result);
+        let observation = &item["fieldObservations"]["at"];
+        assert!(observation.get("selected").is_none());
+        assert_eq!(item["id"], latest["items"][0]["id"]);
+        assert_eq!(item["notes"], "Keep personal note");
+        assert_eq!(item["done"], true);
+        assert_eq!(observation["extension"], json!({"keep":true}));
+        if stamp == Some("2020-01-10T12:00:00Z") {
+            assert_eq!(selected_source(item), "canvas");
+            assert!(observation["alternatives"]
+                .as_array()
+                .unwrap()
+                .contains(&original_fact));
+        } else {
+            assert_eq!(selected_source(item), "ical");
+            assert_eq!(item["at"], original_fact["value"]);
+            let mut selected = observation.clone();
+            selected.as_object_mut().unwrap().remove("alternatives");
+            assert_eq!(selected, original_fact);
+        }
+        assert_eq!(
+            reconcile_browser_coursework(&result, &captures, captured_at()).expect("flat repeat"),
+            result
+        );
+    }
 }
 
 #[test]
@@ -136,9 +185,9 @@ fn legacy_ical_due_without_observations_is_preserved_as_unstamped() {
     let item = assignment_item(&result);
     assert_eq!(selected_source(item), "ical");
     assert_eq!(item["at"], "2030-01-29T23:59:00.000Z");
-    assert!(item["fieldObservations"]["at"]["selected"]
-        .get("observedAt")
-        .is_none());
+    let observation = &item["fieldObservations"]["at"];
+    assert!(observation.get("selected").is_none());
+    assert!(observation.get("observedAt").is_none());
     assert!(item["fieldObservations"]["at"]["alternatives"]
         .as_array()
         .expect("alternatives")

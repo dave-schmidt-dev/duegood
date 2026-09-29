@@ -103,6 +103,7 @@ pub enum BrowserImportError {
     Projection(ProjectionError),
     AccountProjection(crate::browser_account_projection::BrowserAccountProjectionError),
     Reconciliation(BrowserReconcileError),
+    SyllabusSessions(crate::syllabus_sessions::SyllabusSessionError),
     Store(StoreError),
     InvalidStore,
     ConfirmationRequired,
@@ -125,6 +126,7 @@ impl BrowserImportError {
             Self::Projection(_) => "CAPTURE_PROJECTION_FAILED",
             Self::AccountProjection(_) => "CAPTURE_ACCOUNT_PROJECTION_FAILED",
             Self::Reconciliation(_) => "COURSEWORK_RECONCILIATION_FAILED",
+            Self::SyllabusSessions(_) => "SYLLABUS_SESSIONS_INVALID",
             Self::Store(_) => "STORE_OPERATION_FAILED",
             Self::InvalidStore => "STORE_NOT_AUTHORITATIVE_OR_UNREADABLE",
             Self::ConfirmationRequired => "FIRST_ACCOUNT_CONFIRMATION_REQUIRED",
@@ -320,6 +322,12 @@ fn import_current_capture_inner(
     let mut coursework =
         reconcile_browser_coursework(&latest.coursework, &projection.coursework, captured_at)
             .map_err(BrowserImportError::Reconciliation)?;
+    coursework = crate::syllabus_sessions::reconcile_syllabus_sessions(
+        &coursework,
+        &bundle.snapshot,
+        &scopes,
+    )
+    .map_err(BrowserImportError::SyllabusSessions)?;
     apply_promoted_folders(&mut coursework, &scopes)?;
     let archive = inactive_course_archive(&bundle, &scopes)?;
     let status = import_status(&bundle, &promoted)?;

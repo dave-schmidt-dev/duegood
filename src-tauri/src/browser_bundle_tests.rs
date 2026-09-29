@@ -229,6 +229,114 @@ fn validates_v2_generation_coverage_and_streamed_blob_progress() {
 }
 
 #[test]
+fn retains_repeated_child_detail_coverage_and_each_optional_gap() {
+    let mut fixture = ArchiveFixture::new();
+    let endpoints = [
+        "page",
+        "moduleItems",
+        "discussionEntries",
+        "discussionReplies",
+        "submission",
+        "quiz",
+        "conversation",
+        "file",
+        "personalFile",
+        "groupFolderFiles",
+        "groupPage",
+        "groupDiscussionEntries",
+        "groupDiscussionReplies",
+    ];
+    for endpoint in endpoints {
+        let course_id = if endpoint.starts_with("group")
+            || ["conversation", "file", "personalFile"].contains(&endpoint)
+        {
+            Value::Null
+        } else {
+            json!(COURSE_ID)
+        };
+        let mut row = json!({"endpoint": endpoint, "courseId": course_id, "status": "complete"});
+        if endpoint.starts_with("group") {
+            row["groupId"] = json!(900);
+        }
+        let coverage = fixture.snapshot["coverage"].as_array_mut().unwrap();
+        coverage.extend([row.clone(), row.clone()]);
+        for reason in ["forbidden-optional", "request-failed", "not-attempted"] {
+            row["status"] = json!("gap");
+            row["reason"] = json!(reason);
+            coverage.push(row.clone());
+        }
+    }
+    fixture.rewrite_snapshot();
+    let bundle = validate_current_bundle(&fixture.app_root, &fixture.expected()).unwrap();
+    for endpoint in endpoints {
+        let rows = bundle
+            .coverage
+            .iter()
+            .filter(|row| row.endpoint == endpoint)
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 5, "{endpoint}");
+        assert_eq!(
+            rows.iter().filter(|row| row.status == "complete").count(),
+            2
+        );
+        for reason in ["forbidden-optional", "request-failed", "not-attempted"] {
+            assert!(rows
+                .iter()
+                .any(|row| row.status == "gap" && row.reason.as_deref() == Some(reason)));
+        }
+    }
+}
+
+#[test]
+fn rejects_duplicate_required_and_aggregate_optional_coverage() {
+    for endpoint in [
+        "coursesActive",
+        "course",
+        "assignments",
+        "assignmentGroups",
+        "submissions",
+        "inbox",
+        "pages",
+        "courseFiles",
+        "groupPages",
+        "calendarEvents",
+        "unknownDetail",
+    ] {
+        let mut fixture = ArchiveFixture::new();
+        let coverage = fixture.snapshot["coverage"].as_array_mut().unwrap();
+        let existing = coverage
+            .iter()
+            .find(|row| row["endpoint"] == endpoint)
+            .cloned();
+        if let Some(row) = existing {
+            coverage.push(row);
+        } else {
+            let mut row = json!({"endpoint": endpoint, "courseId": null, "status": "complete"});
+            if endpoint == "groupPages" {
+                row["groupId"] = json!(900);
+            }
+            if endpoint == "calendarEvents" {
+                row["contextCode"] = json!("user_41");
+            }
+            coverage.extend([row.clone(), row]);
+        }
+        fixture.rewrite_snapshot();
+        let expected = match endpoint {
+            "coursesActive" => BundleError::IncompleteInventory,
+            "course" | "assignments" | "assignmentGroups" | "submissions" => {
+                BundleError::IncompleteCoverage
+            }
+            _ => BundleError::InvalidSnapshot,
+        };
+        assert_eq!(
+            validate_current_bundle(&fixture.app_root, &fixture.expected()).unwrap_err(),
+            expected,
+            "{endpoint}"
+        );
+    }
+}
+
+#[test]
 fn rejects_legacy_pointer_and_stale_run_receipt() {
     let mut fixture = ArchiveFixture::new();
     fixture.pointer["version"] = json!(1);

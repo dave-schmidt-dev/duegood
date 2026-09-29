@@ -30,6 +30,7 @@ interface LocalGradeRecord extends AssignmentListItem {
 interface LocalTimelineEvent extends LocalGradeRecord {
   readonly type: "deadline" | "class";
   readonly kind: string | null;
+  readonly endsAt?: string | null;
   readonly detail: string | null;
   readonly place: string | null;
   readonly notes: string | null;

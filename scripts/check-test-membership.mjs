@@ -126,6 +126,8 @@ let tauriTestCount = 0;
     ["capture_run::tests", "capture_run_tests.rs"],
     ["capture_run::archive", "capture_run_archive_tests.rs"],
     ["resources::tests", "resources_tests.rs"],
+    ["syllabus_sessions::tests", "syllabus_sessions_tests.rs"],
+    ["personal_sessions::tests", "personal_sessions_tests.rs"],
   ]);
   for (const match of discovery.matchAll(/^([A-Za-z0-9_:]+): test$/gm)) {
     const modulePath = match[1];

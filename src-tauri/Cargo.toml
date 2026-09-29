@@ -1,6 +1,6 @@
 [package]
 name = "duegood-desktop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Due Good desktop application: local coursework store, legacy import, and read-only dashboard commands."
 license = "MIT"
 edition = "2021"
@@ -16,6 +16,10 @@ crate-type = ["rlib"]
 [[bin]]
 name = "duegood-capture-download"
 path = "src/bin/duegood-capture-download.rs"
+
+[[bin]]
+name = "duegood-personal-sessions"
+path = "src/bin/duegood-personal-sessions.rs"
 
 [features]
 # Data-root overrides for tests and staged smoke builds only. Release builds never enable this.

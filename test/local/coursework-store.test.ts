@@ -17,6 +17,33 @@ async function fixture(): Promise<{ directory: string; file: string }> {
 afterEach(async () => Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))));
 
 describe("CourseworkStore", () => {
+  it("retains a syllabus class time range across personal updates and rejects a malformed end time", async () => {
+    const { file } = await fixture();
+    const document = JSON.parse(await readFile(file, "utf8"));
+    const session = {
+      id: "synthetic-syllabus-session", course: "course-a", kind: "session", source: "syllabus",
+      title: "Class session", at: "2030-01-14T18:00:00-05:00", endsAt: "2030-01-14T20:30:00-05:00",
+      notes: "Synthetic personal note", done: false, syllabusSession: { version: 1, canvasCourseId: 900001 },
+    };
+    document.items.push(session);
+    await writeFile(file, JSON.stringify(document));
+    const store = new CourseworkStore(file);
+    const before = await store.read();
+    expect(before.events.find((event) => event.sourceItemId === session.id)).toMatchObject({
+      type: "class", dueAt: session.at, endsAt: session.endsAt, source: "syllabus", notes: session.notes,
+    });
+    expect(before.assignments.some((item) => item.sourceItemId === session.id)).toBe(false);
+    await store.setCompletion(session.id, true, before.version);
+    expect((await store.read()).events.find((event) => event.sourceItemId === session.id)).toMatchObject({
+      endsAt: session.endsAt, completed: true, notes: session.notes,
+    });
+    const persisted = JSON.parse(await readFile(file, "utf8"));
+    expect(persisted.items.find((item: { id: string }) => item.id === session.id).syllabusSession).toEqual(session.syllabusSession);
+    persisted.items.find((item: { id: string }) => item.id === session.id).endsAt = 42;
+    await writeFile(file, JSON.stringify(persisted));
+    await expect(store.read()).rejects.toThrow("item.endsAt must be a string or null");
+  });
+
   it("projects assignments and preserves private completion separately", async () => {
     const { file } = await fixture();
     const sourceDocument = JSON.parse(await readFile(file, "utf8"));

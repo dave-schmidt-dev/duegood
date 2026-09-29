@@ -309,10 +309,12 @@ function numberOrNull(value: unknown): number | null {
 
 function projectedCanvasCourseId(course: JsonObject, key: string, label: string): number | null {
   if (Object.hasOwn(course, "canvasCourseId")) {
-    if (typeof course.canvasCourseId !== "number" || !Number.isSafeInteger(course.canvasCourseId) || course.canvasCourseId <= 0) {
+    const rawId = course.canvasCourseId;
+    const id = typeof rawId === "string" ? Number(rawId) : rawId;
+    if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0 || typeof rawId === "string" && String(id) !== rawId) {
       throw new Error(`${label}.canvasCourseId must be a positive safe integer`);
     }
-    return course.canvasCourseId;
+    return id;
   }
   return /^[1-9][0-9]{0,15}$/.test(key) && Number.isSafeInteger(Number(key)) ? Number(key) : null;
 }
@@ -412,9 +414,11 @@ function projectCoursework(value: unknown, version: string): ProjectedSnapshot {
       assignmentGroupName: stringOrNull(item.assignmentGroupName),
       assignmentGroupWeight: numberOrNull(item.assignmentGroupWeight),
     };
+    if ("endsAt" in item && item.endsAt !== null && typeof item.endsAt !== "string") throw new Error("item.endsAt must be a string or null");
     const event: ProjectedEvent = {
       ...projected,
       type: item.kind === "session" ? "class" : "deadline",
+      ...("endsAt" in item ? { endsAt: stringOrNull(item.endsAt) } : {}),
       kind: typeof item.kind === "string" ? item.kind : null,
       independentDue: hasIndependentIcalDue(item),
       detail: stringOrNull(item.detail),

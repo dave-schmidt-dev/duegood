@@ -60,7 +60,10 @@
       "test/local/prepare-canvas-helper.test.ts",
       "test/local/canvas-browser-native-import.test.ts",
       "test/local/canvas-browser-run-lease.test.ts",
-      "test/local/canvas-browser-session-client.test.ts"
+      "test/local/canvas-browser-session-client.test.ts",
+      "test/local/syllabus-sessions.test.ts",
+      "test/local/syllabus-weekly.test.ts",
+      "test/local/syllabus-pdf.test.ts"
     ]
   },
   "native": {
@@ -104,7 +107,7 @@
       "src-tauri/src/import.rs": 14,
       "src-tauri/src/locking.rs": 12,
       "src-tauri/src/phase4_smoke.rs": 1,
-      "src-tauri/src/reconcile.rs": 12,
+      "src-tauri/src/reconcile.rs": 14,
       "src-tauri/src/refresh.rs": 12,
       "src-tauri/src/snapshots.rs": 1,
       "src-tauri/src/store.rs": 21,
@@ -112,20 +115,23 @@
       "src-tauri/src/ical_receiver.rs": 6,
       "src-tauri/src/ical_bootstrap.rs": 1,
       "src-tauri/src/ical_apply_bootstrap.rs": 2,
-      "src-tauri/src/browser_bundle_tests.rs": 8,
+      "src-tauri/src/browser_bundle_tests.rs": 10,
       "src-tauri/src/browser_export_tests.rs": 10,
       "src-tauri/src/browser_freshness_tests.rs": 7,
       "src-tauri/src/browser_import_helper_tests.rs": 7,
       "src-tauri/src/browser_import_tests.rs": 9,
       "src-tauri/src/browser_projection_tests.rs": 10,
-      "src-tauri/src/browser_reconcile_tests.rs": 8,
+      "src-tauri/src/browser_reconcile_tests.rs": 9,
       "src-tauri/src/browser_resources_tests.rs": 16,
       "src-tauri/src/capture_run_tests.rs": 6,
-      "src-tauri/src/browser_account_projection_tests.rs": 8,
+      "src-tauri/src/browser_account_projection_tests.rs": 9,
       "src-tauri/src/browser_legacy_resources_tests.rs": 5,
       "src-tauri/src/capture_run_archive_tests.rs": 2,
       "src-tauri/src/commands_browser_tests.rs": 3,
-      "src-tauri/src/resources_tests.rs": 2
+      "src-tauri/src/resources_tests.rs": 2,
+      "src-tauri/src/syllabus_sessions_tests.rs": 18,
+      "src-tauri/src/personal_sessions_tests.rs": 12,
+      "src-tauri/src/bin/duegood-personal-sessions.rs": 2
     }
   },
   "fixtures": [

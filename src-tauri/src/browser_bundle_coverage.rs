@@ -178,7 +178,8 @@ pub(super) fn validate_active_coverage(
                 course_id,
                 group_id,
                 context_code.clone(),
-            )) {
+            )) && !DETAIL_COVERAGE_ENDPOINTS.contains(&endpoint)
+            {
                 return Err(BundleError::InvalidSnapshot);
             }
             let status = entry
@@ -214,6 +215,24 @@ pub(super) fn validate_active_coverage(
         .collect::<Result<Vec<_>, BundleError>>()?;
     Ok((result, all_coverage))
 }
+
+// The collector emits one row per child request without a child ID in the scope. Keep every
+// result (including gaps), since consumers count detail rows or select the worst status.
+const DETAIL_COVERAGE_ENDPOINTS: [&str; 13] = [
+    "page",
+    "moduleItems",
+    "discussionEntries",
+    "discussionReplies",
+    "submission",
+    "quiz",
+    "conversation",
+    "file",
+    "personalFile",
+    "groupFolderFiles",
+    "groupPage",
+    "groupDiscussionEntries",
+    "groupDiscussionReplies",
+];
 
 const GROUP_COVERAGE_ENDPOINTS: [&str; 7] = [
     "groupFolders",

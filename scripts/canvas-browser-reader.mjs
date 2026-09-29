@@ -103,10 +103,10 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
       case "coursesCompleted": return { path: "/api/v1/courses", list: true, fixed: { enrollment_state: "completed" } };
       case "course":
         if (!positiveId(values.courseId)) fail(codes.invalid);
-        return { path: `/api/v1/courses/${values.courseId}`, list: false, courseId: values.courseId, expectedContextCode: `course_${values.courseId}`, expectedId: values.courseId, fixed: {} };
+        return { path: `/api/v1/courses/${values.courseId}`, list: false, courseId: values.courseId, expectedContextCode: `course_${values.courseId}`, expectedId: values.courseId, fixed: { "include[]": "syllabus_body" } };
       case "syllabus":
         if (!positiveId(values.courseId)) fail(codes.invalid);
-        return { path: `/api/v1/courses/${values.courseId}`, list: false, courseId: values.courseId, expectedContextCode: `course_${values.courseId}`, expectedId: values.courseId, fixed: {} };
+        return { path: `/api/v1/courses/${values.courseId}`, list: false, courseId: values.courseId, expectedContextCode: `course_${values.courseId}`, expectedId: values.courseId, fixed: { "include[]": "syllabus_body" } };
       case "courseTabs": return courseRoute(values, "/tabs", true, true);
       case "assignments": return courseRoute(values, "/assignments");
       case "assignmentGroups": return courseRoute(values, "/assignment_groups", true, true);

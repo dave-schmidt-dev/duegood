@@ -483,6 +483,42 @@ for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "
       await expect(page.locator("[data-desktop-store=authoritative]")).toContainText("Available for native refresh.");
     });
 
+    test("syllabus sessions retain their time range without completion controls or writes", async ({ page }) => {
+      const start = new Date(Date.now() + 2 * 86_400_000);
+      start.setUTCHours(18, 0, 0, 0);
+      const session = {
+        id: "syn-101-syllabus-session", course: "syn-101", kind: "session", source: "syllabus", title: "Class session",
+        at: start.toISOString(), endsAt: new Date(start.getTime() + 150 * 60_000).toISOString(), done: false,
+        syllabusSession: { version: 1, canvasCourseId: 101, date: start.toISOString().slice(0, 10), startTime: "18:00", endTime: "20:30", timeZone: "UTC", source: { kind: "course-body", sha256: "a".repeat(64), line: 1 } },
+      };
+      const coursework = JSON.stringify({
+        generated: new Date().toISOString(),
+        courses: [{ key: "syn-101", code: "SYN 101", title: "Synthetic Studies", color: "#3a6ea5", folder: "syn-101" }],
+        items: [session],
+      });
+      const apiRequests = await openDesktop(page, scenario({ state: "authoritative", coursework }));
+      const range = await page.evaluate(({ at, endsAt }) => {
+        const format = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
+        return `${format.format(new Date(at))}–${format.format(new Date(endsAt))}`;
+      }, session);
+      const meeting = page.locator(".class-meeting");
+      await expect(meeting).toBeVisible();
+      await expect(meeting.getByRole("heading", { name: "Class session", exact: true })).toBeVisible();
+      await expect(meeting.locator(".event-time")).toHaveText(range);
+      await expect(meeting.locator("time")).toHaveAttribute("datetime", session.at);
+      await expect(meeting.getByRole("checkbox")).toHaveCount(0);
+      await meeting.getByRole("button", { name: "Details", exact: true }).click();
+      await expect(meeting.getByRole("button", { name: /mark (complete|not done)/i })).toHaveCount(0);
+      await page.getByRole("button", { name: "Deadlines only", exact: true }).click();
+      await expect(meeting).toHaveCount(0);
+      await page.getByRole("button", { name: "All events", exact: true }).click();
+      await expect(meeting.locator(".event-time")).toHaveText(range);
+      const calls = await expectNoPathArguments(page);
+      expect(calls.filter((call) => call.command === "read_dashboard_documents")).toHaveLength(1);
+      expect(calls.filter((call) => ["set_item_completion", "set_discussion_field"].includes(call.command))).toEqual([]);
+      expect(apiRequests).toEqual([]);
+    });
+
     test("native progress edits send only item IDs and prior booleans", async ({ page }) => {
       const apiRequests = await openDesktop(page, scenario({ state: "authoritative" }));
       const essayDone = page.locator('[data-due-item="syn-101-essay"]').getByRole("checkbox", { name: "Mark Synthetic essay draft done" });

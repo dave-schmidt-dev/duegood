@@ -49,6 +49,8 @@ interface LocalGradeRecord extends AssignmentListItem {
 
 interface LocalTimelineEvent extends LocalGradeRecord {
   readonly type: "deadline" | "class";
+  /** Explicit end time when a class schedule supplies one. */
+  readonly endsAt?: string | null;
   /** Original coursework kind; this remains distinct from the display type. */
   readonly kind: string | null;
   readonly detail: string | null;
@@ -240,9 +242,11 @@ function validateAndProject(document: JsonObject): Omit<LocalSnapshot, "version"
       assignmentGroupName: stringOrNull(item.assignmentGroupName),
       assignmentGroupWeight: numberOrNull(item.assignmentGroupWeight),
     };
+    if ("endsAt" in item && item.endsAt !== null && typeof item.endsAt !== "string") throw new Error("item.endsAt must be a string or null");
     const event: LocalTimelineEvent = {
       ...projected,
       type: item.kind === "session" ? "class" : "deadline",
+      ...("endsAt" in item ? { endsAt: stringOrNull(item.endsAt) } : {}),
       kind: typeof item.kind === "string" ? item.kind : null,
       detail: stringOrNull(item.detail),
       place: null,
