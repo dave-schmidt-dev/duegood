@@ -98,7 +98,7 @@ fn snapshot(run_id: u64, generation_id: &str, user_id: u64) -> Value {
             (
                 "course",
                 vec![
-                    json!({"id":course_id,"name":format!("Synthetic Course {course_id}"),"course_code":"SYN-101"}),
+                    json!({"id":course_id,"name":format!("Synthetic Course {course_id}"),"course_code":format!("SYN-CANVAS-{course_id}")}),
                 ],
             ),
             ("assignments", assignment),
@@ -177,6 +177,18 @@ fn run_import_confirmed(
 ) -> Result<BrowserImportResult, BrowserImportError> {
     let archive = canvas_capture_archive_root(root.path()).unwrap();
     import_current_capture_confirmed(store, &archive, confirm_first_account, &mut |_| {})
+}
+
+fn read_coursework(store: &Store) -> Value {
+    serde_json::from_slice(&fs::read(store.store_dir().join(COURSEWORK_FILE)).unwrap()).unwrap()
+}
+
+fn write_coursework(store: &Store, coursework: &Value) {
+    atomic_write(
+        &store.store_dir().join(COURSEWORK_FILE),
+        &node_json_bytes(coursework),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -385,10 +397,53 @@ fn repeated_import_is_idempotent_and_bound_account_cannot_change() {
     let store = open_store(&root, "authoritative", false);
     publish_attempt(&root, USER_ID);
     run_import(&store, &root, Some(USER_ID)).unwrap();
+
+    let imported = read_coursework(&store);
+    assert_eq!(imported["courses"][0]["title"], "Synthetic Course 900001");
+    assert_eq!(imported["courses"][0]["code"], "SYN-CANVAS-900001");
+    let imported_course = imported["courses"][0].clone();
+    let imported_item = imported["items"][0].clone();
     let before = snapshot_tree(&store.store_dir());
     let repeated = run_import(&store, &root, None).unwrap();
     assert!(repeated.already_current);
     assert_eq!(snapshot_tree(&store.store_dir()), before);
+
+    let mut placeholders = read_coursework(&store);
+    placeholders["courses"][0]["title"] = json!("Canvas course 900001");
+    placeholders["courses"][0]["code"] = json!("900001");
+    write_coursework(&store, &placeholders);
+
+    let repaired = run_import(&store, &root, None).unwrap();
+    assert!(!repaired.already_current);
+    let repaired_coursework = read_coursework(&store);
+    assert_eq!(
+        repaired_coursework["courses"][0]["title"],
+        "Synthetic Course 900001"
+    );
+    assert_eq!(
+        repaired_coursework["courses"][0]["code"],
+        "SYN-CANVAS-900001"
+    );
+    for field in ["key", "folder", "syntheticCourseExtension"] {
+        assert_eq!(
+            repaired_coursework["courses"][0][field],
+            imported_course[field]
+        );
+    }
+    for field in [
+        "id",
+        "done",
+        "doneAt",
+        "studentNote",
+        "syntheticItemExtension",
+    ] {
+        assert_eq!(repaired_coursework["items"][0][field], imported_item[field]);
+    }
+
+    let after_repair = snapshot_tree(&store.store_dir());
+    let repaired_repeat = run_import(&store, &root, None).unwrap();
+    assert!(repaired_repeat.already_current);
+    assert_eq!(snapshot_tree(&store.store_dir()), after_repair);
 
     publish_attempt(&root, USER_ID + 1);
     assert!(matches!(

@@ -64,6 +64,14 @@ async function inspectDirectory(directory) {
   return { path: absolute, dev: stat.dev, ino: stat.ino, uid: stat.uid };
 }
 
+// Reuse readers share the same owner-only directory and generation safeguards as the writer.
+export { inspectDirectory as inspectCanvasCaptureDirectory };
+
+export async function openCanvasCaptureArchiveRoot(appDirectory) {
+  const app = await inspectDirectory(appDirectory);
+  return inspectDirectory(path.join(app.path, ARCHIVE_NAME));
+}
+
 async function verifyDirectory(identity) {
   const stat = await lstat(identity.path).catch(() => undefined);
   if (!stat || !stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== identity.dev
@@ -190,7 +198,7 @@ async function safeReadJson(target, maxBytes) {
   }
 }
 
-async function validateCurrent(root) {
+async function validateCanvasCurrentGeneration(root) {
   const pointer = await safeReadJson(path.join(root.path, "current.json"), 4096);
   if (pointer === undefined) return null;
   if (!isRecord(pointer) || pointer.format !== POINTER_FORMAT || ![1, 2].includes(pointer.version)
@@ -216,20 +224,22 @@ async function validateCurrent(root) {
       || createHash("sha256").update(snapshot).digest("hex") !== manifest.snapshotSha256) {
     throw archiveError("ARCHIVE_STATE_INVALID");
   }
+  let parsedSnapshot;
   if (pointer.version === 2) {
-    let parsed;
-    try { parsed = JSON.parse(snapshot.toString("utf8")); } catch { throw archiveError("ARCHIVE_STATE_INVALID"); }
-    if (!isRecord(parsed) || parsed.schemaVersion !== 2 || parsed.runId !== pointer.runId
-      || parsed.generationId !== pointer.generationId
-      || parsed.identity?.origin !== ORIGIN
-        || !Number.isSafeInteger(parsed.identity?.userId) || parsed.identity.userId <= 0
+    try { parsedSnapshot = JSON.parse(snapshot.toString("utf8")); } catch { throw archiveError("ARCHIVE_STATE_INVALID"); }
+    if (!isRecord(parsedSnapshot) || parsedSnapshot.schemaVersion !== 2 || parsedSnapshot.runId !== pointer.runId
+      || parsedSnapshot.generationId !== pointer.generationId
+      || parsedSnapshot.identity?.origin !== ORIGIN
+        || !Number.isSafeInteger(parsedSnapshot.identity?.userId) || parsedSnapshot.identity.userId <= 0
         || !isRecord(manifest.identity) || manifest.identity.origin !== ORIGIN
-        || parsed.identity.userId !== manifest.identity.userId) {
+        || parsedSnapshot.identity.userId !== manifest.identity.userId) {
       throw archiveError("ARCHIVE_STATE_INVALID");
     }
   }
-  return pointer.generationId;
+  return { generationId: pointer.generationId, snapshot: parsedSnapshot };
 }
+
+export { validateCanvasCurrentGeneration };
 
 async function processExists(pid) {
   try {
@@ -424,7 +434,7 @@ export async function saveCanvasCaptureGeneration({ appDirectory, snapshot, stag
     const generations = await ensurePrivateChild(root, "generations");
     const blobs = await ensurePrivateChild(root, "blobs");
     await sweepStaleTemps(root, generations, blobs, Date.now());
-    await validateCurrent(root);
+    await validateCanvasCurrentGeneration(root);
 
     const stageEntries = await readdir(staging.path);
     const expectedNames = new Set(receipts.map((receipt) => receipt.stagedFile));

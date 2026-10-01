@@ -49,10 +49,30 @@ function safeDownloadError(error) {
     : "DOWNLOAD_FAILED";
 }
 
+function revisionEvidence(item) {
+  const contentType = item["content-type"] ?? item.content_type ?? item.contentType;
+  const booleanFlag = (snakeCaseKey, camelCaseKey = snakeCaseKey) => {
+    const value = item[snakeCaseKey] ?? item[camelCaseKey];
+    return typeof value === "boolean" ? value : null;
+  };
+  return {
+    modifiedAt: typeof item.modified_at === "string" ? item.modified_at : null,
+    updatedAt: typeof item.updated_at === "string" ? item.updated_at : null,
+    contentType: typeof contentType === "string" ? contentType : null,
+    locked: booleanFlag("locked"),
+    hidden: booleanFlag("hidden"),
+    lockedForUser: booleanFlag("locked_for_user", "lockedForUser"),
+    hiddenForUser: booleanFlag("hidden_for_user", "hiddenForUser"),
+  };
+}
+
 /**
  * Collects one content-free staged receipt or explicit gap for each unique file ID.
  * Raw Canvas URLs stay in this instance and are supplied to the injected callback before the
- * collector sanitizes each metadata record.
+ * collector sanitizes each metadata record. Revision evidence (stamps, content type, access
+ * flags) is passed to the callback content-free so an unchanged file can be staged from the
+ * prior archive instead of downloaded; a later duplicate record that disagrees about the
+ * revision forces a fresh download so newer metadata is never paired with reused bytes.
  *
  * @param {object} options
  * @param {Function|undefined} options.downloadFile Browser/native file staging callback.
@@ -63,13 +83,15 @@ export function createCanvasFileCapture({ downloadFile, progress }) {
   const candidates = new Map();
   const receipts = [];
   const attempted = new Set();
+  const reusedStagedFiles = new Map();
   let downloadCount = 0;
 
   const remember = (item) => {
     if (!Number.isSafeInteger(item?.id) || item.id <= 0) return undefined;
     let candidate = candidates.get(item.id);
     if (candidate === undefined) {
-      candidate = { fileId: item.id, sourceUrl: undefined, expectedSize: null, invalidSize: false };
+      candidate = { fileId: item.id, sourceUrl: undefined, expectedSize: null, invalidSize: false,
+        revision: undefined, revisionConflict: false, conflictRetried: false };
       candidates.set(item.id, candidate);
     }
     if (typeof item.url === "string" && item.url.length > 0 && candidate.sourceUrl === undefined) {
@@ -81,22 +103,20 @@ export function createCanvasFileCapture({ downloadFile, progress }) {
         else candidate.expectedSize = item.size;
       } else candidate.invalidSize = true;
     }
+    const revision = revisionEvidence(item);
+    if (candidate.revision === undefined) candidate.revision = revision;
+    else if (JSON.stringify(candidate.revision) !== JSON.stringify(revision)) candidate.revisionConflict = true;
     return candidate;
   };
 
   const gap = (fileId, reason) => receipts.push({ fileId, status: "gap", reason });
 
-  const capture = async (item) => {
-    const candidate = remember(item);
-    if (candidate === undefined || attempted.has(candidate.fileId)) return;
-    if (candidate.invalidSize || candidate.expectedSize !== null && candidate.expectedSize > MAX_FILE_BYTES) {
-      attempted.add(candidate.fileId);
-      gap(candidate.fileId, "invalid-or-oversized-file-size");
-      return;
-    }
-    if (candidate.sourceUrl === undefined) return;
+  const dropStagedReceipt = (fileId) => {
+    const index = receipts.findIndex((receipt) => receipt.fileId === fileId && receipt.status === "staged");
+    if (index >= 0) receipts.splice(index, 1);
+  };
 
-    attempted.add(candidate.fileId);
+  const attemptDownload = async (candidate, revision) => {
     if (typeof downloadFile !== "function") {
       gap(candidate.fileId, "download-not-configured");
       return;
@@ -113,6 +133,13 @@ export function createCanvasFileCapture({ downloadFile, progress }) {
         fileId: candidate.fileId,
         sourceUrl: candidate.sourceUrl,
         expectedSize: candidate.expectedSize,
+        modifiedAt: revision?.modifiedAt ?? null,
+        updatedAt: revision?.updatedAt ?? null,
+        contentType: revision?.contentType ?? null,
+        locked: revision?.locked ?? null,
+        hidden: revision?.hidden ?? null,
+        lockedForUser: revision?.lockedForUser ?? null,
+        hiddenForUser: revision?.hiddenForUser ?? null,
       }));
     } catch (error) {
       const code = safeDownloadError(error);
@@ -136,7 +163,34 @@ export function createCanvasFileCapture({ downloadFile, progress }) {
       stagedFile: result.stagedFile,
       sourceAuthenticity: "unverified",
     });
+    if (result.reused === true) reusedStagedFiles.set(candidate.fileId, result.stagedFile);
     await progress({ phase: "file-download-complete", fileNumber: downloadCount, status: "staged", byteCount: result.byteCount });
+  };
+
+  const capture = async (item) => {
+    const candidate = remember(item);
+    if (candidate === undefined) return;
+    if (attempted.has(candidate.fileId)) {
+      if (candidate.revisionConflict && !candidate.conflictRetried
+          && reusedStagedFiles.get(candidate.fileId) !== undefined) {
+        // A later duplicate makes the revision ambiguous, so the normal downloader must fetch bytes.
+        candidate.conflictRetried = true;
+        reusedStagedFiles.delete(candidate.fileId);
+        dropStagedReceipt(candidate.fileId);
+        await attemptDownload(candidate, undefined);
+      }
+      return;
+    }
+    if (candidate.invalidSize || candidate.expectedSize !== null && candidate.expectedSize > MAX_FILE_BYTES) {
+      attempted.add(candidate.fileId);
+      gap(candidate.fileId, "invalid-or-oversized-file-size");
+      return;
+    }
+    if (candidate.sourceUrl === undefined) return;
+
+    attempted.add(candidate.fileId);
+    // Conflicting metadata observed before the first URL must never qualify for reuse.
+    await attemptDownload(candidate, candidate.revisionConflict ? undefined : candidate.revision);
   };
 
   const finish = () => {

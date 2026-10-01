@@ -5,6 +5,7 @@ import path from "node:path";
 import { collectCanvasBrowserCapture } from "./canvas-browser-capture.mjs";
 import { downloadCanvasFile } from "./canvas-browser-file-pipeline.mjs";
 import { saveCanvasCaptureGeneration } from "./canvas-browser-archive.mjs";
+import { loadCanvasFileReuseIndex, stageReusedCanvasFile } from "./canvas-browser-file-reuse.mjs";
 import { withCanvasRunLease } from "./canvas-browser-run-lease.mjs";
 import { deriveCapturedSyllabusSessions } from "./canvas-syllabus-documents.mjs";
 
@@ -37,11 +38,28 @@ async function privateDirectory(directory) {
   }
 }
 
+/** Removes reused staging copies the collector no longer references before the archive save. */
+async function discardReplacedStaging(snapshot, stagingDirectory, reusedStagedFiles) {
+  if (reusedStagedFiles.size === 0) return;
+  const referenced = new Set();
+  for (const resource of Array.isArray(snapshot?.resources) ? snapshot.resources : []) {
+    if (resource?.endpoint !== "fileBodies" || !Array.isArray(resource.items)) continue;
+    for (const item of resource.items) {
+      if (item?.status === "staged" && typeof item.stagedFile === "string") referenced.add(item.stagedFile);
+    }
+  }
+  for (const stagedFile of reusedStagedFiles) {
+    if (!referenced.has(stagedFile)) {
+      await unlink(path.join(stagingDirectory, stagedFile)).catch(() => undefined);
+    }
+  }
+}
+
 /** Captures from one persistent browser and publishes a private, immutable archive generation. */
 export async function runCanvasCapture({
   context,
   expectedUserId,
-  protocolVersion = undefined,
+  protocolVersion = /** @type {2 | undefined} */ (undefined),
   progress,
   collector = collectCanvasBrowserCapture,
   appDirectory = APP_DIR,
@@ -50,6 +68,8 @@ export async function runCanvasCapture({
   browserFileDownload = downloadCanvasFile,
   saveGeneration = saveCanvasCaptureGeneration,
   withRunLease = withCanvasRunLease,
+  loadFileReuseIndex = loadCanvasFileReuseIndex,
+  stageFileReuse = stageReusedCanvasFile,
   extractPdfText = undefined,
 }) {
   const stateHelper = await lstat(stateHelperPath).catch(() => undefined);
@@ -81,6 +101,8 @@ export async function runCanvasCapture({
         await chmod(stagingDirectory, 0o700);
         progress("CAPTURE_RUNNING");
         let stagedBytes = 0;
+        const reuseIndex = await loadFileReuseIndex({ appDirectory, expectedUserId });
+        const reusedStagedFiles = new Set();
         phase = "collecting";
         const snapshot = await collector({
           expectedUserId,
@@ -91,7 +113,32 @@ export async function runCanvasCapture({
             if (typeof event?.endpoint === "string") endpoint = event.endpoint;
             progress("CAPTURE_RUNNING");
           },
-          downloadFile: async ({ fileId, sourceUrl, expectedSize }) => {
+          downloadFile: async ({ fileId, sourceUrl, expectedSize, modifiedAt, updatedAt, contentType,
+            locked, hidden, lockedForUser, hiddenForUser }) => {
+            if (reuseIndex.entries.size > 0) {
+              // An unchanged file is copied from the prior archive instead of downloaded.
+              // Only content-free metadata reaches the reuse helper; the URL never does.
+              progress("CAPTURE_RUNNING");
+              const reused = await stageFileReuse(reuseIndex, {
+                fileId, size: expectedSize, modifiedAt, updatedAt, contentType, locked, hidden,
+                lockedForUser, hiddenForUser,
+              }, stagingDirectory, {
+                maxBytes: MAX_CAPTURE_DISK_BYTES - stagedBytes,
+                progress: () => progress("CAPTURE_RUNNING"),
+              });
+              if (reused !== null) {
+                if (Number.isSafeInteger(reused.byteCount) && reused.byteCount > 0
+                    && reused.byteCount <= MAX_CAPTURE_DISK_BYTES - stagedBytes) {
+                  stagedBytes += reused.byteCount;
+                  reusedStagedFiles.add(reused.stagedFile);
+                  return reused;
+                }
+                // An unusable copied receipt is removed so staging stays exact for the save.
+                if (/^[a-f0-9]{32}\.blob$/u.test(reused.stagedFile ?? "")) {
+                  await unlink(path.join(stagingDirectory, reused.stagedFile)).catch(() => undefined);
+                }
+              }
+            }
             if (stagedBytes >= MAX_CAPTURE_DISK_BYTES
                 || expectedSize !== undefined && expectedSize !== null
                   && expectedSize > MAX_CAPTURE_DISK_BYTES - stagedBytes) {
@@ -111,6 +158,7 @@ export async function runCanvasCapture({
             return receipt;
           },
         });
+        await discardReplacedStaging(snapshot, stagingDirectory, reusedStagedFiles);
         snapshot.syllabusSessions = await deriveCapturedSyllabusSessions({
           snapshot,
           stagingDirectory,

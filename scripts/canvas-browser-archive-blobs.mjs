@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open, rename } from "node:fs/promises";
+import { lstat, open, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 
 export const MAX_BLOB_BYTES = 256 * 1024 * 1024;
@@ -187,4 +187,82 @@ export async function copyCanvasBlob(staging, blobs, receipt, signal, tempPaths,
   await rename(temporary, destination);
   tempPaths.delete(temporary);
   await syncDirectory(blobs.path);
+}
+
+/**
+ * Copies one already-archived content-addressed blob into a fresh opaque staging file for a new
+ * capture run. The copied bytes are verified against the prior receipt before the copy is kept;
+ * a failed or mismatched copy is removed so bad bytes are never promoted.
+ *
+ * @param {object} blobs Validated archive blobs directory identity.
+ * @param {object} staging Validated capture staging directory identity.
+ * @param {{sha256: string, byteCount: number}} receipt Prior archived blob receipt.
+ * @param {AbortSignal} [signal] Cancellation.
+ * @returns {Promise<string>} Fresh opaque staged file basename.
+ */
+export async function copyArchivedCanvasBlobToStaging(blobs, staging, receipt, signal = undefined, onProgress = undefined) {
+  const source = path.join(blobs.path, receipt.sha256 + ".blob");
+  const before = await lstat(source).catch(() => undefined);
+  if (!before) throw archiveError("ARCHIVE_BLOB_MISSING");
+  validateFileStat(before, MAX_BLOB_BYTES);
+  if (before.size !== receipt.byteCount) throw archiveError("ARCHIVE_BLOB_MISMATCH");
+  await verifyDirectory(blobs);
+  await verifyDirectory(staging);
+  const input = await open(source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    .catch(() => { throw archiveError("ARCHIVE_BLOB_UNSAFE"); });
+  const stagedFile = randomUUID().replaceAll("-", "") + ".blob";
+  const target = path.join(staging.path, stagedFile);
+  const flags = constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0);
+  const output = await open(target, flags, 0o600).catch(async () => {
+    await input.close();
+    throw archiveError("STAGING_WRITE_FAILED");
+  });
+  let complete = false;
+  try {
+    const opened = await input.stat();
+    validateFileStat(opened, MAX_BLOB_BYTES);
+    if (opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== receipt.byteCount) {
+      throw archiveError("ARCHIVE_BLOB_UNSAFE");
+    }
+    const hash = createHash("sha256");
+    const buffer = Buffer.alloc(1024 * 1024);
+    let total = 0;
+    let lastProgress = 0;
+    while (true) {
+      throwIfAborted(signal);
+      const { bytesRead } = await input.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      if (total > receipt.byteCount || total > MAX_BLOB_BYTES) throw archiveError("ARCHIVE_BLOB_CHANGED");
+      const chunk = buffer.subarray(0, bytesRead);
+      hash.update(chunk);
+      let offset = 0;
+      while (offset < chunk.length) {
+        const { bytesWritten } = await output.write(chunk, offset, chunk.length - offset, null);
+        if (bytesWritten <= 0) throw archiveError("STAGING_WRITE_FAILED");
+        offset += bytesWritten;
+      }
+      if (typeof onProgress === "function" && (total - lastProgress >= 8 * 1024 * 1024 || total === receipt.byteCount)) {
+        await onProgress({ phase: "file-reuse-copy", byteCount: total, totalBytes: receipt.byteCount });
+        lastProgress = total;
+      }
+    }
+    if (total !== receipt.byteCount || hash.digest("hex") !== receipt.sha256) {
+      throw archiveError("ARCHIVE_BLOB_MISMATCH");
+    }
+    const after = await lstat(source).catch(() => undefined);
+    await verifyDirectory(staging);
+    if (!after || after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size) {
+      throw archiveError("ARCHIVE_BLOB_CHANGED");
+    }
+    await output.sync();
+    await output.chmod(0o600);
+    validateFileStat(await output.stat(), MAX_BLOB_BYTES);
+    complete = true;
+    return stagedFile;
+  } finally {
+    await input.close().catch(() => undefined);
+    await output.close().catch(() => undefined);
+    if (!complete) await unlink(target).catch(() => undefined);
+  }
 }

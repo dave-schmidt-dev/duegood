@@ -287,3 +287,21 @@ Confirmed locally: one current course has an exact receipt-backed PDF with a sta
 ## Owner-supplied class times: bounded personal schedule
 
 Confirmed: the native store retains personal sessions through source refresh, but its existing legacy importer refuses authoritative stores and no session-creation command exists. Add a narrow native helper using the existing OS-lock and exact-byte version fence to import reviewed current-term dates with explicitly supplied owner clocks. Validate exact course/term/timezone, bounded unique valid dates and a complete clock range. Keep owner input and local-note provenance separate from receipt-backed Canvas facts; deterministic manual session identities preserve completion and notes, and identical replay must leave store bytes unchanged. No Canvas or immutable capture mutation, generic scheduling framework, or UI redesign. Synthetic regressions and the complete isolated stage gate precede local application and attended source publication.
+
+## Incremental Canvas file refresh (2026-09-30)
+
+Owner request: stop downloading unchanged files on every refresh. Confirmed: the collector deduplicates only within a run; immutable schema-v2 archives already retain metadata and hash-bound blobs, and the importer deduplicates only after download. Changed: capture will reuse account-bound local bytes before network transfer. Not applicable: OAuth/Cloudflare and legacy exporter changes. Not verifiable: private legacy implementation behavior; no claim made.
+
+One bounded Standard Switchyard increment: compare numeric file ID, valid modification/update timestamps, size and content type against a validated same-origin/user current archive; stage freshly hash-verified local bytes when unchanged. Missing/ambiguous revision metadata, a new or changed file, missing/corrupt content, or a mismatched account falls back to download. Preserve schema v2, unverified source authenticity, normal syllabus parsing and native import, limits, and content-free progress. Use synthetic data only. Tests cover repeat refresh with zero transfers, changed/new files, invalid metadata/account/archive, damaged blobs, path/permission safety, and normal import-compatible receipts. Update membership and documentation; run focused tests and repository gates, then one external review. No push or external publication is authorized.
+
+## 2026-10-01 timeline header increment
+
+Confirmed: course titles are available; current headers emphasize codes and hide titles on mobile. Document scrolling plus timeline overflow containment prevents freeze-frame behavior. Implement visible class-name labels and sticky headers with synthetic desktop/mobile Playwright geometry coverage; build, install, and launch through the project workflow. Preserve prior incremental-file changes. No publication or private fixture changes. Owner explicitly requested this behavior live.
+
+## 2026-10-01 live course-name correction
+
+Confirmed: all three live titles remain calendar-bootstrap placeholders despite locally captured Canvas course metadata. Browser importer does not update course title/code. Repair names via validated ID-matched projected metadata in the journaled importer, including same-generation replay; retain personal state. Header/class tracks align, but header combines date/marker cells: share grid variables and explicit marker header cell for matching separators. Synthetic native regression plus screenshot-sized3-course Playwright; replay existing validated local archive after installation without downloading. Prior completion overstated live acceptance; verify content-free live metadata invariants after repair.
+
+### 2026-10-01 painted-divider correction
+Confirmed screenshot mismatch: header borders are on grid-cell edges; body date rail is centered. Reuse identical centered marker line and course-left borders; test painted pseudo-element position/border color before/after scroll on desktop/mobile. Move Recovery/Export into More as requested. Preserve all live store data; stage checks, signed installer, verified launch.
+Owner additions: place backup actions in existing More; display11:59PM for date-only assignment/discussion clocks without changing imported source, leave class clocks unknown. Regression existingtest runner membership unchanged.

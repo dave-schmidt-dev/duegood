@@ -115,6 +115,7 @@ let tauriTestCount = 0;
     ["commands::browser_commands", "commands_browser_tests.rs"],
     ["browser_bundle::tests", "browser_bundle_tests.rs"],
     ["browser_import::tests", "browser_import_tests.rs"],
+    ["browser_import::course_metadata", "browser_import_course_metadata.rs"],
     ["browser_import_helper::tests", "browser_import_helper_tests.rs"],
     ["browser_projection::tests", "browser_projection_tests.rs"],
     ["browser_account_projection::tests", "browser_account_projection_tests.rs"],

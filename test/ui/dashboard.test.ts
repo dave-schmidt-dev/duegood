@@ -161,8 +161,8 @@ describe("dashboard production UI contract", () => {
 
   it("renders consecutive day slots beyond September 25 and stable IT530/IT540/IT570 lanes", () => {
     const dashboard = renderDashboard(state("timeline"), handlers);
-    const labels = findAll(dashboard, (item) => item.attrs?.class === "lane-label").map(words);
-    expect(labels.map((label) => label.match(/IT \d+/)?.[0])).toEqual(["IT 530", "IT 540", "IT 570"]);
+    const labels = findAll(dashboard, (item) => item.attrs?.class === "lane-label");
+    expect(labels.map((label) => label.children?.find((child) => child.tag === "b")?.text)).toEqual(["Security", "Data", "Policy"]);
     const days = findAll(dashboard, (item) => item.attrs?.["data-day"] !== undefined).map((item) => item.attrs?.["data-day"]);
     expect(days).toEqual(["2026-09-20", "2026-09-21", "2026-09-22", "2026-09-23", "2026-09-24", "2026-09-25", "2026-09-26"]);
     expect(words(dashboard)).toContain("Open day");
@@ -204,17 +204,34 @@ describe("dashboard production UI contract", () => {
     expect(lane === undefined ? [] : findAll(lane, (item) => (item.attrs?.class ?? "").includes("event-card"))).toHaveLength(2);
   });
 
-  it("keeps date-only Sunday work on Sunday without inventing a time or countdown instant", () => {
+  it("assumes 11:59 PM for date-only due work while class and unknown times stay honest", () => {
     const sunday: DashboardEvent = { id: "sunday", courseId: "530", courseCode: "IT530", kind: "deadline", title: "Sunday assignment", startsAt: "2026-09-27", completed: false };
+    const timed: DashboardEvent = { id: "timed", courseId: "530", courseCode: "IT530", kind: "deadline", title: "Timed memo", startsAt: "2026-09-25T20:15:00-04:00", completed: false };
+    const dateOnlyClass: DashboardEvent = { id: "date-only-class", courseId: "540", courseCode: "IT540", kind: "class", title: "Date-only class", startsAt: "2026-09-28", completed: false };
+    const unknownEndClass: DashboardEvent = { id: "unknown-end-class", courseId: "540", courseCode: "IT540", kind: "class", title: "Open-ended class", startsAt: "2026-09-29T18:00:00-04:00", endsAt: "not-a-timestamp", completed: false };
     const now = Date.parse("2026-09-25T12:00:00-04:00");
-    const data = { ...DATA, events: [sunday] };
+    const data = { ...DATA, events: [sunday, timed, dateOnlyClass, unknownEndClass] };
     const dashboard = renderDashboard({ ...state("timeline"), now, data }, handlers);
     const saturday = findAll(dashboard, (item) => item.attrs?.["data-day"] === "2026-09-26")[0];
     const sundaySlot = findAll(dashboard, (item) => item.attrs?.["data-day"] === "2026-09-27")[0];
     expect(findAll(saturday!, (item) => item.attrs?.class?.includes("event-card") === true)).toHaveLength(0);
     const card = findAll(sundaySlot!, (item) => item.attrs?.class?.includes("event-card") === true)[0]!;
-    expect(words(card)).toContain("Time not specified");
+    const timeElement = findAll(card, (item) => item.attrs?.class === "event-time")[0]!;
+    expect(words(card)).toContain("11:59 PM");
+    expect(words(card)).not.toContain("Time not specified");
     expect(words(card)).not.toMatch(/8:\d\d\s*PM/);
+    expect(timeElement.attrs?.datetime).toBe("2026-09-27");
+    expect(timeElement.attrs?.title).toBe("No time supplied; 11:59 PM assumed.");
+    const timedCard = findAll(findAll(dashboard, (item) => item.attrs?.["data-day"] === "2026-09-25")[0]!, (item) => item.attrs?.class?.includes("event-card") === true)[0]!;
+    expect(words(timedCard)).toContain("8:15 PM");
+    expect(words(timedCard)).not.toContain("11:59 PM");
+    const classCard = findAll(findAll(dashboard, (item) => item.attrs?.["data-day"] === "2026-09-28")[0]!, (item) => item.attrs?.class?.includes("event-card") === true)[0]!;
+    expect(words(classCard)).toContain("Time not specified");
+    expect(words(classCard)).not.toContain("11:59 PM");
+    const unknownCard = findAll(findAll(dashboard, (item) => item.attrs?.["data-day"] === "2026-09-29")[0]!, (item) => item.attrs?.class?.includes("event-card") === true)[0]!;
+    expect(words(unknownCard)).toContain("6:00 PM");
+    expect(words(unknownCard)).toContain("Time unknown");
+    expect(words(unknownCard)).not.toContain("11:59 PM");
     expect(countdownText(now, sunday.startsAt)).toBe("Due in 2 days");
     expect(countdownText(Date.parse("2026-09-27T18:00:00-04:00"), sunday.startsAt)).toBe("Due today");
     expect(formatAssignmentCopyText(sunday)).toContain("Due date: Sep 27");

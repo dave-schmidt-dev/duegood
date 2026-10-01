@@ -7,7 +7,7 @@ process.env.PLAYWRIGHT_BROWSERS_PATH ??= path.resolve(".playwright");
 
 export default defineConfig({
   testDir: "./test/native/playwright",
-  testMatch: ["desktop-first-run.spec.ts", "canvas-browser-reader.spec.ts", "canvas-browser-auth-download.spec.ts", "canvas-browser-auth-production.spec.ts"],
+  testMatch: ["desktop-first-run.spec.ts", "canvas-browser-reader.spec.ts", "canvas-browser-auth-download.spec.ts", "canvas-browser-auth-production.spec.ts", "timeline-headers.spec.ts", "timeline-course-names.spec.ts"],
   fullyParallel: false,
   workers: 1,
   forbidOnly: true,

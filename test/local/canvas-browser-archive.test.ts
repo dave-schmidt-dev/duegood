@@ -3,7 +3,11 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, utimes, writeFi
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { saveCanvasCaptureGeneration } from "../../scripts/canvas-browser-archive.mjs";
+import {
+  openCanvasCaptureArchiveRoot,
+  saveCanvasCaptureGeneration,
+  validateCanvasCurrentGeneration,
+} from "../../scripts/canvas-browser-archive.mjs";
 
 const ORIGIN = "https://marymount.instructure.com";
 const temporaryRoots: string[] = [];
@@ -344,5 +348,23 @@ describe("private Canvas capture archive", () => {
     expect(await readdir(path.join(archive, "blobs"))).toEqual([]);
     expect((await readdir(path.join(archive, "generations"))).filter((name) => name.startsWith(".pending-"))).toEqual([]);
     await expect(readdir(path.join(archive, ".writer-lock"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("exposes the validated current generation to local reuse readers", async () => {
+    const data = await fixture();
+    const saved = await saveCanvasCaptureGeneration(data);
+    const root = await openCanvasCaptureArchiveRoot(data.appDirectory);
+    const current = await validateCanvasCurrentGeneration(root);
+    expect(current?.generationId).toBe(saved.generationId);
+    expect(current?.snapshot).toMatchObject({ schemaVersion: 2, runId: 1,
+      generationId: saved.generationId, identity: { origin: ORIGIN, userId: 41 } });
+
+    const snapshotPath = path.join(data.appDirectory, "canvas-capture-archive", "generations",
+      saved.generationId, "snapshot.json");
+    await writeFile(snapshotPath, "{\"tampered\": true}\n", { mode: 0o600 });
+    await expect(validateCanvasCurrentGeneration(root)).rejects.toMatchObject({ code: "ARCHIVE_STATE_INVALID" });
+
+    await expect(openCanvasCaptureArchiveRoot(path.join(data.root, "missing")))
+      .rejects.toMatchObject({ code: "UNSAFE_DIRECTORY" });
   });
 });

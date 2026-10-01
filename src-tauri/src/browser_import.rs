@@ -23,6 +23,8 @@ use crate::config::{canvas_capture_archive_root, COURSEWORK_FILE, MANIFEST_FILE,
 use crate::export::{copy_tree, ExportProgress};
 use crate::store::{Store, StoreError};
 
+#[path = "browser_import_course_metadata.rs"]
+mod course_metadata;
 #[path = "browser_import_inventory.rs"]
 mod inventory;
 #[path = "browser_import_state.rs"]
@@ -289,8 +291,19 @@ fn import_current_capture_inner(
         bundle.user_id,
         confirmed_first_user_id,
     )? {
-        progress(progress_value(BrowserImportPhase::Complete, 0, 0));
-        return Ok(make_result(bundle.run_id, scopes.len(), 0, promoted, true));
+        // A same-generation receipt may skip republishing only when the coursework course
+        // title/code already match the projected course metadata. Otherwise the journaled
+        // import below repairs the placeholders an earlier importer retained.
+        let receipt_projection = project_snapshot(&bundle.snapshot, &scopes)
+            .map_err(BrowserImportError::Projection)?;
+        if course_metadata::course_metadata_current(
+            &latest.coursework,
+            &receipt_projection.documents,
+            &scopes,
+        )? {
+            progress(progress_value(BrowserImportPhase::Complete, 0, 0));
+            return Ok(make_result(bundle.run_id, scopes.len(), 0, promoted, true));
+        }
     }
 
     crate::snapshots::snapshot_before_refresh_locked_with_progress(
@@ -329,6 +342,7 @@ fn import_current_capture_inner(
     )
     .map_err(BrowserImportError::SyllabusSessions)?;
     apply_promoted_folders(&mut coursework, &scopes)?;
+    course_metadata::apply_course_metadata(&mut coursework, &projection.documents, &scopes)?;
     let archive = inactive_course_archive(&bundle, &scopes)?;
     let status = import_status(&bundle, &promoted)?;
 

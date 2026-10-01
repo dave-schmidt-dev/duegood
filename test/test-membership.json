@@ -50,6 +50,7 @@
       "test/local/canvas-browser-capture.test.ts",
       "test/local/canvas-browser-capture-collector.test.ts",
       "test/local/canvas-browser-file-pipeline.test.ts",
+      "test/local/canvas-browser-file-reuse.test.ts",
       "test/local/canvas-browser-archive.test.ts",
       "test/local/canvas-browser-binding.test.ts",
       "test/local/canvas-browser-identity.test.ts",
@@ -120,6 +121,7 @@
       "src-tauri/src/browser_freshness_tests.rs": 7,
       "src-tauri/src/browser_import_helper_tests.rs": 7,
       "src-tauri/src/browser_import_tests.rs": 9,
+      "src-tauri/src/browser_import_course_metadata.rs": 9,
       "src-tauri/src/browser_projection_tests.rs": 10,
       "src-tauri/src/browser_reconcile_tests.rs": 9,
       "src-tauri/src/browser_resources_tests.rs": 16,
@@ -148,7 +150,9 @@
       "test/native/playwright/desktop-first-run.spec.ts",
       "test/native/playwright/canvas-browser-reader.spec.ts",
       "test/native/playwright/canvas-browser-auth-download.spec.ts",
-      "test/native/playwright/canvas-browser-auth-production.spec.ts"
+      "test/native/playwright/canvas-browser-auth-production.spec.ts",
+      "test/native/playwright/timeline-headers.spec.ts",
+      "test/native/playwright/timeline-course-names.spec.ts"
     ]
   }
 }

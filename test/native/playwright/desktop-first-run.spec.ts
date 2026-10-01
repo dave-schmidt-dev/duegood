@@ -568,11 +568,13 @@ for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "
     test("snapshot recovery lists generated IDs and restores only the selected ID", async ({ page }) => {
       const setup = scenario({ state: "authoritative" });
       await openDesktop(page, setup);
+      await expect(page.locator(".topbar").getByRole("button", { name: "Recovery", exact: true })).toHaveCount(0);
+      await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "More", exact: true }).click();
       await page.getByRole("button", { name: "Recovery", exact: true }).click();
       const recoveryPoints = page.getByRole("region", { name: "Recovery points" });
       await expect(recoveryPoints).toContainText("Daily snapshot");
       await recoveryPoints.getByRole("button", { name: "Restore snapshot" }).click();
-      await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "More" })).toBeVisible();
 
       const calls = await expectNoPathArguments(page);
       expect(calls.filter((call) => call.command === "list_snapshots")).toHaveLength(1);
@@ -583,6 +585,8 @@ for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "
 
     test("rollback export streams progress through a channel and shows completion", async ({ page }) => {
       await openDesktop(page, scenario({ state: "authoritative" }));
+      await expect(page.locator(".topbar").getByRole("button", { name: "Export", exact: true })).toHaveCount(0);
+      await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "More", exact: true }).click();
       await page.getByRole("button", { name: "Export", exact: true }).click();
       await expect(page.getByText("Rollback folder exported.", { exact: true })).toBeVisible();
       await expect(page.getByText("2 files copied", { exact: true })).toBeVisible();
