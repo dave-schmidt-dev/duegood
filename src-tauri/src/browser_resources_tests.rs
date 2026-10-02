@@ -291,7 +291,55 @@ fn archive_inventory_rejects_non_hash_names() {
 }
 
 #[test]
-fn removes_only_owned_pending_files_left_by_interrupted_copies() {
+fn validates_full_blob_inventory_before_removing_pending_files() {
+    let oversized_root = TempRoot::new("browser-resource-pending-limit");
+    let oversized_archive = ensure_private_child(oversized_root.path(), ARCHIVE_NAME).unwrap();
+    let oversized_directory = ensure_private_child(&oversized_archive, BLOBS_NAME).unwrap();
+    for index in 0..129 {
+        write_private(
+            &oversized_directory.join(format!(".pending-{index:032x}.tmp")),
+            b"interrupted copy",
+        );
+    }
+    assert_eq!(
+        crate::browser_resources_io::inventory_blobs(&oversized_directory, 1024).err(),
+        Some(ResourceArchiveError::UnsafeFile)
+    );
+    assert_eq!(fs::read_dir(&oversized_directory).unwrap().count(), 129);
+
+    let invalid_root = TempRoot::new("browser-resource-pending-invalid-inventory");
+    let invalid_archive = ensure_private_child(invalid_root.path(), ARCHIVE_NAME).unwrap();
+    let invalid_directory = ensure_private_child(&invalid_archive, BLOBS_NAME).unwrap();
+    let pending_path = invalid_directory.join(".pending-0123456789abcdef0123456789abcdef.tmp");
+    let invalid_path = invalid_directory.join("unexpected");
+    write_private(&pending_path, b"interrupted copy");
+    write_private(&invalid_path, b"invalid inventory entry");
+    let pending_entry = (
+        pending_path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned(),
+        pending_path.clone(),
+    );
+    let invalid_entry = ("unexpected".to_owned(), invalid_path);
+    for candidates in [
+        vec![pending_entry.clone(), invalid_entry.clone()],
+        vec![invalid_entry.clone(), pending_entry.clone()],
+    ] {
+        assert_eq!(
+            crate::browser_resources_io::inventory_blob_entries(
+                &invalid_directory,
+                candidates.into_iter().map(Ok),
+                1024,
+            )
+            .err(),
+            Some(ResourceArchiveError::UnsafeFile)
+        );
+        assert!(pending_path.exists());
+    }
+
     let root = TempRoot::new("browser-resource-pending-recovery");
     let body = b"%PDF-1.7\nsynthetic";
     let mut bundle = fixture(&root, body, "application/pdf");

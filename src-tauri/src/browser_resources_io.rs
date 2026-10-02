@@ -31,35 +31,54 @@ pub(super) fn inventory_blobs(
     directory: &Path,
     per_blob: u64,
 ) -> Result<BTreeMap<String, u64>, ResourceArchiveError> {
+    let candidates = fs::read_dir(directory)
+        .map_err(|_| ResourceArchiveError::Io)?
+        .map(|entry| {
+            let entry = entry.map_err(|_| ResourceArchiveError::Io)?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| ResourceArchiveError::UnsafeFile)?;
+            Ok((name, entry.path()))
+        });
+    inventory_blob_entries(directory, candidates, per_blob)
+}
+
+pub(super) fn inventory_blob_entries<I>(
+    directory: &Path,
+    candidates: I,
+    per_blob: u64,
+) -> Result<BTreeMap<String, u64>, ResourceArchiveError>
+where
+    I: IntoIterator<Item = Result<(String, PathBuf), ResourceArchiveError>>,
+{
     let mut entries = BTreeMap::new();
     let mut pending_count = 0_usize;
-    let mut removed_pending = false;
-    for entry in fs::read_dir(directory).map_err(|_| ResourceArchiveError::Io)? {
-        let entry = entry.map_err(|_| ResourceArchiveError::Io)?;
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| ResourceArchiveError::UnsafeFile)?;
+    let mut pending_paths = Vec::new();
+    for candidate in candidates {
+        let (name, path) = candidate?;
         if is_pending_name(&name) {
             pending_count += 1;
             if pending_count > MAX_PENDING_ENTRIES {
                 return Err(ResourceArchiveError::UnsafeFile);
             }
-            let metadata =
-                fs::symlink_metadata(entry.path()).map_err(|_| ResourceArchiveError::Io)?;
+            let metadata = fs::symlink_metadata(&path).map_err(|_| ResourceArchiveError::Io)?;
             verify_private_file_metadata(&metadata, per_blob)?;
-            fs::remove_file(entry.path()).map_err(|_| ResourceArchiveError::Io)?;
-            removed_pending = true;
+            pending_paths.push(path);
             continue;
         }
         if !is_hash(&name) {
             return Err(ResourceArchiveError::UnsafeFile);
         }
-        let metadata = fs::symlink_metadata(entry.path()).map_err(|_| ResourceArchiveError::Io)?;
+        let metadata = fs::symlink_metadata(&path).map_err(|_| ResourceArchiveError::Io)?;
         verify_private_file_metadata(&metadata, per_blob)?;
         entries.insert(name, metadata.len());
     }
-    if removed_pending {
+
+    for path in &pending_paths {
+        fs::remove_file(path).map_err(|_| ResourceArchiveError::Io)?;
+    }
+    if !pending_paths.is_empty() {
         sync_directory(directory)?;
     }
     Ok(entries)

@@ -16,6 +16,8 @@
 - Save calendar Activity history with the applied calendar changes, including no-change and held-event outcomes; record incomplete Canvas Activity inside the capture generation so same-generation replays do not duplicate it.
 - Distinguish added from updated assignment counts, without counting new assignments as updates; retain active courses with no calendar events and refresh course names/codes only from validated Canvas capture data. Calendar deadlines may attach to linked Canvas assignments; the feed does not provide grades, messages, or files.
 - Format Activity date-only due dates with the assumed 11:59 p.m. deadline on their stated calendar day and date-only graded dates without invented times, preventing UTC midnight dates from displaying on the previous evening in America/New_York while preserving instant semantics for timestamps with offsets or Z.
+- Validate the full blob archive inventory before removing interrupted-copy files, so an oversized or unsafe directory cannot trigger partial cleanup.
+- Check that the store is a ready preview before opening the native promotion backup picker.
 
 
 ## [0.2.0] (release candidate)

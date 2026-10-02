@@ -1442,11 +1442,25 @@ impl Inner {
         &self,
         progress: &mut dyn FnMut(export::ExportProgress),
     ) -> Result<PromotionReadiness, CommandError> {
+        let store = self.store()?;
+        let StoreCondition::Ready(manifest) = store.condition()? else {
+            return Err(CommandError::new(
+                "store-state",
+                "Promotion requires a ready preview store.",
+            ));
+        };
+        if manifest.state != crate::store::StoreState::Preview {
+            return Err(CommandError::new(
+                "store-state",
+                "Promotion requires a ready preview store.",
+            ));
+        }
+
         let backup = self
             .picker
             .pick_promotion_backup()
             .ok_or_else(|| CommandError::new("cancelled", "No frozen backup was selected."))?;
-        let store = self.store()?;
+
         let _import = self
             .import_running
             .try_lock()
@@ -2048,6 +2062,7 @@ mod tests {
         export_parent: Option<PathBuf>,
         promote: bool,
         demote: bool,
+        promotion_backup_prompts: Arc<std::sync::atomic::AtomicUsize>,
         promotion_prompts: Arc<std::sync::atomic::AtomicUsize>,
         demotion_prompts: Arc<std::sync::atomic::AtomicUsize>,
     }
@@ -2057,6 +2072,7 @@ mod tests {
             None
         }
         fn pick_promotion_backup(&self) -> Option<PathBuf> {
+            self.promotion_backup_prompts.fetch_add(1, Ordering::SeqCst);
             self.backup.clone()
         }
         fn pick_export_folder(&self) -> Option<PathBuf> {
@@ -2081,6 +2097,7 @@ mod tests {
         AppState,
         PathBuf,
         PathBuf,
+        Arc<std::sync::atomic::AtomicUsize>,
         Arc<std::sync::atomic::AtomicUsize>,
         Arc<std::sync::atomic::AtomicUsize>,
     ) {
@@ -2110,6 +2127,7 @@ mod tests {
         atomic_write(&manifest_path, &node_json_bytes(&manifest)).unwrap();
         export::copy_tree(&store.store_dir(), &backup, false, &mut |_| {}).unwrap();
         drop(store);
+        let promotion_backup_prompts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let promotion_prompts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let demotion_prompts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let picker = WorkflowPicker {
@@ -2117,6 +2135,7 @@ mod tests {
             export_parent: Some(export_parent.clone()),
             promote,
             demote,
+            promotion_backup_prompts: Arc::clone(&promotion_backup_prompts),
             promotion_prompts: Arc::clone(&promotion_prompts),
             demotion_prompts: Arc::clone(&demotion_prompts),
         };
@@ -2136,6 +2155,7 @@ mod tests {
             export_parent,
             promotion_prompts,
             demotion_prompts,
+            promotion_backup_prompts,
         )
     }
 
@@ -2543,13 +2563,14 @@ mod tests {
 
     #[test]
     fn promotion_requires_owner_confirmation_and_consumes_its_proof() {
-        let (_root, app, _backup, _export_parent, prompts, _demote_prompts) =
+        let (_root, app, _backup, _export_parent, prompts, _demote_prompts, backup_picker_prompts) =
             workflow_state("promotion-proof", true, true);
         let ready = app
             .shared
             .prepare_store_promotion(&mut |_| {})
             .expect("exact backup match");
         assert!(ready.files > 0);
+        assert_eq!(backup_picker_prompts.load(Ordering::SeqCst), 1);
         let result = app
             .shared
             .confirm_store_promotion(&ready.proof_id, &mut |_| {})
@@ -2576,8 +2597,68 @@ mod tests {
     }
 
     #[test]
+    fn promotion_does_not_open_backup_picker_for_empty_damaged_or_authoritative_stores() {
+        for state in ["empty", "damaged", "authoritative"] {
+            let (
+                _root,
+                app,
+                _backup,
+                _export_parent,
+                _prompts,
+                _demote_prompts,
+                backup_picker_prompts,
+            ) = workflow_state(&format!("promotion-preflight-{state}"), true, true);
+            let store = app.shared.store().expect("open synthetic store");
+
+            match state {
+                "empty" => {
+                    let _write = store.write_lock().unwrap();
+                    std::fs::remove_dir_all(store.store_dir()).unwrap();
+                }
+                "damaged" => {
+                    let _write = store.write_lock().unwrap();
+                    atomic_write(
+                        &store.store_dir().join(crate::config::MANIFEST_FILE),
+                        b"{invalid manifest",
+                    )
+                    .unwrap();
+                }
+                "authoritative" => {
+                    let write = store.write_lock().unwrap();
+                    let StoreCondition::Ready(manifest) = store.condition().unwrap() else {
+                        panic!("synthetic store should be ready before changing state");
+                    };
+                    store
+                        .set_state_locked(
+                            &write,
+                            crate::store::StoreState::Preview,
+                            &manifest.digest,
+                            crate::store::StoreState::Authoritative,
+                        )
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+
+            assert_eq!(
+                app.shared
+                    .prepare_store_promotion(&mut |_| {})
+                    .expect_err("only a ready preview can be promoted")
+                    .code,
+                "store-state",
+                "state: {state}"
+            );
+            assert_eq!(
+                backup_picker_prompts.load(Ordering::SeqCst),
+                0,
+                "state: {state}"
+            );
+        }
+    }
+
+    #[test]
     fn backup_mismatch_and_cancelled_promotion_leave_preview_unchanged() {
-        let (_root, app, backup, _export_parent, prompts, _demote_prompts) =
+        let (_root, app, backup, _export_parent, prompts, _demote_prompts, _backup_picker_prompts) =
             workflow_state("promotion-cancel", false, true);
         std::fs::write(backup.join("unmatched.synthetic"), b"different tree").unwrap();
         assert_eq!(
@@ -2612,7 +2693,7 @@ mod tests {
 
     #[test]
     fn a_backup_changed_after_preparation_cannot_be_promoted() {
-        let (_root, app, backup, _export_parent, _prompts, _demote_prompts) =
+        let (_root, app, backup, _export_parent, _prompts, _demote_prompts, _backup_picker_prompts) =
             workflow_state("promotion-stale", true, true);
         let ready = app
             .shared
@@ -2631,8 +2712,15 @@ mod tests {
 
     #[test]
     fn promotion_refuses_an_active_refresh_guard() {
-        let (_root, app, _backup, _export_parent, _prompts, _demote_prompts) =
-            workflow_state("promotion-refresh-lock", true, true);
+        let (
+            _root,
+            app,
+            _backup,
+            _export_parent,
+            _prompts,
+            _demote_prompts,
+            _backup_picker_prompts,
+        ) = workflow_state("promotion-refresh-lock", true, true);
         let _refresh = lock(&app.shared.refresh_running);
         assert_eq!(
             app.shared
@@ -2646,7 +2734,7 @@ mod tests {
 
     #[test]
     fn demotion_retains_recovery_and_frozen_export_is_exact() {
-        let (_root, app, _backup, export_parent, _prompts, demote_prompts) =
+        let (_root, app, _backup, export_parent, _prompts, demote_prompts, _backup_picker_prompts) =
             workflow_state("demotion-export", true, true);
         let ready = app
             .shared
@@ -2702,7 +2790,7 @@ mod tests {
 
     #[test]
     fn enriched_legacy_export_is_gated_and_frozen_restore_rehearsal_changes_a_disposable_copy() {
-        let (root, app, _backup, export_parent, _prompts, _demote_prompts) =
+        let (root, app, _backup, export_parent, _prompts, _demote_prompts, _backup_picker_prompts) =
             workflow_state("enriched-rollback-rehearsal", true, true);
         let ready = app
             .shared
@@ -2764,8 +2852,15 @@ mod tests {
 
     #[test]
     fn frozen_export_refuses_a_held_write_lock() {
-        let (_root, app, _backup, _export_parent, _prompts, _demote_prompts) =
-            workflow_state("frozen-export-lock", true, true);
+        let (
+            _root,
+            app,
+            _backup,
+            _export_parent,
+            _prompts,
+            _demote_prompts,
+            _backup_picker_prompts,
+        ) = workflow_state("frozen-export-lock", true, true);
         let ready = app
             .shared
             .prepare_store_promotion(&mut |_| {})

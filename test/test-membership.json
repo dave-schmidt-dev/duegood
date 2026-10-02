@@ -95,7 +95,7 @@
       "src-tauri/src/capture.rs": 10,
       "src-tauri/src/capture_course_metadata.rs": 5,
       "src-tauri/src/clipboard.rs": 1,
-      "src-tauri/src/commands.rs": 19,
+      "src-tauri/src/commands.rs": 20,
       "src-tauri/src/commands_full_refresh_tests.rs": 8,
       "src-tauri/src/config.rs": 10,
       "src-tauri/src/capture_download_helper_tests.rs": 7,

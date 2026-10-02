@@ -345,3 +345,11 @@ Synthetic unit regressions in `test/local/dashboard-store.test.ts` and an Activi
 The source test does not verify installed bytes or a launched app. Keep the final staged gate,
 project installer, bundle-ID launch, and owner visual acceptance as required installation and
 acceptance checks. ToDoJo plan: `3cd041e1-8d65-48d7-b895-85de55ae504a`.
+
+### 2026-10-02 inventory cleanup correction
+
+Confirmed `inventory_blobs()` removes validated pending files while it is still validating later directory entries. An over-limit count or unsafe later name can therefore return an error after partial cleanup. Validate and retain the bounded pending paths until the complete inventory passes, then remove them and sync the directory. Add synthetic coverage for 129 pending files and a valid pending file paired with invalid inventory; preserve ownership, metadata, and symlink protections.
+
+### 2026-10-02 promotion preflight guard correction
+
+Confirmed `prepare_store_promotion()` opens the native backup-folder picker before checking that the local store is a ready preview. Perform a preliminary readiness check before opening the picker; after selection, acquire the existing import, refresh, refresh-lease, and write guards and repeat the authoritative readiness check. Retain the exact backup comparison and confirmation-time proof checks. Add a counting fake-picker regression for rejected store states while preserving valid preview promotion and lock behavior.
