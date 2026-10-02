@@ -21,6 +21,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   LOCAL_RESOURCE_PREFIX,
   projectDashboardDocuments,
+  projectRefreshes,
   type CourseExportTexts,
   type DashboardBody,
   type DashboardDocumentBundle,
@@ -171,7 +172,7 @@ afterAll(async () => {
 });
 
 describe("shared dashboard projection parity", () => {
-  it("equals the browser server's /api/dashboard body with browser options", () => {
+  it("matches browser projection apart from the native all-active-course and Activity labels", () => {
     const projected = projectDashboardDocuments(bundle, {
       resourceOpenPrefix: LOCAL_RESOURCE_PREFIX,
       avatarPath: "/api/local/profile/avatar",
@@ -179,7 +180,13 @@ describe("shared dashboard projection parity", () => {
       sourceLabel: "Local Marymount source",
       dataOrigin: "live",
     });
-    expect(normalize(projected)).toStrictEqual(served);
+    expect(projected.courses.some((course) => course.title === "Dormant Seminar")).toBe(true);
+    const comparable = {
+      ...projected,
+      courses: projected.courses.filter((course) => served.courses.some((browserCourse) => browserCourse.id === course.id)),
+      refreshes: projected.refreshes,
+    };
+    expect(normalize(comparable)).toStrictEqual(served);
     // The fixture's Inbox is complete; the live browser source may say so.
     expect(served.sourceStatus.inbox).toBe("synced");
     expect(projected.sourceStatus.detail).toContain("Inbox synced");
@@ -202,12 +209,77 @@ describe("shared dashboard projection parity", () => {
 
     const aligned = {
       ...native,
+      courses: native.courses.filter((course) => served.courses.some((browserCourse) => browserCourse.id === course.id)),
+      refreshes: native.refreshes,
       resources: native.resources.map((resource, index) => { const aligned: Record<string, unknown> = { ...resource, openPath: served.resources[index]?.openPath ?? null }; delete aligned.savedLocally; return aligned; }),
       profile: served.profile,
       refreshAvailable: served.refreshAvailable,
       sourceStatus: { ...native.sourceStatus, label: served.sourceStatus.label, detail: served.sourceStatus.detail },
     };
     expect(aligned).toStrictEqual(served);
+  });
+
+  it("retains active courses without timeline events and identifies synthetic calendar history", () => {
+    const coursework = JSON.parse(bundle.coursework.text) as { courses: Record<string, unknown>[]; [key: string]: unknown };
+    coursework.courses.push(
+      { key: "synthetic-empty-course", code: "SYN EMPTY", title: "Synthetic course without events", active: true },
+      { key: "synthetic-inactive-course", code: "SYN OLD", title: "Synthetic inactive course", active: false },
+    );
+    const dashboard = projectDashboardDocuments({
+      ...bundle,
+      coursework: { ...bundle.coursework, text: JSON.stringify(coursework) },
+    }, nativeProjectionOptions("authoritative"));
+    expect(dashboard.courses.map((course) => course.id)).toContain("synthetic-empty-course");
+    expect(dashboard.courses.map((course) => course.id)).not.toContain("synthetic-inactive-course");
+
+    const calendar = projectRefreshes({ events: [{
+      id: "synthetic-calendar-no-change",
+      source: "calendar",
+      sourceLabel: "calendar",
+      status: "succeeded",
+      sourceComplete: false,
+      startedAt: "2026-10-01T12:00:00Z",
+      finishedAt: "2026-10-01T12:01:00Z",
+      summary: { added: 0, updated: 0, removed: 0, held: 0 },
+      changes: [],
+    }] }, null)[0];
+    expect(calendar).toMatchObject({ source: "calendar", status: "complete", summaryText: "Calendar deadlines only · 0 added · 0 updated · 0 held", summary: { held: 0 } });
+
+    const held = projectRefreshes({ events: [{
+      id: "synthetic-calendar-held",
+      source: "calendar",
+      status: "incomplete",
+      sourceComplete: false,
+      startedAt: "2026-10-02T12:00:00Z",
+      finishedAt: "2026-10-02T12:01:00Z",
+      summary: { added: 0, updated: 0, removed: 0, held: 1 },
+      changes: [{ kind: "notice", title: "Calendar item held", detail: "A synthetic item was held." }],
+    }] }, null)[0];
+    expect(held).toMatchObject({ source: "calendar", status: "partial", summary: { held: 1 }, changes: [{ kind: "notice", title: "Calendar item held" }] });
+
+    const failedCalendar = projectRefreshes({ events: [{
+      id: "synthetic-calendar-failed",
+      source: "calendar",
+      status: "failed",
+      sourceComplete: false,
+      startedAt: "2026-10-02T13:00:00Z",
+      finishedAt: "2026-10-02T13:01:00Z",
+      summary: { added: 1, updated: 2, removed: 9, held: 1 },
+      changes: [],
+    }] }, null)[0];
+    expect(failedCalendar).toMatchObject({ source: "calendar", status: "failed", summaryText: "Calendar refresh failed; prior deadlines were kept.", summary: { removed: 0 }, changes: [{ kind: "notice" }] });
+
+    const incompleteCanvas = projectRefreshes({ events: [{
+      id: "synthetic-canvas-incomplete",
+      source: "canvas",
+      status: "succeeded",
+      sourceComplete: false,
+      startedAt: "2026-10-02T14:00:00Z",
+      finishedAt: "2026-10-02T14:01:00Z",
+      summary: { removed: 3 },
+      changes: [],
+    }] }, null)[0];
+    expect(incompleteCanvas).toMatchObject({ source: "canvas", status: "partial", summaryText: "Canvas refresh was incomplete; existing data was kept.", summary: { removed: 0 } });
   });
 
   it("covers the resource cap, locale sort, Activity detail formatting, conversation normalization, and the profile", () => {

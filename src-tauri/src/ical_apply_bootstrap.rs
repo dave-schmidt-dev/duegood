@@ -14,7 +14,7 @@ use crate::store::{
     Store, StoreCondition, StoreError,
 };
 
-use super::{merge, ApplyResult, IcalApplyError};
+use super::{history, merge, ApplyResult, IcalApplyError};
 
 struct Stage {
     path: PathBuf,
@@ -104,6 +104,14 @@ pub(crate) fn bootstrap_normalization(
     };
     atomic_write(&stage.path.join(COURSEWORK_FILE), &coursework_bytes)?;
     atomic_write(&stage.path.join("courses.json"), &map_bytes)?;
+    history::record_bootstrap_history(
+        &stage.path,
+        &document,
+        finished_at,
+        &merged.held_notices,
+        &normalized.held,
+        SystemTime::now(),
+    )?;
     let mut digest_input = coursework_bytes.clone();
     digest_input.extend_from_slice(&map_bytes);
     let mut manifest = new_preview_manifest(

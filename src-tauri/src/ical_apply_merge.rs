@@ -10,11 +10,21 @@ use crate::store::StoreError;
 use super::facts::*;
 use super::refs::*;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct HeldNotice {
+    pub item_id: String,
+    pub course: String,
+    pub title: String,
+    pub reason: String,
+    pub detail: String,
+}
+
 pub(super) struct MergeResult {
     pub changed: bool,
     pub added: usize,
     pub updated: usize,
     pub held: usize,
+    pub held_notices: Vec<HeldNotice>,
 }
 
 pub(super) fn apply_to_document(
@@ -112,8 +122,9 @@ pub(super) fn apply_to_document(
     }
     let mut incoming = HashSet::new();
     let mut changed = false;
-    let mut added = 0;
-    let mut updated = 0;
+    let mut added_ids = HashSet::new();
+    let mut updated_ids = HashSet::new();
+    let mut held_notices = Vec::new();
     let mut held = 0;
     let mut unresolved = existing_pending_keys(root)?;
 
@@ -177,6 +188,11 @@ pub(super) fn apply_to_document(
                     != Some(course.as_str())
             });
         if pending || conflict {
+            let reason = if conflict {
+                "conflicting-match"
+            } else {
+                "ambiguous-match"
+            };
             changed |= write_pending(
                 root,
                 &primary_key,
@@ -186,14 +202,32 @@ pub(super) fn apply_to_document(
                 observation.get("fields").expect("validated fields"),
                 finished_at,
                 &candidates,
-                if conflict {
-                    "conflicting-match"
-                } else {
-                    "ambiguous-match"
-                },
+                reason,
             )?;
             unresolved.insert(primary_key);
             held += 1;
+            let title = observation
+                .get("fields")
+                .and_then(|f| f.get("title"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let detail = if !candidates.is_empty() {
+                format!("{reason}: candidates {}", candidates.join(", "))
+            } else {
+                reason.to_string()
+            };
+            held_notices.push(HeldNotice {
+                item_id: local_id.clone(),
+                course: course.clone(),
+                title: if !title.is_empty() {
+                    title
+                } else {
+                    format!("Calendar item {local_id}")
+                },
+                reason: reason.to_string(),
+                detail,
+            });
             continue;
         }
 
@@ -210,7 +244,7 @@ pub(super) fn apply_to_document(
                 .ok_or(StoreError::Invalid("native coursework items are malformed"))?
                 .push(Value::Object(item.clone()));
             items_by_id.insert(local_id.clone(), Value::Object(item));
-            added += 1;
+            added_ids.insert(local_id.clone());
             changed = true;
         }
         let item = item_mut(root, &local_id)?;
@@ -228,19 +262,22 @@ pub(super) fn apply_to_document(
             owners.insert(primary_key.clone(), local_id.clone());
             changed = true;
         }
-        let (field_count, facts_changed) =
+        let (_field_count, facts_changed) =
             merge_fields(item, &reference, observation, finished_at)?;
         if facts_changed {
-            updated += field_count;
+            if !added_ids.contains(&local_id) {
+                updated_ids.insert(local_id.clone());
+            }
             changed = true;
         }
         unresolved.remove(&primary_key);
     }
     Ok(MergeResult {
         changed,
-        added,
-        updated,
+        added: added_ids.len(),
+        updated: updated_ids.len(),
         held,
+        held_notices,
     })
 }
 

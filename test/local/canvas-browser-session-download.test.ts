@@ -30,6 +30,8 @@ afterEach(async () => Promise.all(directories.splice(0).map((root) => rm(root, {
 
 function context() {
   const page = { url: vi.fn(() => "https://marymount.instructure.com/"), isClosed: vi.fn(() => false),
+    // Synthetic authenticated profile response for capture tests that exercise downstream work.
+    evaluate: vi.fn(async () => true),
     goto: vi.fn(async () => undefined), close: vi.fn(async () => undefined) };
   return { page, browser: { pages: vi.fn(() => [page]), newPage: vi.fn(async () => page) } };
 }
@@ -115,7 +117,8 @@ describe("browser capture file staging lifecycle", () => {
     browser.pages.mockReturnValue([]);
     const collector = vi.fn();
     await expect(runCanvasCapture({ context: browser, expectedUserId: 7, progress: () => {}, collector,
-      appDirectory, helperPath, stateHelperPath, withRunLease: syntheticLease })).rejects.toThrow("CANVAS_SESSION_UNAVAILABLE");
+      appDirectory, helperPath, stateHelperPath, withRunLease: syntheticLease,
+      sessionWaitTimeoutMs: 5, sessionPollIntervalMs: 1 })).rejects.toThrow("CANVAS_SESSION_UNAVAILABLE");
     expect(collector).not.toHaveBeenCalled();
     expect(browser.newPage).not.toHaveBeenCalled();
     expect((await readdir(appDirectory)).filter((entry) => entry.startsWith("canvas-capture-stage-"))).toEqual([]);

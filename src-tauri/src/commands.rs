@@ -35,13 +35,15 @@ use crate::{clipboard, export, resources, snapshots};
 
 #[path = "commands_browser.rs"]
 mod browser_commands;
+#[path = "commands_full_refresh.rs"]
+mod full_refresh_commands;
 #[path = "commands_ical.rs"]
 mod ical_commands;
 
 /// Every command the webview may invoke; `capabilities/default.json` grants exactly these and
 /// `build.rs` generates one permission per name (tests assert all three agree).
 #[cfg(test)]
-pub const COMMAND_NAMES: [&str; 24] = [
+pub const COMMAND_NAMES: [&str; 25] = [
     "store_status",
     "choose_legacy_root",
     "dry_run_import",
@@ -62,6 +64,7 @@ pub const COMMAND_NAMES: [&str; 24] = [
     "start_canvas_refresh",
     "import_browser_capture",
     "start_ical_refresh",
+    "start_full_refresh",
     "prepare_store_promotion",
     "confirm_store_promotion",
     "demote_store_for_rollback",
@@ -298,6 +301,8 @@ pub struct StoreStatus {
     /// True only when the store is authoritative, owner setting is on, and the bundled helper
     /// plus local store self-check are viable. This does not check BWS consumer or credentials.
     pub refresh_available: bool,
+    /// The store is authoritative and the signed bundle contains the integrity-verified runtime.
+    pub browser_refresh_available: bool,
     /// Fixed BWS iCal helper, authoritative store, and free loopback receiver are available.
     pub ical_refresh_available: bool,
     /// Explicit owner preference, persisted separately from imported coursework. Defaults false.
@@ -392,6 +397,7 @@ struct Inner {
     refresh_child: Mutex<Option<Child>>,
     refresh_cancelled: AtomicBool,
     refresh_shutting_down: AtomicBool,
+    browser_runtime: Option<full_refresh_commands::BrowserRuntime>,
     settings: Settings,
 }
 
@@ -831,6 +837,9 @@ impl AppState {
                 refresh_child: Mutex::new(None),
                 refresh_cancelled: AtomicBool::new(false),
                 refresh_shutting_down: AtomicBool::new(false),
+                browser_runtime: std::env::current_exe().ok().and_then(|executable| {
+                    full_refresh_commands::BrowserRuntime::discover(&executable).ok()
+                }),
                 settings,
             }),
         };
@@ -937,6 +946,7 @@ impl Inner {
             files: None,
             bytes: None,
             refresh_available: false,
+            browser_refresh_available: false,
             ical_refresh_available: false,
             canvas_refresh_enabled: *lock(&self.canvas_refresh_enabled),
             snapshot_in_progress,
@@ -974,6 +984,8 @@ impl Inner {
                     }
                 }
                 status.refresh_available = self.refresh_available(store);
+                status.browser_refresh_available =
+                    self.browser_runtime.is_some() && status.state == "authoritative";
                 status.ical_refresh_available = self.ical_refresh_available(store);
             }
         }
@@ -2004,6 +2016,7 @@ pub fn register_handlers<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Build
         start_canvas_refresh,
         browser_commands::import_browser_capture,
         start_ical_refresh,
+        full_refresh_commands::start_full_refresh,
         prepare_store_promotion,
         confirm_store_promotion,
         demote_store_for_rollback,
@@ -2374,6 +2387,7 @@ mod tests {
         assert_eq!(status["state"], "empty");
         assert_eq!(status["legacyRootSelected"], false);
         assert_eq!(status["refreshAvailable"], false);
+        assert_eq!(status["browserRefreshAvailable"], false);
         assert_eq!(status["dataFolder"], format!("~/{TEST_BUNDLE_IDENTIFIER}"));
 
         let error =

@@ -10,11 +10,20 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { run as runTauriCli } from "@tauri-apps/cli";
+import {
+  prepareBrowserRuntime,
+  refreshBrowserRuntimeManifest,
+  verifyBrowserRuntimeTree,
+} from "./prepare-browser-runtime.mjs";
 
 export const MANIFEST_NAME = "asset-manifest.json";
 export const MANIFEST_FORMAT = "duegood-frontend-assets";
 export const TEST_BUNDLE_IDENTIFIER = "com.zerodelta.duegood.test";
 export const SIDECAR_EXECUTABLES = Object.freeze(["duegood-refresh", "duegood-capture-download"]);
+export const BROWSER_RUNTIME_EXECUTABLES = Object.freeze([
+  "browser-runtime/node",
+  "browser-runtime/node_modules/@esbuild/darwin-arm64/bin/esbuild",
+]);
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const APP_NAME = "Due Good.app";
@@ -231,20 +240,33 @@ function verifyDeveloperIdAuthority(file, identity) {
   }
 }
 
-function signFile(file, identity) {
+function signFile(file, identity, { entitlements = undefined } = {}) {
   const signingArgs = ["--force", "--options", "runtime", "--timestamp"];
+  if (entitlements !== undefined) signingArgs.push("--entitlements", entitlements);
   signingArgs.push("--sign", identity, file);
   codesign(signingArgs);
   codesign(["--verify", "--strict", file]);
   verifyDeveloperIdAuthority(file, identity);
 }
 
-function signAppAdhoc(appPath) {
+async function signAppAdhoc(appPath) {
   const executableDirectory = path.join(appPath, "Contents", "MacOS");
   for (const executable of ["duegood-desktop", ...SIDECAR_EXECUTABLES]) {
     const executablePath = path.join(executableDirectory, executable);
     if (process.platform === "darwin") codesign(["--force", "--sign", "-", executablePath]);
   }
+  for (const executable of BROWSER_RUNTIME_EXECUTABLES) {
+    const executablePath = path.join(appPath, "Contents", "Resources", executable);
+    const entitlements = executable.endsWith("/node") ? path.join(root, "src-tauri", "browser-node.entitlements.plist") : undefined;
+    if (process.platform === "darwin") {
+      const args = ["--force", "--options", "runtime", "--sign", "-"];
+      if (entitlements !== undefined) args.push("--entitlements", entitlements);
+      args.push(executablePath);
+      codesign(args);
+      codesign(["--verify", "--strict", executablePath]);
+    }
+  }
+  await refreshBrowserRuntimeManifest(path.join(appPath, "Contents", "Resources", "browser-runtime"));
   if (process.platform === "darwin") {
     codesign(["--force", "--sign", "-", appPath]);
     codesign(["--verify", "--strict", appPath]);
@@ -321,19 +343,32 @@ async function packageTauri(mode, receipt, options) {
   const verifyArgs = [assetVerifier, "--app", appPath];
   if (mode === "test") verifyArgs.push("--allow-test-overrides");
   run(process.execPath, verifyArgs);
+  const sourceBrowserRuntime = path.join(root, "dist", "browser-runtime");
+  const bundledBrowserRuntime = path.join(appPath, "Contents", "Resources", "browser-runtime");
+  await verifyBrowserRuntimeTree(sourceBrowserRuntime);
+  await verifyBrowserRuntimeTree(bundledBrowserRuntime);
   if (mode === "release") {
     // Tauri may re-sign the copied sidecar while bundling, so sign the final bundled bytes.
     for (const helper of bundledHelpers) signFile(helper, identity);
+    const entitlements = path.join(root, "src-tauri", "browser-node.entitlements.plist");
+    for (const executable of BROWSER_RUNTIME_EXECUTABLES) {
+      const runtimeExecutable = path.join(appPath, "Contents", "Resources", executable);
+      await lstat(runtimeExecutable).catch(() => fail(`Tauri app is missing browser runtime executable ${path.basename(executable)}`));
+      signFile(runtimeExecutable, identity, { entitlements: executable.endsWith("/node") ? entitlements : undefined });
+    }
+    await refreshBrowserRuntimeManifest(bundledBrowserRuntime);
     for (const executable of [appExecutable, ...bundledHelpers]) ensureNoTestMarker(executable);
     signFile(appPath, identity);
   } else {
-    signAppAdhoc(appPath);
+    await signAppAdhoc(appPath);
   }
   run(process.execPath, verifyArgs);
+  await verifyBrowserRuntimeTree(bundledBrowserRuntime);
   const stageAppPath = await copyVerifiedAppBundle(profile);
   const stageVerifyArgs = [assetVerifier, "--app", stageAppPath];
   if (mode === "test") stageVerifyArgs.push("--allow-test-overrides");
   run(process.execPath, stageVerifyArgs);
+  await verifyBrowserRuntimeTree(path.join(stageAppPath, "Contents", "Resources", "browser-runtime"));
   console.log(`Built ${mode} Tauri app at ${path.relative(root, stageAppPath)}.`);
 }
 
@@ -341,6 +376,7 @@ export async function main(args = process.argv.slice(2)) {
   const options = parseArguments(args);
   const receipt = await assertStagedCandidate(root);
   await prepareFrontendAssets();
+  await prepareBrowserRuntime();
   if (options.prepareOnly && options.mode === "test") await buildTestSidecars();
   if (!options.prepareOnly) await packageTauri(options.mode, receipt, options);
 }

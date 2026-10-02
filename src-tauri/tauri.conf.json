@@ -38,7 +38,8 @@
       "binaries/duegood-capture-download"
     ],
     "resources": {
-      "../dist/public/": "frontend/"
+      "../dist/public/": "frontend/",
+      "../dist/browser-runtime/": "browser-runtime/"
     },
     "targets": [
       "app"

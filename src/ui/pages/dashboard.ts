@@ -1,5 +1,7 @@
 import type { ElementDescriptor } from "../dom";
 import { dashboardNav, type DashboardPage } from "../routes";
+import type { BrowserFreshness } from "../../shared/browser-freshness";
+import { canvasRefreshSettingRow, refreshActionLabel, refreshNote, refreshOutcome } from "./dashboard-refresh";
 
 export interface DashboardGradeGroup { readonly id: string | null; readonly name: string | null; readonly weight: number | null }
 export interface DashboardCourse { readonly id: string; readonly courseCode: string; readonly title: string; readonly term?: string; readonly lastSuccessfulCheckAt?: number | null; readonly gradeGroups?: readonly DashboardGradeGroup[] }
@@ -9,8 +11,8 @@ export interface DashboardMessage { readonly id?: string | null; readonly author
 export interface DashboardAttachment { readonly name: string; readonly contentType?: string | null; readonly sizeBytes?: number | null }
 export interface DashboardConversation { readonly id: string; readonly courseCode?: string | null; readonly contextLabel?: string | null; readonly sender: string; readonly subject: string; readonly preview?: string | null; readonly body?: string | null; readonly receivedAt?: string | number | null; readonly unread: boolean; readonly messageCount?: number; readonly attachmentCount?: number; readonly messages?: readonly DashboardMessage[]; readonly historyComplete?: boolean; readonly safetyTruncated?: boolean }
 export interface DashboardRefreshChange { readonly kind: "added" | "changed" | "removed" | "notice"; readonly title: string; readonly detail: string }
-export interface DashboardRefresh { readonly id: string; readonly startedAt: string | number; readonly status: "complete" | "partial" | "failed"; readonly summary: string; readonly added: number; readonly changed: number; readonly removed: number; readonly changes: readonly DashboardRefreshChange[] }
-export interface DashboardSourceStatus { readonly state?: string; readonly label?: string; readonly detail?: string; readonly lastRefreshAt?: string | number | null }
+export interface DashboardRefresh { readonly id: string; readonly source?: "canvas" | "calendar" | "inbox"; readonly startedAt: string | number; readonly finishedAt?: string | number | null; readonly status: "complete" | "partial" | "failed"; readonly summary: string; readonly added: number; readonly changed: number; readonly removed: number; readonly held?: number; readonly changes: readonly DashboardRefreshChange[] }
+export interface DashboardSourceStatus { readonly state?: string; readonly label?: string; readonly detail?: string; readonly lastRefreshAt?: string | number | null; readonly coursework?: "synced" | "not_synced"; readonly library?: "synced" | "not_synced"; readonly inbox?: "synced" | "partial" | "not_synced"; readonly browserFreshness?: BrowserFreshness }
 export interface DashboardProfile { readonly displayName: string | null; readonly avatarPath: string | null }
 export interface DashboardPendingSourceLink {
   readonly id: string;
@@ -24,7 +26,7 @@ export interface DashboardPendingSourceLink {
   readonly needsRefresh?: true;
 }
 /** The app store and source state owned by the Tauri desktop app. */
-export interface DesktopStoreInfo { readonly storeState: "preview" | "authoritative"; readonly dataFolder: string; readonly importedAt: string | null; readonly lastRefreshAt?: string | null; readonly canvasRefreshEnabled?: boolean; readonly refreshAvailable?: boolean; readonly icalRefreshAvailable?: boolean; readonly snapshotInProgress?: boolean; readonly snapshotProgress?: { readonly filesDone: number; readonly bytesDone: number } | null; readonly warning?: string | null }
+export interface DesktopStoreInfo { readonly storeState: "preview" | "authoritative"; readonly dataFolder: string; readonly importedAt: string | null; readonly lastRefreshAt?: string | null; readonly canvasRefreshEnabled?: boolean; readonly refreshAvailable?: boolean; readonly icalRefreshAvailable?: boolean; readonly browserRefreshAvailable?: boolean; readonly snapshotInProgress?: boolean; readonly snapshotProgress?: { readonly filesDone: number; readonly bytesDone: number } | null; readonly warning?: string | null }
 /** `version` is the opaque exact-byte digest of the coursework document (empty when unknown). */
 export interface DashboardData { readonly version: string; readonly courses: readonly DashboardCourse[]; readonly events: readonly DashboardEvent[]; readonly pendingSourceLinks: readonly DashboardPendingSourceLink[]; readonly resources: readonly DashboardResource[]; readonly conversations: readonly DashboardConversation[]; readonly refreshes: readonly DashboardRefresh[]; readonly profile: DashboardProfile | null; readonly refreshAvailable: boolean; readonly sourceStatus: DashboardSourceStatus }
 export interface DashboardState {
@@ -575,11 +577,11 @@ function inboxPage(state: DashboardState, handlers: DashboardHandlers): ElementD
 function activityPage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   const refreshes = state.data.refreshes; const selected = refreshes.find((refresh) => refresh.id === state.selectedRefreshId) ?? refreshes[0];
   const refreshing = state.refreshState === "running";
-  const refreshButton: ElementDescriptor = { tag: "button", attrs: { type: "button", class: `more-action refresh-button${refreshing ? " refreshing" : ""}`, "aria-busy": String(refreshing), ...(refreshing ? { disabled: "" } : {}) }, text: refreshing ? "Refreshing…" : "Refresh now", on: { click: handlers.onRefresh } };
+  const refreshButton: ElementDescriptor = { tag: "button", attrs: { type: "button", class: `more-action refresh-button${refreshing ? " refreshing" : ""}`, "aria-busy": String(refreshing), ...(refreshing ? { disabled: "" } : {}) }, text: refreshActionLabel(state, refreshing, "activity"), on: { click: handlers.onRefresh } };
   const content = selected === undefined ? empty("No refresh history is available yet.") : el("div", undefined, { class: "refresh-layout" }, [
     el("section", undefined, { class: "change-panel" }, [
-      el("div", undefined, { class: "panel-head" }, [el("h2", formatted(selected.startedAt, true)), el("p", `${selected.status.toUpperCase()} · ${selected.summary}`, { class: selected.status === "partial" ? "refresh-status partial" : "refresh-status" })]),
-      el("div", undefined, { class: "change-counts" }, [[selected.added, "Added"], [selected.changed, "Changed"], [selected.removed, "Removed"]].map(([count, label]) => el("div", undefined, { class: "change-count" }, [el("strong", String(count)), el("span", String(label))]))),
+      el("div", undefined, { class: "panel-head" }, [el("h2", `${selected.source === "calendar" ? "Calendar refresh" : selected.source === "inbox" ? "Inbox update" : "Canvas refresh"} · ${formatted(selected.startedAt, true)}`), el("p", `${selected.status.toUpperCase()} · ${selected.summary}`, { class: selected.status === "partial" ? "refresh-status partial" : "refresh-status" }), ...(selected.source === "calendar" ? [el("p", "Calendar refresh updates deadlines only. Grades, Inbox, and library items keep the prior Canvas capture.", { class: "source-scope-note", role: "note" })] : [])]),
+      el("div", undefined, { class: "change-counts" }, [[selected.added, "Added"], [selected.changed, "Changed"], [selected.removed, "Removed"], ...(selected.held === undefined ? [] : [[selected.held, "Held"] as const])].map(([count, label]) => el("div", undefined, { class: "change-count" }, [el("strong", String(count)), el("span", String(label))]))),
       selected.changes.length === 0 ? empty("This refresh recorded no item-level changes.") : el("ul", undefined, { class: "change-list" }, selected.changes.map((change) => el("li", undefined, { class: "change-item" }, [el("span", change.kind, { class: `change-kind ${change.kind}` }), el("div", undefined, undefined, [el("strong", change.title), el("p", change.detail)])]))),
     ]),
     el("aside", undefined, { class: "history-panel" }, [
@@ -589,9 +591,7 @@ function activityPage(state: DashboardState, handlers: DashboardHandlers): Eleme
   ]);
   return el("section", undefined, { class: "page" }, [
     el("header", undefined, { class: "subpage-heading" }, [el("div", undefined, undefined, [el("p", "Refresh evidence", { class: "eyebrow" }), el("h1", "Activity"), el("p", "What changed in each refresh, including partial imports that preserved existing data.")]), ...(state.data.refreshAvailable ? [refreshButton] : [])]),
-    ...(state.refreshState === "failed" ? [el("p", "Refresh failed. Existing data was kept.", { class: "inline-error", role: "status", "aria-live": "polite" })] : []),
-    ...(state.refreshState === "partial" ? [el("p", "Refresh incomplete. Existing data was kept; this run may not include complete Canvas history.", { class: "refresh-status partial", role: "status", "aria-live": "polite" })] : []),
-    ...(state.refreshState === "complete" ? [el("p", "Refresh complete.", { class: "inline-success", role: "status", "aria-live": "polite" })] : []),
+    ...refreshOutcome(state),
     content,
   ]);
 }
@@ -600,7 +600,6 @@ function activityPage(state: DashboardState, handlers: DashboardHandlers): Eleme
 function desktopStoreCard(desktop: DesktopStoreInfo, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   const source = state.data.sourceStatus;
   const preview = desktop.storeState === "preview";
-  const refreshEnabled = desktop.canvasRefreshEnabled === true; const refreshAvailable = desktop.refreshAvailable === true;
   const transition = state.storeTransition ?? { phase: "idle" as const };
   const busy = transition.phase === "preparing" || transition.phase === "promoting" || transition.phase === "demoting" || transition.phase === "exporting";
   const bytes = (value: number): string => {
@@ -643,10 +642,7 @@ function desktopStoreCard(desktop: DesktopStoreInfo, state: DashboardState, hand
     ...transitionProgress,
     ...transitionFeedback,
     ...(!preview ? [
-      { tag: "label", attrs: { class: "settings-row" }, children: [
-        el("span", undefined, undefined, [el("strong", "Canvas refresh"), el("span", refreshEnabled ? (refreshAvailable ? "Canvas refresh can be attempted on this computer." : "Canvas refresh is unavailable on this computer.") : "Canvas refresh is off.")]),
-        { tag: "input", attrs: { type: "checkbox", "aria-label": "Enable Canvas refresh", ...(refreshEnabled ? { checked: "" } : {}), ...((state.refreshSettingPending === true || state.refreshState === "running") ? { disabled: "" } : {}) }, on: { change: (event: Event) => handlers.onToggleCanvasRefresh?.((event.currentTarget as HTMLInputElement).checked) } },
-      ] },
+      canvasRefreshSettingRow(desktop, state, handlers),
       el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Calendar feed"), el("span", desktop.icalRefreshAvailable ? "Available for native refresh." : "Unavailable until the app store is authoritative, the feed port is free, and course identity is known.")])]),
       ...(desktop.lastRefreshAt == null ? [] : [el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Last refresh"), el("span", formatted(desktop.lastRefreshAt, true))])])]),
       ...(state.refreshSettingError === undefined ? [] : [el("p", state.refreshSettingError, { class: "inline-error", role: "status", "aria-live": "polite" })]),
@@ -759,25 +755,6 @@ function page(state: DashboardState, handlers: DashboardHandlers): ElementDescri
   }
 }
 
-function refreshNote(state: DashboardState, latest: DashboardRefresh | undefined): string {
-  if (state.refreshState === "running") {
-    const progress = state.refreshProgress;
-    const calendar = state.desktop?.refreshAvailable !== true && state.desktop?.icalRefreshAvailable === true;
-    if (progress === undefined) return `${calendar ? "Calendar" : "Canvas"} refresh is in progress`;
-    const phase = ({ starting: "Preparing", snapshot: "Saving safety copy", fetch: "Reading Canvas data", reconcile: "Reviewing changes", stage: "Preparing changes", publish: "Saving updates", "broker-starting": "Starting secure feed", "waiting-for-calendar": "Waiting for calendar", importing: "Importing calendar", complete: "Finishing" } as Readonly<Record<string, string>>)[progress.phase] ?? "Working";
-    const count = progress.total === null ? `${String(progress.completed)} completed` : `${String(progress.completed)} of ${String(progress.total)} completed`;
-    return `${calendar ? "Calendar" : "Canvas"} refresh · ${phase}${calendar ? "" : ` · ${count}${progress.bytesDone === null ? "" : ` · ${String(progress.bytesDone)} bytes received`}`}`;
-  }
-  if (state.refreshDetail !== undefined) return state.refreshDetail;
-  if (state.refreshState === "complete") return "Refresh complete.";
-  if (state.refreshState === "partial") return "Refresh incomplete. Existing data was kept.";
-  if (state.refreshState === "failed") return "Refresh failed. Existing data was kept.";
-  // Preview copies cannot refresh; authoritative desktop stores report their last import until refreshed.
-  if (state.desktop?.storeState === "preview") return state.desktop.importedAt === null ? "Imported copy" : `Imported ${formatted(state.desktop.importedAt, true)}`;
-  if (state.desktop?.lastRefreshAt) return `Updated ${formatted(state.desktop.lastRefreshAt, true)}`;
-  return latest === undefined ? "Not yet refreshed" : `Updated ${formatted(latest.startedAt, true)}`;
-}
-
 export function renderDashboard(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   const courses = orderedCourses(state.data.courses); const latest = state.data.refreshes[0]; const profile = state.data.profile;
   const displayName = profile?.displayName?.trim() || "";
@@ -795,6 +772,20 @@ export function renderDashboard(state: DashboardState, handlers: DashboardHandle
   const snapshotFiles = snapshotProgress?.filesDone ?? 0;
   const snapshotBytes = snapshotProgress?.bytesDone ?? 0;
   const snapshotStatus = `Saving today’s private recovery snapshot… ${String(snapshotFiles)} file${snapshotFiles === 1 ? "" : "s"} · ${String(snapshotBytes)} bytes copied.`;
-  const refreshButton: ElementDescriptor = { tag: "button", attrs: { type: "button", class: `sync-button refresh-button${refreshing ? " refreshing" : ""}`, "aria-busy": String(refreshing), ...(refreshing ? { disabled: "" } : {}) }, text: refreshing ? "Refreshing…" : "Refresh", on: { click: handlers.onRefresh } };
-  return el("div", undefined, { class: "app" }, [el("aside", undefined, { class: "sidebar" }, [el("div", undefined, { class: "brand" }, [brandMark, el("div", undefined, undefined, [el("div", "Due Good", { class: "brand-name" }), el("span", courses[0]?.term ?? "Marymount", { class: "brand-note" })])]), dashboardNav(state.page, handlers.onNavigate), el("section", undefined, { class: "course-legend", "aria-label": "Course legend" }, [el("h2", "Course colors"), ...courses.map((course) => el("div", undefined, { class: "legend-row" }, [el("span", undefined, { class: "legend-dot", style: `--dot:${color(courses, course.courseCode)}` }), el("span", `${code(course.courseCode)} · ${course.title}`)]))])]), el("div", undefined, { class: "workspace" }, [el("header", undefined, { class: "topbar" }, [el("div", undefined, { class: "term-label" }, [el("strong", courses[0]?.term ?? "Current term"), el("span", ` · ${courses.length} course${courses.length === 1 ? "" : "s"}`)]), el("div", undefined, { class: "top-actions" }, [...(state.desktop?.storeState === "preview" ? [el("span", "Preview copy", { class: "preview-badge", title: "Imported from the legacy folder. It never refreshes." })] : []), el("span", refreshNote(state, latest), { class: "sync-note", role: "status", "aria-live": "polite" }), ...(state.data.refreshAvailable ? [refreshButton] : [])])]), el("main", undefined, { id: "main", tabindex: "-1" }, [...(state.loading ? [empty("Loading coursework…")] : []), ...(state.desktop?.snapshotInProgress ? [el("div", snapshotStatus, { class: "status", role: "status", "aria-live": "polite" })] : []), ...(state.error === undefined ? [] : [el("div", state.error, { class: "load-error", role: "alert" })]), ...(state.desktop?.warning ? [el("div", state.desktop.warning, { class: "load-error", role: "alert" })] : []), ...(!state.loading && state.error === undefined ? [page(state, handlers)] : [])])])]);
+  const refreshScope = state.desktop?.browserRefreshAvailable === true ? "Canvas coursework, grades, Inbox, library, and calendar deadlines" : state.desktop?.refreshAvailable === true ? "Canvas coursework, grades, Inbox, and library" : state.desktop?.icalRefreshAvailable === true ? "Calendar deadlines only; grades, Inbox, and library keep the prior Canvas capture" : "Refresh unavailable";
+  const refreshButton: ElementDescriptor = { tag: "button", attrs: { type: "button", class: `sync-button refresh-button${refreshing ? " refreshing" : ""}`, "aria-busy": String(refreshing), title: refreshScope, ...(refreshing ? { disabled: "" } : {}) }, text: refreshActionLabel(state, refreshing, "topbar"), on: { click: handlers.onRefresh } };
+  const sourceNotice = freshnessNotice(state.data.sourceStatus);
+  return el("div", undefined, { class: "app" }, [el("aside", undefined, { class: "sidebar" }, [el("div", undefined, { class: "brand" }, [brandMark, el("div", undefined, undefined, [el("div", "Due Good", { class: "brand-name" }), el("span", courses[0]?.term ?? "Marymount", { class: "brand-note" })])]), dashboardNav(state.page, handlers.onNavigate), el("section", undefined, { class: "course-legend", "aria-label": "Course colors" }, [el("h2", "Course colors"), ...courses.map((course) => el("div", undefined, { class: "legend-row" }, [el("span", undefined, { class: "legend-dot", style: `--dot:${color(courses, course.courseCode)}` }), el("span", `${code(course.courseCode)} · ${course.title}`)]))])]), el("div", undefined, { class: "workspace" }, [el("header", undefined, { class: "topbar" }, [el("div", undefined, { class: "term-label" }, [el("strong", courses[0]?.term ?? "Current term"), el("span", ` · ${courses.length} course${courses.length === 1 ? "" : "s"}`)]), el("div", undefined, { class: "top-actions" }, [...(state.desktop?.storeState === "preview" ? [el("span", "Preview copy", { class: "preview-badge", title: "Imported from the legacy folder. It never refreshes." })] : []), el("span", refreshNote(state, latest), { class: "sync-note", role: "status", "aria-live": "polite" }), ...(state.data.refreshAvailable ? [refreshButton] : [])])]), el("main", undefined, { id: "main", tabindex: "-1" }, [...(state.loading ? [empty("Loading coursework…")] : []), ...(state.desktop?.snapshotInProgress ? [el("div", snapshotStatus, { class: "status", role: "status", "aria-live": "polite" })] : []), ...(state.error === undefined ? [] : [el("div", state.error, { class: "load-error", role: "alert" })]), ...(state.desktop?.warning ? [el("div", state.desktop.warning, { class: "load-error", role: "alert" })] : []), ...(!state.loading && state.error === undefined ? [...(sourceNotice === undefined ? [] : [sourceNotice]), page(state, handlers)] : [])])])]);
+}
+
+function freshnessNotice(source: DashboardSourceStatus): ElementDescriptor | undefined {
+  const affected = [
+    ...(source.coursework === "not_synced" ? ["coursework and grades"] : []),
+    ...(source.inbox !== undefined && source.inbox !== "synced" ? ["Inbox"] : []),
+    ...(source.library === "not_synced" ? ["library items"] : []),
+  ];
+  if (affected.length === 0 && source.browserFreshness?.current !== false) return undefined;
+  const reason = source.browserFreshness?.current === false ? ` Capture status: ${source.browserFreshness.reason.replaceAll("-", " ")}.` : "";
+  const sections = affected.length === 0 ? "Canvas" : `Canvas ${affected.join(", ")}`;
+  return el("p", `${sections} may be stale or incomplete.${reason} Unverified Canvas facts are withheld; independent calendar and personal records remain.`, { class: "inline-error source-freshness-notice", role: "note", "data-source-freshness": "stale" });
 }

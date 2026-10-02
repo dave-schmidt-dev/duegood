@@ -19,11 +19,13 @@ import {
   DesktopCommandError,
   type DesktopStoreStatus,
   type CanvasRefreshProgress,
+  type FullRefreshProgress,
   type IcalRefreshProgress,
   type IcalRefreshResult,
   type StoreTransitionProgress,
   type NativeTransport,
 } from "./transport";
+import { fullRefreshFeedback } from "./full-refresh";
 
 function element(tag: string, attrs: Record<string, string> = {}, text?: string): ElementDescriptor {
   return { tag, attrs, ...(text !== undefined ? { text } : {}) };
@@ -31,7 +33,23 @@ function element(tag: string, attrs: Record<string, string> = {}, text?: string)
 
 const EMPTY_DATA: DashboardData = { version: "", courses: [], events: [], pendingSourceLinks: [], resources: [], conversations: [], refreshes: [], profile: null, refreshAvailable: false, sourceStatus: {} };
 
-function desktopRefreshAvailable(info: DesktopStoreInfo | undefined): boolean { return info?.refreshAvailable === true || info?.icalRefreshAvailable === true; }
+function desktopRefreshAvailable(info: DesktopStoreInfo | undefined): boolean { return info?.browserRefreshAvailable === true || info?.refreshAvailable === true || info?.icalRefreshAvailable === true; }
+
+function courseKey(value: string): string { return value.toUpperCase().replace(/[^A-Z0-9]/g, ""); }
+
+function reconciledDashboardState(state: DashboardState, data: DashboardData, refreshAvailable = desktopRefreshAvailable(state.desktop)): DashboardState {
+  const hasCourse = (filter: string): boolean => filter === "all" || data.courses.some((course) => courseKey(course.courseCode) === courseKey(filter));
+  const hasResourceType = state.resourceFilter === "all" || data.resources.some((resource) => resource.type.toLowerCase() === state.resourceFilter.toLowerCase());
+  return {
+    ...state,
+    data: { ...data, refreshAvailable },
+    selectedConversationId: data.conversations.some((conversation) => conversation.id === state.selectedConversationId) ? state.selectedConversationId : data.conversations[0]?.id,
+    selectedRefreshId: data.refreshes[0]?.id,
+    courseFilter: hasCourse(state.courseFilter) ? state.courseFilter : "all",
+    gradeCourseFilter: hasCourse(state.gradeCourseFilter) ? state.gradeCourseFilter : "all",
+    resourceFilter: hasResourceType ? state.resourceFilter : "all",
+  };
+}
 
 function pageFromHash(): DashboardPage {
   const candidate = window.location.hash.replace(/^#/, "");
@@ -58,7 +76,7 @@ export async function resolveNativeMutationConflict(error: unknown, reload: () =
 /** Mounts the dashboard; returns a disposer so the desktop shell can swap screens cleanly. */
 function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop: DesktopDashboardOptions): () => void {
   let avatarUrl: string | undefined;
-  let state: DashboardState = { page: pageFromHash(), loading: true, data: { ...EMPTY_DATA, refreshAvailable: desktop.info.refreshAvailable === true }, now: Date.now(), eventMode: "all", courseFilter: "all", gradeCourseFilter: "all", gradeMode: "all", resourceFilter: "all", expandedEventIds: new Set(), pendingCompletionIds: new Set(), failedCompletionIds: new Set(), pendingDiscussionIds: new Set(), failedDiscussionIds: new Set(), pendingManualGradeIds: new Set(), failedManualGradeIds: new Set(), refreshState: "idle", desktop: desktop.info };
+  let state: DashboardState = { page: pageFromHash(), loading: true, data: { ...EMPTY_DATA, refreshAvailable: desktopRefreshAvailable(desktop.info) }, now: Date.now(), eventMode: "all", courseFilter: "all", gradeCourseFilter: "all", gradeMode: "all", resourceFilter: "all", expandedEventIds: new Set(), pendingCompletionIds: new Set(), failedCompletionIds: new Set(), pendingDiscussionIds: new Set(), failedDiscussionIds: new Set(), pendingManualGradeIds: new Set(), failedManualGradeIds: new Set(), refreshState: "idle", desktop: desktop.info };
   let disposed = false;
   let snapshotStatusTimer: ReturnType<typeof setTimeout> | undefined;
   const listeners = new AbortController();
@@ -74,7 +92,7 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
   async function load(): Promise<void> {
     try {
       const data = await withAvatar(parseDashboard(await transport.loadDashboardBody(false)));
-      state = { ...state, loading: false, error: undefined, data: { ...data, refreshAvailable: desktopRefreshAvailable(state.desktop) }, selectedConversationId: state.selectedConversationId ?? data.conversations[0]?.id, selectedRefreshId: state.selectedRefreshId ?? data.refreshes[0]?.id };
+      state = { ...reconciledDashboardState(state, data), loading: false, error: undefined };
     } catch (error) {
       const detail = error instanceof DesktopCommandError ? ` ${error.message}` : "";
       state = { ...state, loading: false, error: `Coursework could not be loaded. No substitute or sample data was shown.${detail}` };
@@ -88,7 +106,7 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
       const status = await transport.storeStatus();
       if (disposed) return;
       if (status.availability === "ready" && (status.state === "preview" || status.state === "authoritative")) {
-        state = { ...state, desktop: { ...state.desktop!, canvasRefreshEnabled: status.canvasRefreshEnabled, refreshAvailable: status.refreshAvailable, icalRefreshAvailable: status.icalRefreshAvailable, snapshotInProgress: status.snapshotInProgress, snapshotProgress: status.snapshotProgress, warning: status.problem }, data: { ...state.data, refreshAvailable: status.refreshAvailable || status.icalRefreshAvailable } };
+        state = { ...state, desktop: { ...state.desktop!, canvasRefreshEnabled: status.canvasRefreshEnabled, refreshAvailable: status.refreshAvailable, icalRefreshAvailable: status.icalRefreshAvailable, browserRefreshAvailable: status.browserRefreshAvailable, snapshotInProgress: status.snapshotInProgress, snapshotProgress: status.snapshotProgress, warning: status.problem }, data: { ...state.data, refreshAvailable: status.refreshAvailable || status.icalRefreshAvailable || status.browserRefreshAvailable === true } };
         draw();
       }
       if (status.snapshotInProgress) snapshotStatusTimer = setTimeout(() => { void pollStartupSnapshot(); }, 500);
@@ -100,7 +118,7 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
   async function reloadAuthoritativeDashboard(): Promise<boolean> {
     try {
       const data = await withAvatar(parseDashboard(await transport.loadDashboardBody(true)));
-      state = { ...state, data: { ...data, refreshAvailable: state.desktop?.refreshAvailable === true }, selectedConversationId: data.conversations.some((conversation) => conversation.id === state.selectedConversationId) ? state.selectedConversationId : data.conversations[0]?.id, selectedRefreshId: data.refreshes[0]?.id };
+      state = reconciledDashboardState(state, data);
       return true;
     } catch {
       return false;
@@ -228,38 +246,62 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
 
   async function refresh(): Promise<void> {
     if (!state.data.refreshAvailable || state.refreshState === "running") return;
+    const fullRefresh = state.desktop?.browserRefreshAvailable === true;
     state = { ...state, refreshState: "running", refreshProgress: undefined, refreshDetail: undefined, refreshSettingError: undefined }; draw();
     try {
-      const useCalendar = state.desktop?.refreshAvailable !== true && state.desktop?.icalRefreshAvailable === true;
-      const result = useCalendar
-        ? await transport.startIcalRefresh((progress: IcalRefreshProgress) => {
-            if (state.refreshState !== "running") return;
-            state = { ...state, refreshProgress: { phase: progress.phase, completed: 0, total: null, bytesDone: null } };
-            draw();
-          })
-        : await transport.startCanvasRefresh((progress: CanvasRefreshProgress) => {
-            if (state.refreshState !== "running") return;
-            state = { ...state, refreshProgress: progress };
-            draw();
-          });
       let data = state.data;
-      let refreshDetail: string | undefined = useCalendar ? `Calendar refresh complete · ${String((result as IcalRefreshResult).added)} added · ${String((result as IcalRefreshResult).updated)} updated · ${String((result as IcalRefreshResult).held)} held` : undefined;
-      try {
-        data = await withAvatar(parseDashboard(await transport.loadDashboardBody(true)));
-      } catch {
-        refreshDetail = "Refresh finished, but updated coursework could not be reloaded.";
+      let updatedAt: string | null = null;
+      let refreshDetail: string | undefined;
+      let refreshState: DashboardState["refreshState"];
+      if (fullRefresh) {
+        const result = await transport.startFullRefresh((progress: FullRefreshProgress) => {
+          if (state.refreshState !== "running") return;
+          state = { ...state, refreshProgress: { phase: progress.phase, completed: 0, total: null, bytesDone: null } };
+          draw();
+        });
+        const feedback = fullRefreshFeedback(result);
+        refreshState = feedback.state;
+        refreshDetail = feedback.detail;
+        updatedAt = result.updatedAt;
+        if (await reloadAuthoritativeDashboard()) data = state.data;
+        else refreshDetail += " Updated data could not be reloaded; the prior view is still shown.";
+      } else {
+        const useCalendar = state.desktop?.refreshAvailable !== true && state.desktop?.icalRefreshAvailable === true;
+        const result = useCalendar
+          ? await transport.startIcalRefresh((progress: IcalRefreshProgress) => {
+              if (state.refreshState !== "running") return;
+              state = { ...state, refreshProgress: { phase: progress.phase, completed: 0, total: null, bytesDone: null } };
+              draw();
+            })
+          : await transport.startCanvasRefresh((progress: CanvasRefreshProgress) => {
+              if (state.refreshState !== "running") return;
+              state = { ...state, refreshProgress: progress };
+              draw();
+            });
+        updatedAt = result.updatedAt;
+        refreshDetail = useCalendar ? `Calendar refresh complete · ${String((result as IcalRefreshResult).added)} added · ${String((result as IcalRefreshResult).updated)} updated · ${String((result as IcalRefreshResult).held)} held` : undefined;
+        try {
+          data = await withAvatar(parseDashboard(await transport.loadDashboardBody(true)));
+          refreshState = result.status === "incomplete" ? "partial" : "complete";
+        } catch {
+          refreshDetail = "Refresh finished, but updated data could not be reloaded. The prior view is still shown.";
+          refreshState = result.status === "incomplete" ? "partial" : "complete";
+        }
       }
       const currentStatus = await transport.storeStatus().catch(() => undefined);
       const desktopInfo = currentStatus === undefined
-        ? { ...state.desktop!, lastRefreshAt: result.updatedAt }
+        ? { ...state.desktop!, lastRefreshAt: updatedAt ?? state.desktop?.lastRefreshAt }
         : currentStatus.availability === "ready" && (currentStatus.state === "preview" || currentStatus.state === "authoritative")
-          ? { ...state.desktop!, canvasRefreshEnabled: currentStatus.canvasRefreshEnabled, refreshAvailable: currentStatus.refreshAvailable, icalRefreshAvailable: currentStatus.icalRefreshAvailable, warning: currentStatus.problem, lastRefreshAt: result.updatedAt }
-          : { ...state.desktop!, canvasRefreshEnabled: currentStatus.canvasRefreshEnabled, refreshAvailable: false, icalRefreshAvailable: false, warning: currentStatus.problem, lastRefreshAt: result.updatedAt };
-      const refreshState = result.status === "incomplete" ? "partial" : "complete";
-      const refreshAvailable = currentStatus === undefined ? desktopRefreshAvailable(desktopInfo) : currentStatus.availability === "ready" && (currentStatus.refreshAvailable || currentStatus.icalRefreshAvailable);
-      state = { ...state, desktop: desktopInfo, data: { ...data, refreshAvailable }, refreshState, refreshProgress: undefined, refreshDetail, selectedRefreshId: data.refreshes[0]?.id };
+          ? { ...state.desktop!, canvasRefreshEnabled: currentStatus.canvasRefreshEnabled, refreshAvailable: currentStatus.refreshAvailable, icalRefreshAvailable: currentStatus.icalRefreshAvailable, browserRefreshAvailable: currentStatus.browserRefreshAvailable, warning: currentStatus.problem, lastRefreshAt: updatedAt ?? state.desktop?.lastRefreshAt }
+          : { ...state.desktop!, canvasRefreshEnabled: currentStatus.canvasRefreshEnabled, refreshAvailable: false, icalRefreshAvailable: false, browserRefreshAvailable: false, warning: currentStatus.problem, lastRefreshAt: updatedAt ?? state.desktop?.lastRefreshAt };
+      const refreshAvailable = currentStatus === undefined ? desktopRefreshAvailable(desktopInfo) : currentStatus.availability === "ready" && (currentStatus.refreshAvailable || currentStatus.icalRefreshAvailable || currentStatus.browserRefreshAvailable === true);
+      state = reconciledDashboardState({ ...state, desktop: desktopInfo }, data, refreshAvailable);
+      state = { ...state, desktop: desktopInfo, refreshState, refreshProgress: undefined, refreshDetail };
     } catch {
-      state = { ...state, refreshState: "failed", refreshProgress: undefined, refreshDetail: undefined };
+      if (fullRefresh) {
+        const reloaded = await reloadAuthoritativeDashboard();
+        state = { ...state, refreshState: "failed", refreshProgress: undefined, refreshDetail: reloaded ? "Full refresh failed. Latest saved data was reloaded." : "Full refresh failed and updated data could not be reloaded; the prior view is still shown." };
+      } else state = { ...state, refreshState: "failed", refreshProgress: undefined, refreshDetail: undefined };
     }
     draw();
   }
@@ -272,7 +314,7 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
       if (state.desktop !== undefined) state = {
         ...state,
         desktop: { ...state.desktop, canvasRefreshEnabled: setting.canvasRefreshEnabled, refreshAvailable: setting.refreshAvailable },
-        data: { ...state.data, refreshAvailable: setting.refreshAvailable || state.desktop.icalRefreshAvailable === true },
+        data: { ...state.data, refreshAvailable: setting.refreshAvailable || state.desktop.icalRefreshAvailable === true || state.desktop.browserRefreshAvailable === true },
       };
     } catch {
       state = { ...state, refreshSettingError: "The Canvas refresh setting could not be saved." };
@@ -299,7 +341,7 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
     let desktop: DesktopStoreInfo = {
       ...state.desktop,
       storeState: expected,
-      ...(expected === "preview" ? { canvasRefreshEnabled: false, refreshAvailable: false, icalRefreshAvailable: false } : { refreshAvailable: false, icalRefreshAvailable: false }),
+      ...(expected === "preview" ? { canvasRefreshEnabled: false, refreshAvailable: false, icalRefreshAvailable: false, browserRefreshAvailable: false } : { refreshAvailable: false, icalRefreshAvailable: false, browserRefreshAvailable: false }),
       warning: "The store changed, but its current status could not be verified. Reopen the app before relying on refresh.",
     };
     try {
@@ -312,6 +354,7 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
           canvasRefreshEnabled: status.canvasRefreshEnabled,
           refreshAvailable: status.refreshAvailable,
           icalRefreshAvailable: status.icalRefreshAvailable,
+          browserRefreshAvailable: status.browserRefreshAvailable,
           snapshotInProgress: status.snapshotInProgress,
           snapshotProgress: status.snapshotProgress,
           warning: status.problem,
@@ -505,7 +548,7 @@ function mountDesktop(mount: HTMLElement, transport: NativeTransport): void {
 
   function showDashboard(status: DesktopStoreStatus): void {
     const storeState = status.state === "authoritative" ? "authoritative" : "preview";
-    const info: DesktopStoreInfo = { storeState, dataFolder: status.dataFolder, importedAt: status.importedAt, canvasRefreshEnabled: status.canvasRefreshEnabled, refreshAvailable: status.refreshAvailable, icalRefreshAvailable: status.icalRefreshAvailable, snapshotInProgress: status.snapshotInProgress, snapshotProgress: status.snapshotProgress, warning: status.problem };
+    const info: DesktopStoreInfo = { storeState, dataFolder: status.dataFolder, importedAt: status.importedAt, canvasRefreshEnabled: status.canvasRefreshEnabled, refreshAvailable: status.refreshAvailable, icalRefreshAvailable: status.icalRefreshAvailable, browserRefreshAvailable: status.browserRefreshAvailable, snapshotInProgress: status.snapshotInProgress, snapshotProgress: status.snapshotProgress, warning: status.problem };
     setup = undefined;
     // An authoritative store is never replaced by import, so only a preview offers replacement.
     disposeDashboard = mountDashboard(mount, transport, { info, onRecovery: () => startRecovery(status), onExport: () => { startRecovery(status); void runExport(); }, ...(storeState === "preview" ? { onReplacePreview: () => startSetup(status, true) } : {}) });

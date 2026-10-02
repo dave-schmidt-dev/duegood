@@ -111,8 +111,11 @@ let tauriTestCount = 0;
   const pathModules = new Map([
     ["ical::bootstrap", "ical_bootstrap.rs"],
     ["ical_apply::bootstrap", "ical_apply_bootstrap.rs"],
+    ["ical_apply::history", "ical_apply_history_tests.rs"],
+    ["capture::capture_course_metadata", "capture_course_metadata.rs"],
     ["downloads::tests", "downloads_tests.rs"],
     ["commands::browser_commands", "commands_browser_tests.rs"],
+    ["commands::full_refresh_commands", "commands_full_refresh_tests.rs"],
     ["browser_bundle::tests", "browser_bundle_tests.rs"],
     ["browser_import::tests", "browser_import_tests.rs"],
     ["browser_import::course_metadata", "browser_import_course_metadata.rs"],

@@ -305,3 +305,43 @@ Confirmed: all three live titles remain calendar-bootstrap placeholders despite 
 ### 2026-10-01 painted-divider correction
 Confirmed screenshot mismatch: header borders are on grid-cell edges; body date rail is centered. Reuse identical centered marker line and course-left borders; test painted pseudo-element position/border color before/after scroll on desktop/mobile. Move Recovery/Export into More as requested. Preserve all live store data; stage checks, signed installer, verified launch.
 Owner additions: place backup actions in existing More; display11:59PM for date-only assignment/discussion clocks without changing imported source, leave class clocks unknown. Regression existingtest runner membership unchanged.
+
+## 2026-10-02 refresh accuracy correction
+
+Owner requests calendar Activity history repair and verification of every page after refresh. Confirmed: calendar apply saves coursework but omits persisted refresh history; generic Refresh can choose calendar when Canvas refresh is disabled. Audit Timeline, Grades, Inbox, Done, Courses, Library, Activity and More across calendar and Canvas refresh boundaries. Preserve personal state, never delete on incomplete imports, and show source-specific freshness honestly. Use synthetic native/unit and Playwright regressions, full integration checks, one independent review, then project installer and bundle-ID launch. No publication or credential changes are authorized.
+
+## 2026-10-02: Full refresh from the installed app
+
+Owner requires the app Refresh action to update coursework, grades, Inbox and files, not only calendar deadlines. Confirmed: existing UI chooses only retired bearer-token or iCal commands; the existing browser client already validates a saved owner-bound Chrome session, starts its fixed broker, captures bounded sections, reuses unchanged validated files and invokes atomic native import. The broker is currently stopped. Changed: connect this existing browser workflow to the installed app, shipping a self-contained fixed Node/runtime resource rather than relying on the source checkout or shell/PATH. Keep credentials inside Chrome and partial capture semantics truthful. Native full refresh streams bounded allowlisted progress and results, runs calendar independently after browser attempt, and reloads all current dashboard documents with source freshness. No new provider, Canvas writes, OAuth, paid service or publication. Synthetic stopped-broker/runtime/protocol/all-page regressions and the staged full gate precede signed local installation; new live read remains a separate evidence boundary.
+
+### Confirmed login wait race (2026-10-02)
+
+**Status:** Confirmed source race; implementation pending.
+
+The full-capture broker can report `READY` before its asynchronous navigation to Canvas has completed. Capture preflight then checks the Canvas origin immediately and can fail with `CANVAS_SESSION_UNAVAILABLE` while the browser is still following SSO. Extract the page-wait probe into dependency-free `scripts/canvas-browser-session-wait.mjs`, keeping Playwright out of the packaged runtime dependency graph. Wait up to five minutes for the authenticated Canvas page using existing checked-origin and identity validation; emit content-free `WAITING` progress, and fail closed on timeout without publishing partial Canvas data. Preserve capture, unchanged-file reuse, import, independent calendar attempt, and source-freshness reload behavior. Add synthetic delayed-SSO and timeout/no-publish regressions. The retry action already clears the prior result; the source-freshness warning is expected to remain until a verified import completes, so this fix does not change UI retry behavior. Run the staged `test:all` gate and one Standard review; install through the project installer only after the active capture finishes. No commit or push is authorized.
+
+
+## 2026-10-02 assignment timezone regression investigation
+
+**Status:** Activity formatter correction is implemented in the shared projection and verified
+by the focused synthetic store test under explicit `America/New_York` semantics, even when the
+test process starts with another `TZ`. Installed-app behavior remains pending.
+
+**Diagnosis & Classification:**
+Investigation classified the defect in `src/shared/dashboard-projection.ts` `dateLabel()`: date-only strings (`YYYY-MM-DD`) were parsed via `Date.parse()`, which treats date-only strings as UTC midnight (`00:00:00Z`). In host timezones behind UTC (such as `America/New_York`, UTC-4 in EDT or UTC-5 in EST), formatting that instant via host-local `Intl.DateTimeFormat` shifted the date to the previous evening (e.g. Sunday became Saturday 8:00 p.m. in summer or 7:00 p.m. in winter).
+
+**Distinction from broad host-timezone concern:**
+The broad host-timezone representation concern involves user/course timezone selection, multi-timezone rendering, and instant display across timeline and countdown views. By contrast, this exact bug is isolated strictly to the Activity change-history projection formatter (`dateLabel()` in `src/shared/dashboard-projection.ts`). Timeline projection already correctly preserves date-only values and assumes 11:59 p.m. deadlines.
+
+**Implemented behavior:**
+The shared Activity projector preserves stated calendar dates for date-only values:
+1. Date-only values for the `at` field preserve their calendar date and format with the 11:59 p.m. assumed deadline in UTC (`{ dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }`), matching timeline presentation.
+2. Other date-only fields (`gradedAt`) preserve their calendar date without invented clock time (`{ dateStyle: "medium", timeZone: "UTC" }`).
+3. Actual offset/Z datetime instants retain existing host-local instant semantics; UTC midnight instants are not blanket-treated as date-only.
+4. Invalid date-only values (e.g., February 31) remain original without overflowing to another month or day.
+Synthetic unit regressions in `test/local/dashboard-store.test.ts` and an Activity browser regression in `test/native/playwright/refresh-pages.spec.ts` cover this behavior. The store test pins `America/New_York` for the whole file and restores the prior `TZ` afterward, so its New York instant expectations are stable on UTC and New York hosts. Focused validation passed all five store tests with external `TZ=UTC` and again with external `TZ=America/New_York`.
+
+**Delivery boundary:**
+The source test does not verify installed bytes or a launched app. Keep the final staged gate,
+project installer, bundle-ID launch, and owner visual acceptance as required installation and
+acceptance checks. ToDoJo plan: `3cd041e1-8d65-48d7-b895-85de55ae504a`.

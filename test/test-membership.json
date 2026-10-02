@@ -58,6 +58,7 @@
       "test/local/canvas-browser-session.test.ts",
       "test/local/canvas-browser-session-download.test.ts",
       "test/local/canvas-browser-runtime-loader.test.ts",
+      "test/local/browser-runtime.test.ts",
       "test/local/prepare-canvas-helper.test.ts",
       "test/local/canvas-browser-native-import.test.ts",
       "test/local/canvas-browser-run-lease.test.ts",
@@ -92,8 +93,10 @@
     "tests": {
       "src-tauri/src/canvas.rs": 7,
       "src-tauri/src/capture.rs": 10,
+      "src-tauri/src/capture_course_metadata.rs": 5,
       "src-tauri/src/clipboard.rs": 1,
       "src-tauri/src/commands.rs": 19,
+      "src-tauri/src/commands_full_refresh_tests.rs": 8,
       "src-tauri/src/config.rs": 10,
       "src-tauri/src/capture_download_helper_tests.rs": 7,
       "src-tauri/src/capture_archive.rs": 9,
@@ -116,6 +119,7 @@
       "src-tauri/src/ical_receiver.rs": 6,
       "src-tauri/src/ical_bootstrap.rs": 1,
       "src-tauri/src/ical_apply_bootstrap.rs": 2,
+      "src-tauri/src/ical_apply_history_tests.rs": 7,
       "src-tauri/src/browser_bundle_tests.rs": 10,
       "src-tauri/src/browser_export_tests.rs": 10,
       "src-tauri/src/browser_freshness_tests.rs": 7,
@@ -152,7 +156,8 @@
       "test/native/playwright/canvas-browser-auth-download.spec.ts",
       "test/native/playwright/canvas-browser-auth-production.spec.ts",
       "test/native/playwright/timeline-headers.spec.ts",
-      "test/native/playwright/timeline-course-names.spec.ts"
+      "test/native/playwright/timeline-course-names.spec.ts",
+      "test/native/playwright/refresh-pages.spec.ts"
     ]
   }
 }

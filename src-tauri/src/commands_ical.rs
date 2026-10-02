@@ -31,16 +31,24 @@ impl Inner {
         &self,
         on_progress: &mut dyn FnMut(IcalRefreshProgress) -> bool,
     ) -> Result<IcalRefreshResult, CommandError> {
+        let _running = self
+            .refresh_running
+            .try_lock()
+            .map_err(|_| CommandError::new("refresh-running", "A refresh is already running."))?;
+        self.refresh_ical_under_refresh_guard(on_progress)
+    }
+
+    /// Runs the calendar leg while the caller owns the shared refresh gate.
+    pub(super) fn refresh_ical_under_refresh_guard(
+        &self,
+        on_progress: &mut dyn FnMut(IcalRefreshProgress) -> bool,
+    ) -> Result<IcalRefreshResult, CommandError> {
         if self.refresh_shutting_down.load(Ordering::SeqCst) {
             return Err(CommandError::new(
                 "refresh-cancelled",
                 "Calendar refresh is stopping with the app.",
             ));
         }
-        let _running = self
-            .refresh_running
-            .try_lock()
-            .map_err(|_| CommandError::new("refresh-running", "A refresh is already running."))?;
         let store = self.store()?;
         let options = match store.condition()? {
             StoreCondition::Empty => None,

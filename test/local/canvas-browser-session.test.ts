@@ -457,10 +457,82 @@ describe("Canvas session broker process protocol", () => {
     }
   });
 
+  it("waits for a delayed synthetic sign-in before collecting or publishing", async () => {
+    const appDirectory = await tempDirectory();
+    const helperPath = path.join(appDirectory, "synthetic-helper");
+    const stateHelperPath = path.join(appDirectory, "synthetic-state-helper");
+    await writeFile(helperPath, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    await writeFile(stateHelperPath, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    let pageUrl = "about:blank";
+    const page = {
+      url: () => pageUrl,
+      isClosed: () => false,
+      evaluate: vi.fn(async () => true),
+      goto: vi.fn(async () => undefined),
+    };
+    const context = { pages: () => [page] };
+    const order: string[] = [];
+    const progress = vi.fn((status: string) => { order.push(status); });
+    const collector = vi.fn(async ({ expectedUserId, runId, generationId }: {
+      expectedUserId: number; runId: number; generationId: string;
+    }) => {
+      order.push("collector");
+      return syntheticSnapshot(expectedUserId, runId, generationId);
+    });
+    const saveGeneration = vi.fn(async ({ snapshot, generationId }: { snapshot: Record<string, unknown>; generationId: string }) => ({
+      generationId, snapshotSha256: "f".repeat(64), blobCount: 0, archivedSnapshot: snapshot,
+    }));
+    const transition = setTimeout(() => { pageUrl = "https://marymount.instructure.com/"; }, 10);
+    try {
+      const result = await runCanvasCapture({ context, expectedUserId: 41, progress, collector, appDirectory,
+        helperPath, stateHelperPath, withRunLease: syntheticRunLease, saveGeneration,
+        protocolVersion: 2,
+        sessionWaitTimeoutMs: 200, sessionPollIntervalMs: 5 });
+      expect(result).toMatchObject({ identity: { userId: 41 }, runId: 52 });
+      expect(progress).toHaveBeenCalledWith("WAITING_FOR_OWNER_SIGN_IN");
+      expect(progress).toHaveBeenCalledWith("CANVAS_SESSION_AVAILABLE");
+      expect(order.indexOf("CANVAS_SESSION_AVAILABLE")).toBeLessThan(order.indexOf("collector"));
+      expect(collector).toHaveBeenCalledTimes(1);
+      expect(saveGeneration).toHaveBeenCalledTimes(1);
+      expect(page.goto).not.toHaveBeenCalled();
+    } finally {
+      clearTimeout(transition);
+    }
+  });
+
+  it("does not collect or publish when the bounded sign-in wait expires", async () => {
+    const appDirectory = await tempDirectory();
+    const helperPath = path.join(appDirectory, "synthetic-helper");
+    const stateHelperPath = path.join(appDirectory, "synthetic-state-helper");
+    await writeFile(helperPath, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    await writeFile(stateHelperPath, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    const page = {
+      url: () => "https://marymount.instructure.com/",
+      isClosed: () => false,
+      evaluate: vi.fn(async () => false),
+      goto: vi.fn(async () => undefined),
+    };
+    const context = { pages: () => [page] };
+    const progress = vi.fn();
+    const collector = vi.fn(async () => syntheticSnapshot(41));
+    const saveGeneration = vi.fn();
+
+    await expect(runCanvasCapture({ context, expectedUserId: 41, progress, collector, appDirectory,
+      helperPath, stateHelperPath, withRunLease: syntheticRunLease, saveGeneration,
+      sessionWaitTimeoutMs: 15, sessionPollIntervalMs: 1 }))
+      .rejects.toThrow("CANVAS_SESSION_UNAVAILABLE");
+    expect(progress).toHaveBeenCalledWith("WAITING_FOR_OWNER_SIGN_IN");
+    expect(progress).not.toHaveBeenCalledWith("CANVAS_SESSION_AVAILABLE");
+    expect(collector).not.toHaveBeenCalled();
+    expect(saveGeneration).not.toHaveBeenCalled();
+    expect((await readdir(appDirectory)).some((entry) => entry.startsWith("canvas-capture-stage-"))).toBe(false);
+  });
+
   it("keeps a v1 broker view transient while the durable archive and current broker stay v2", async () => {
     const page = {
       url: () => "https://marymount.instructure.com/",
       isClosed: () => false,
+      evaluate: vi.fn(async () => true),
       goto: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
     };
@@ -506,7 +578,7 @@ describe("Canvas session broker process protocol", () => {
     expect(saveGeneration.mock.calls.every(([value]) => value.snapshot.schemaVersion === 2
       && value.snapshot.runId === 52 && value.snapshot.generationId === value.generationId)).toBe(true);
 
-    expect(context.pages).toHaveBeenCalledTimes(2);
+    expect(context.pages.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(context.newPage).not.toHaveBeenCalled();
     expect(page.goto).not.toHaveBeenCalled();
     expect(page.close).not.toHaveBeenCalled();

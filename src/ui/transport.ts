@@ -9,6 +9,8 @@ import {
 } from "../shared/dashboard-projection";
 import { parseBrowserFreshness } from "../shared/browser-freshness";
 import type { TauriChannelFactory, TauriInvoke } from "./tauri";
+import { parseFullRefreshProgress, parseFullRefreshResult, type FullRefreshProgress, type FullRefreshResult } from "./full-refresh-transport";
+export type { FullRefreshProgress } from "./full-refresh-transport";
 
 type DesktopStoreState = "empty" | "preview" | "authoritative" | "damaged" | "unknown";
 
@@ -25,6 +27,8 @@ export interface DesktopStoreStatus {
   readonly refreshAvailable: boolean;
   /** True only when native iCal scope, broker, and receiver port are ready. */
   readonly icalRefreshAvailable: boolean;
+  /** Bundled browser capture/import runtime is ready; a signed-in browser session is not implied. */
+  readonly browserRefreshAvailable?: boolean;
   /** Owner preference. This alone does not mean refresh is available. */
   readonly canvasRefreshEnabled: boolean;
   /** A private daily recovery snapshot is being written without blocking dashboard reads. */
@@ -85,6 +89,7 @@ export interface NativeTransport {
   startCanvasRefresh(onProgress: (progress: CanvasRefreshProgress) => void): Promise<CanvasRefreshResult>;
   importBrowserCapture(onProgress: (progress: BrowserImportProgress) => void, confirmFirstAccount: boolean): Promise<BrowserImportResult>;
   startIcalRefresh(onProgress: (progress: IcalRefreshProgress) => void): Promise<IcalRefreshResult>;
+  startFullRefresh(onProgress: (progress: FullRefreshProgress) => void): Promise<FullRefreshResult>;
   /** Opens the native folder picker in Rust; resolves whether a legacy folder is selected. */
   chooseLegacyRoot(): Promise<boolean>;
   dryRunImport(): Promise<DryRunReport>;
@@ -218,7 +223,7 @@ function safeCounts(value: object): Readonly<Record<string, number>> {
 
 function parseStatus(value: unknown): DesktopStoreStatus {
   const record = objectOf(value, "store status");
-  if (typeof record.dataFolder !== "string" || typeof record.legacyRootSelected !== "boolean" || typeof record.refreshAvailable !== "boolean" || typeof record.icalRefreshAvailable !== "boolean" || typeof record.canvasRefreshEnabled !== "boolean") throw malformed("store status");
+  if (typeof record.dataFolder !== "string" || typeof record.legacyRootSelected !== "boolean" || typeof record.refreshAvailable !== "boolean" || typeof record.icalRefreshAvailable !== "boolean" || typeof record.canvasRefreshEnabled !== "boolean" || (record.browserRefreshAvailable !== undefined && typeof record.browserRefreshAvailable !== "boolean")) throw malformed("store status");
   let snapshotProgress: DesktopStoreStatus["snapshotProgress"] = null;
   if (record.snapshotProgress !== undefined && record.snapshotProgress !== null) {
     const progress = objectOf(record.snapshotProgress, "snapshot progress");
@@ -234,6 +239,7 @@ function parseStatus(value: unknown): DesktopStoreStatus {
     bytes: nullableCount(record.bytes, "byte count"),
     refreshAvailable: record.refreshAvailable,
     icalRefreshAvailable: record.icalRefreshAvailable,
+    ...(record.browserRefreshAvailable === undefined ? {} : { browserRefreshAvailable: record.browserRefreshAvailable }),
     canvasRefreshEnabled: record.canvasRefreshEnabled,
     snapshotInProgress: record.snapshotInProgress === true,
     snapshotProgress,
@@ -485,6 +491,15 @@ export function createNativeTransport(invoke: TauriInvoke, createChannel: TauriC
         if (progress !== null) onProgress(progress);
       });
       return parseIcalRefreshResult(await call("start_ical_refresh", { onProgress: channel }));
+    },
+    async startFullRefresh(onProgress) {
+      const channel = createChannel((message) => {
+        const progress = parseFullRefreshProgress(message);
+        if (progress !== null) onProgress(progress);
+      });
+      const result = parseFullRefreshResult(await call("start_full_refresh", { onProgress: channel }));
+      if (result === null) throw malformed("full refresh result");
+      return result;
     },
     async chooseLegacyRoot() {
       const choice = objectOf(await call("choose_legacy_root"), "folder choice");

@@ -11,14 +11,14 @@ use serde_json::Value;
 use crate::canvas::CANVAS_ORIGIN;
 use crate::config::{ReadLimits, COURSEWORK_FILE};
 use crate::ical::{IcalNormalization, IcalNormalizeOptions, MAX_ICAL_EVENTS};
-use crate::store::{
-    atomic_write, node_json_bytes, sha256_hex, Store, StoreCondition, StoreError, StoreState,
-};
+use crate::store::{node_json_bytes, sha256_hex, Store, StoreCondition, StoreError, StoreState};
 
 #[path = "ical_apply_bootstrap.rs"]
 mod bootstrap;
 #[path = "ical_apply_facts.rs"]
 mod facts;
+#[path = "ical_apply_history.rs"]
+mod history;
 #[path = "ical_apply_merge.rs"]
 mod merge;
 #[path = "ical_apply_options.rs"]
@@ -94,6 +94,7 @@ pub(crate) fn apply_normalization(
 
     let _snapshot_lock = store.snapshot_lock()?;
     let _write_lock = store.write_lock()?;
+    store.recover_refresh_locked()?;
     match store.condition()? {
         StoreCondition::Ready(manifest) if manifest.state == StoreState::Authoritative => {}
         StoreCondition::Empty | StoreCondition::Ready(_) => {
@@ -113,22 +114,24 @@ pub(crate) fn apply_normalization(
         .ok_or(StoreError::Invalid(
             "the native coursework document is missing",
         ))?;
-    let mut document: Value = serde_json::from_slice(&prior.bytes)
+    let prior_document: Value = serde_json::from_slice(&prior.bytes)
         .map_err(|_| StoreError::Invalid("the native coursework document is invalid"))?;
+    let mut document = prior_document.clone();
     let result = apply_to_document(&mut document, options, finished_at, normalized)?;
-    if !result.changed {
-        return Ok(ApplyResult {
-            version: prior.digest,
-            added: result.added,
-            updated: result.updated,
-            held: result.held,
-            parser_held: normalized.held.len(),
-            removed: 0,
-        });
+    if result.changed {
+        crate::snapshots::snapshot_before_refresh_locked(store, "ical-import")?;
     }
+    let diff = crate::history::diff_coursework(&prior_document, &document)?;
+    let now = std::time::SystemTime::now();
+    let event = history::build_calendar_history_event(
+        &diff,
+        finished_at,
+        &result.held_notices,
+        &normalized.held,
+        now,
+    );
     let bytes = node_json_bytes(&document);
-    crate::snapshots::snapshot_before_refresh_locked(store, "ical-import")?;
-    atomic_write(&store.store_dir().join(COURSEWORK_FILE), &bytes)?;
+    history::publish_calendar_generation(store, &bytes, event, now)?;
     Ok(ApplyResult {
         version: sha256_hex(&bytes),
         added: result.added,
@@ -148,6 +151,7 @@ mod tests {
 
     use serde_json::json;
 
+    use crate::store::atomic_write;
     use crate::store::{create_private_dir, new_preview_manifest};
     use crate::testutil::TempRoot;
 

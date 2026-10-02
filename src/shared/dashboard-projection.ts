@@ -51,10 +51,12 @@ interface LocalRefreshChange {
 
 export interface LocalRefresh {
   readonly id: string;
+  readonly source?: "canvas" | "calendar" | "inbox";
   readonly status: "complete" | "partial" | "failed";
   readonly startedAt: string | null;
   readonly finishedAt: string | null;
-  readonly summary: { readonly added: number; readonly changed: number; readonly removed: number };
+  readonly summary: { readonly added: number; readonly changed: number; readonly removed: number; readonly held?: number };
+  readonly summaryText?: string;
   readonly changes: readonly LocalRefreshChange[];
 }
 
@@ -260,8 +262,31 @@ function submissionStateLabel(value: unknown): string {
   return "Unknown";
 }
 
-function dateLabel(value: unknown): string | null {
+function dateLabel(value: unknown, field?: string): string | null {
   if (typeof value !== "string") return null;
+  const clean = value.trim();
+  if (clean.length === 0) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(clean);
+  if (match !== null) {
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+      return value;
+    }
+    if (field === "at") {
+      return new Intl.DateTimeFormat("en-US", {
+        dateStyle: "medium",
+        timeStyle: "short",
+        timeZone: "UTC",
+      }).format(new Date(Date.UTC(year, month - 1, day, 23, 59)));
+    }
+    return new Intl.DateTimeFormat("en-US", {
+      dateStyle: "medium",
+      timeZone: "UTC",
+    }).format(date);
+  }
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return value;
   return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp));
@@ -269,7 +294,7 @@ function dateLabel(value: unknown): string | null {
 
 function changeFieldValue(field: string, value: unknown): string {
   if (field === "submissionState") return submissionStateLabel(value);
-  if (field === "at" || field === "gradedAt") return dateLabel(value) ?? "Unavailable";
+  if (field === "at" || field === "gradedAt") return dateLabel(value, field) ?? "Unavailable";
   if (value === null || value === undefined || (typeof value === "string" && value.trim().length === 0)) return "Unavailable";
   if (field === "assignmentGroupWeight" && typeof value === "number") return `${String(value)}%`;
   return typeof value === "string" || typeof value === "number" ? String(value) : "Unavailable";
@@ -500,16 +525,34 @@ export function projectRefreshes(historyDocument: unknown, inboxDocument: unknow
   const document = object(historyDocument);
   const raw = entries(document?.events, 100);
   const refreshes = raw.map((event, index): LocalRefresh => {
-    const complete = event.status === "succeeded" && event.sourceComplete === true;
+    const source = event.source === "calendar" || event.source === "ical" || event.sourceLabel === "calendar" ? "calendar" : "canvas";
+    const isCalendar = source === "calendar";
+    const explicitFailure = event.status === "failed";
+    const complete = !explicitFailure && event.status === "succeeded" && (isCalendar || event.sourceComplete === true);
     const changes = entries(event.changes, 500).map((change): LocalRefreshChange => {
       const kind = change.kind === "added" ? "added" : change.kind === "removed" ? "removed" : change.kind === "notice" ? "notice" : "changed";
       const detail = changedFieldsDetail(change);
-      return { kind, title: text(change.title) ?? "Canvas item", detail: detail ?? text(change.detail, 1_000) ?? text(change.course, 80) ?? "" };
+      return { kind, title: text(change.title) ?? (isCalendar ? "Calendar item" : "Canvas item"), detail: detail ?? text(change.detail, 1_000) ?? text(change.course, 80) ?? "" };
     });
     const summary = object(event.summary);
-    const status: LocalRefresh["status"] = complete ? "complete" : event.sourceComplete === false ? "partial" : "failed";
-    if (status !== "complete" && changes.length === 0) changes.push({ kind: "notice", title: "Refresh incomplete", detail: "Existing coursework was kept." });
-    return { id: text(event.id, 120) ?? `refresh-${String(index)}`, status, startedAt: text(event.startedAt, 80), finishedAt: text(event.finishedAt, 80), summary: { added: number(summary?.added), changed: number(summary?.updated), removed: complete ? number(summary?.removed) : 0 }, changes };
+    const status: LocalRefresh["status"] = explicitFailure ? "failed" : complete ? "complete" : event.status === "incomplete" || event.sourceComplete === false ? "partial" : "failed";
+    if (status !== "complete" && changes.length === 0) {
+      const label = isCalendar ? "Calendar" : "Canvas";
+      const title = status === "failed" ? `${label} refresh failed` : "Refresh incomplete";
+      const detail = status === "failed" ? `Existing ${isCalendar ? "deadlines" : "coursework"} were kept.` : `Existing ${isCalendar ? "deadlines" : "coursework"} was kept.`;
+      changes.push({ kind: "notice", title, detail });
+    }
+    const added = number(summary?.added);
+    const changed = number(summary?.updated ?? summary?.changed);
+    const removed = number(summary?.removed);
+    const held = number(summary?.held);
+    const summaryText = isCalendar
+      ? status === "failed" ? "Calendar refresh failed; prior deadlines were kept." : status === "partial" ? `Calendar deadlines only · incomplete · ${String(added)} added · ${String(changed)} updated · ${String(held)} held` : `Calendar deadlines only · ${String(added)} added · ${String(changed)} updated · ${String(held)} held`
+      : status === "failed" ? "Canvas refresh failed; existing data was kept." : status === "partial" ? "Canvas refresh was incomplete; existing data was kept." : "Canvas refresh completed.";
+    if (isCalendar && held > 0 && !changes.some((change) => change.kind === "notice")) {
+      changes.push({ kind: "notice", title: "Calendar items held", detail: `${String(held)} calendar change${held === 1 ? " was" : "s were"} held for review.` });
+    }
+    return { id: text(event.id, 120) ?? `refresh-${String(index)}`, source, status, startedAt: text(event.startedAt, 80), finishedAt: text(event.finishedAt, 80), summary: { added, changed, removed: isCalendar || status !== "complete" ? 0 : removed, ...(isCalendar ? { held } : {}) }, summaryText, changes };
   });
   const inbox = object(inboxDocument);
   const inboxChanges = object(inbox?.changes);
@@ -523,7 +566,8 @@ export function projectRefreshes(historyDocument: unknown, inboxDocument: unknow
       ...removed.map((item) => ({ kind: "removed" as const, title: text(item.subject) ?? "Inbox thread", detail: "Canvas inbox thread no longer appears in the inbox." })),
     ];
     if (inbox.complete !== true && changes.length === 0) changes.push({ kind: "notice", title: "Inbox refresh incomplete", detail: "Existing messages were kept." });
-    refreshes.push({ id: `inbox-${text(inbox.generatedAt, 80) ?? "latest"}`, status: inbox.complete === true ? "complete" : "partial", startedAt: null, finishedAt: text(inbox.generatedAt, 80), summary: { added: added.length, changed: changed.length, removed: removed.length }, changes });
+    const status: LocalRefresh["status"] = inbox.complete === true ? "complete" : "partial";
+    refreshes.push({ id: `inbox-${text(inbox.generatedAt, 80) ?? "latest"}`, source: "inbox", status, startedAt: null, finishedAt: text(inbox.generatedAt, 80), summary: { added: added.length, changed: changed.length, removed: removed.length }, summaryText: status === "complete" ? "Inbox update completed." : "Inbox update incomplete; existing messages were kept.", changes });
   }
   return refreshes.sort((left, right) => (right.finishedAt ?? right.startedAt ?? "").localeCompare(left.finishedAt ?? left.startedAt ?? ""));
 }
@@ -649,9 +693,7 @@ export function projectDashboardDocuments(bundle: DashboardDocumentBundle, optio
     return course !== undefined && isBrowserCourseCoverageCurrent(bundle.browserFreshness as BrowserFreshness, course, REQUIRED_COURSEWORK_ENDPOINTS);
   });
   const dailyEvents = selectedEvents.map(publicTimelineEvent);
-  const dashboardCourses = snapshot.courses
-    .filter((course) => dailyEvents.some((event) => event.courseId === course.id))
-    .map(publicCourse);
+  const dashboardCourses = snapshot.courses.filter((course) => course.active).map(publicCourse);
   const courseworkCurrent = bundle.browserFreshness === undefined
     || areActiveBrowserCoursesCurrent(bundle.browserFreshness, snapshot.courses, REQUIRED_COURSEWORK_ENDPOINTS);
   const libraryCurrent = bundle.browserFreshness === undefined

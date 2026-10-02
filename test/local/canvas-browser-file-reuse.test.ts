@@ -116,6 +116,8 @@ const syntheticLease: typeof withCanvasRunLease = async (options = {} as NonNull
 
 function browserContext() {
   const page = { url: vi.fn(() => `${ORIGIN}/`), isClosed: vi.fn(() => false),
+    // Reuse scenarios start from an explicitly authenticated synthetic Canvas page.
+    evaluate: vi.fn(async () => true),
     goto: vi.fn(async () => undefined), close: vi.fn(async () => undefined) };
   return { page, browser: { pages: vi.fn(() => [page]), newPage: vi.fn(async () => page) } };
 }

@@ -169,6 +169,18 @@ pub fn capture_download_helper_path(app_executable: &Path) -> Option<PathBuf> {
         .map(|parent| parent.join("duegood-capture-download"))
 }
 
+/// Fixed browser runtime directory inside the signed macOS application bundle.
+pub fn bundled_browser_runtime_dir(app_executable: &Path) -> Option<PathBuf> {
+    let macos = app_executable.parent()?;
+    let contents = macos.parent()?;
+    if macos.file_name() != Some(std::ffi::OsStr::new("MacOS"))
+        || contents.file_name() != Some(std::ffi::OsStr::new("Contents"))
+    {
+        return None;
+    }
+    Some(contents.join("Resources").join("browser-runtime"))
+}
+
 /// Fixed BWS broker executable path for the desktop host. The app never searches `PATH` or uses a
 /// shell, and the consumer name remains a literal at the call site. The account home comes from
 /// the process UID's system account record; `HOME` is not trusted for locating the broker.

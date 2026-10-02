@@ -31,6 +31,7 @@ const COMMANDS: &[&str] = &[
     "start_canvas_refresh",
     "import_browser_capture",
     "start_ical_refresh",
+    "start_full_refresh",
     "prepare_store_promotion",
     "confirm_store_promotion",
     "demote_store_for_rollback",

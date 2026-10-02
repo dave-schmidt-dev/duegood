@@ -8,8 +8,12 @@ import { saveCanvasCaptureGeneration } from "./canvas-browser-archive.mjs";
 import { loadCanvasFileReuseIndex, stageReusedCanvasFile } from "./canvas-browser-file-reuse.mjs";
 import { withCanvasRunLease } from "./canvas-browser-run-lease.mjs";
 import { deriveCapturedSyllabusSessions } from "./canvas-syllabus-documents.mjs";
+import {
+  CANVAS_PROFILE_POLL_INTERVAL_MS,
+  CANVAS_PROFILE_WAIT_TIMEOUT_MS,
+  waitForCanvasProfile,
+} from "./canvas-browser-session-wait.mjs";
 
-const ORIGIN = "https://marymount.instructure.com";
 const APP_DIR = path.join(homedir(), "Library", "Application Support", "DueGood");
 const MAX_CAPTURE_DISK_BYTES = 4 * 1024 * 1024 * 1024;
 const DIAGNOSTIC_FILE = "canvas-capture-last-error.json";
@@ -71,6 +75,9 @@ export async function runCanvasCapture({
   loadFileReuseIndex = loadCanvasFileReuseIndex,
   stageFileReuse = stageReusedCanvasFile,
   extractPdfText = undefined,
+  waitForCanvasPage = waitForCanvasProfile,
+  sessionWaitTimeoutMs = CANVAS_PROFILE_WAIT_TIMEOUT_MS,
+  sessionPollIntervalMs = CANVAS_PROFILE_POLL_INTERVAL_MS,
 }) {
   const stateHelper = await lstat(stateHelperPath).catch(() => undefined);
   if (!stateHelper?.isFile() || stateHelper.isSymbolicLink() || (stateHelper.mode & 0o111) === 0
@@ -90,11 +97,10 @@ export async function runCanvasCapture({
           || (typeof process.getuid === "function" && helper.uid !== process.getuid())) {
         throw new Error("HELPER_UNAVAILABLE");
       }
-      const page = context?.pages?.().find((candidate) => {
-        if (candidate.isClosed?.()) return false;
-        try { return new URL(candidate.url()).origin === ORIGIN; } catch { return false; }
-      });
+      progress("WAITING_FOR_OWNER_SIGN_IN");
+      const page = await waitForCanvasPage(context, sessionWaitTimeoutMs, sessionPollIntervalMs);
       if (!page) throw new Error("CANVAS_SESSION_UNAVAILABLE");
+      progress("CANVAS_SESSION_AVAILABLE");
       const generationId = randomUUID().replaceAll("-", "");
       const stagingDirectory = await mkdtemp(path.join(appDirectory, "canvas-capture-stage-"));
       try {

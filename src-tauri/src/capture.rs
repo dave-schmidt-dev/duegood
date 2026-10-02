@@ -14,6 +14,9 @@ use crate::downloads::DownloadClient;
 use crate::reconcile::{reconcile_coursework, CourseAssignments};
 use crate::refresh::{RefreshCapture, RefreshPhase, RefreshPrior, RefreshProgress};
 
+#[path = "capture_course_metadata.rs"]
+mod capture_course_metadata;
+
 const MAX_COURSES: usize = 500;
 const MAX_PAGES: usize = 100;
 const MAX_ITEMS: usize = 10_000;
@@ -224,8 +227,10 @@ pub fn capture_all(
         Some(course_assignments.len() as u64),
         Some(bytes as u64),
     ));
-    let coursework = reconcile_coursework(base_coursework, &course_assignments, captured_at)
+    let mut coursework = reconcile_coursework(base_coursework, &course_assignments, captured_at)
         .map_err(|_| CaptureError::Reconcile)?;
+    capture_course_metadata::apply(&mut coursework, &documents, course_scopes)
+        .map_err(|_| CaptureError::InvalidCanvasResponse)?;
     progress(RefreshProgress::new(
         RefreshPhase::Reconcile,
         course_assignments.len() as u64,

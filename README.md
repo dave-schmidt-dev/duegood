@@ -6,9 +6,10 @@ The dashboard provides Timeline, Grades, Inbox, Completed, Courses, Library, Act
 
 ## Current state
 
-- The installed bundle identifier is `com.zerodelta.duegood`. iCal refresh and Canvas browser capture are separate native workflows and keep independent source facts.
+- The installed bundle identifier is `com.zerodelta.duegood`. The iCal feed and Canvas browser capture remain independent sources; the app’s existing **Refresh** action attempts Canvas capture/import, then independently attempts calendar refresh and reports each source separately.
 - The dashboard accepts both numeric and canonical decimal-string Canvas course IDs retained by earlier native stores, while rejecting malformed or unsafe IDs.
 - The Canvas v2 capture-to-import workflow has separate source, synthetic, live-import, and installed-app acceptance gates. Earlier browser captures do not prove current native publication or installed behavior.
+- Calendar refresh history is saved with the applied calendar changes, including no-change runs and held events. Browser imports record incomplete-capture Activity entries within the import generation, and repeating the same generation does not duplicate them. Activity reports distinguish added and updated assignments; new assignments are not double-counted as updates. Courses retains active courses without calendar events, while coverage status and course names/codes come from validated Canvas capture data. Calendar deadlines may attach to a linked Canvas assignment; the feed supplies deadlines, not grades, messages, or files. The **Refresh calendar** action updates calendar data only. Live institution behavior and owner acceptance are evaluated separately from source and synthetic checks.
 
 ## Compatibility and versions
 
@@ -37,6 +38,8 @@ npm run canvas:session -- refresh
 npm run canvas:session -- stop
 ```
 
+The CLI `canvas:session -- refresh` remains a Canvas capture/import command. In the app, the existing **Refresh** action runs Canvas capture/import and then independently attempts the calendar update. It uses the packaged fixed Node runtime, the saved owner Chrome profile and account binding, and the validated unchanged-file archive; it does not depend on a source checkout or shell `PATH`, and remains available when Canvas API refresh is disabled. If Canvas SSO expires, the action waits up to five minutes for the authenticated Canvas page after the broker is ready, reporting content-free `WAITING` progress while the owner signs in through Chrome; cookies stay in Chrome. Timeout fails closed without publishing incomplete Canvas data. Progress contains status and counts only, source results remain distinct, and dashboard data and freshness reload after partial or failed steps.
+
 The importer preserves separate child-detail coverage rows, including optional gaps; required course and inventory coverage must still be complete and unique.
 
 `refresh` begins a durable run before collection, checks the saved account binding, captures a schema-v2 snapshot and hashed private archive, then invokes the native importer. The importer validates the run, account, inventory, required coverage, and file hashes before publishing coursework and projected documents together. It repairs calendar-bootstrap course names and codes from validated captured course metadata without downloading files again. Failed or incomplete metadata does not replace retained coursework; file gaps are tracked separately. Capture has a 30-minute budget and the client waits up to 35 minutes. Output contains only status and counts; never commit the private archive.
@@ -45,7 +48,7 @@ During a refresh, a file whose ID, size, content type, and `modified_at`/`update
 
 Canvas refresh also checks each active course’s captured syllabus body and captured syllabus documents for explicitly dated class meetings. Supported sources are HTML/text, PDF, and DOCX. The parser supports explicit full-year meeting rows, labelled bounded weekly DOCX declarations with no-class exceptions, and PDF class-date tables whose separately labelled meeting time and semester year are unambiguous. PDF syllabus discovery checks an exact first-page role heading as well as captured syllabus links and filenames. The captured course timezone applies; unsupported or conflicting formats remain unresolved. Ambiguous or unavailable schedules preserve existing sessions without inventing new ones. Repeated refreshes retain personal notes and completion and use stable meeting identities.
 
-The native importer is not the iCal refresh. It preserves local completion, notes, and other personal fields, and keeps newer or unstamped iCal due observations selected when Canvas capture overlaps them. A newer running or failed capture makes retained Canvas-owned facts unverified in the daily view, while iCal facts and personal fields remain available. `stop` closes the browser and session broker. Canvas SSO can expire, so a later refresh may need another visible sign-in. A new private live native import and installed-app acceptance remain separate from source verification. Visible import/backup controls and a new live recapture are deferred at the owner-selected ship checkpoint.
+Canvas import and iCal apply remain separate source updates. The app Refresh action orchestrates them in sequence, preserving local completion, notes, and other personal fields. A newer running or failed Canvas capture makes retained Canvas-owned facts unverified in the daily view, while iCal facts and personal fields remain available. `stop` closes the browser and session broker. Canvas SSO can expire, in which case the full Refresh action waits for sign-in in Chrome; cookies are not copied into the app. Backup controls remain a separate owner-flow operation.
 
 The first real-store import requires explicit confirmation in Tauri. The confirmation is a boolean; native code derives the Canvas account identity from the validated capture.
 

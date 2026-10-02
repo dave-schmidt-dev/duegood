@@ -124,11 +124,18 @@ function parseChange(value: unknown): DashboardRefreshChange | undefined {
 }
 
 function parseRefresh(value: unknown): DashboardRefresh | undefined {
-  const item = record(value); const id = text(item.id); const startedAt = timestamp(item.finishedAt ?? item.startedAt ?? item.at); if (id.length === 0 || startedAt === undefined) return undefined;
+  const item = record(value); const id = text(item.id); const startedAt = timestamp(item.startedAt ?? item.finishedAt ?? item.at); if (id.length === 0 || startedAt === undefined) return undefined;
+  const finishedAt = timestamp(item.finishedAt);
   const rawStatus = text(item.status, "failed").toLowerCase(); const status = rawStatus === "complete" || rawStatus === "partial" ? rawStatus : "failed";
   const counts = record(item.summary);
-  const summary = typeof item.summary === "string" ? item.summary : status === "partial" ? "Refresh was incomplete; existing data was kept." : "Canvas refresh completed.";
-  return { id, startedAt, status, summary, added: numeric(item.added ?? counts.added), changed: numeric(item.changed ?? counts.changed), removed: numeric(item.removed ?? counts.removed), changes: rows(item.changes).map(parseChange).filter((change): change is DashboardRefreshChange => change !== undefined) };
+  const source = item.source === "calendar" || item.source === "ical" ? "calendar" : item.source === "inbox" ? "inbox" : "canvas";
+  const fallbackSummary = status === "failed"
+    ? source === "calendar" ? "Calendar refresh failed; prior deadlines were kept." : source === "inbox" ? "Inbox update failed; existing messages were kept." : "Canvas refresh failed; existing data was kept."
+    : status === "partial"
+      ? source === "calendar" ? "Calendar deadlines only; refresh incomplete." : source === "inbox" ? "Inbox update incomplete; existing messages were kept." : "Canvas refresh was incomplete; existing data was kept."
+      : source === "calendar" ? "Calendar deadlines only." : source === "inbox" ? "Inbox update completed." : "Canvas refresh completed.";
+  const summary = typeof item.summaryText === "string" ? item.summaryText : typeof item.summary === "string" ? item.summary : fallbackSummary;
+  return { id, source, startedAt, ...(finishedAt === undefined ? {} : { finishedAt }), status, summary, added: numeric(item.added ?? counts.added), changed: numeric(item.changed ?? counts.changed), removed: numeric(item.removed ?? counts.removed), ...(counts.held === undefined && item.held === undefined ? {} : { held: numeric(item.held ?? counts.held) }), changes: rows(item.changes).map(parseChange).filter((change): change is DashboardRefreshChange => change !== undefined) };
 }
 
 function sourceValue(value: unknown): string | undefined {
@@ -160,7 +167,16 @@ function parsePendingSourceLink(value: unknown): DashboardPendingSourceLink | un
 export function parseDashboard(value: unknown): DashboardData & { readonly sourceStatus: DashboardSourceStatus & { readonly browserFreshness?: BrowserFreshness } } {
   const body = record(value); const source = record(body.sourceStatus);
   const browserFreshness = source.browserFreshness === undefined ? undefined : parseBrowserFreshness(source.browserFreshness);
-  const sourceStatus = { ...(optionalText(source.state) === undefined ? {} : { state: optionalText(source.state) }), ...(optionalText(source.label) === undefined ? {} : { label: optionalText(source.label) }), ...(optionalText(source.detail) === undefined ? {} : { detail: optionalText(source.detail) }), ...(timestamp(source.lastRefreshAt) === undefined ? {} : { lastRefreshAt: timestamp(source.lastRefreshAt) }), ...(browserFreshness === undefined ? {} : { browserFreshness }) };
+  const sourceStatus: DashboardSourceStatus & { readonly browserFreshness?: BrowserFreshness } = {
+    ...(optionalText(source.state) === undefined ? {} : { state: optionalText(source.state) }),
+    ...(optionalText(source.label) === undefined ? {} : { label: optionalText(source.label) }),
+    ...(optionalText(source.detail) === undefined ? {} : { detail: optionalText(source.detail) }),
+    ...(timestamp(source.lastRefreshAt) === undefined ? {} : { lastRefreshAt: timestamp(source.lastRefreshAt) }),
+    ...(source.coursework === "synced" || source.coursework === "not_synced" ? { coursework: source.coursework as "synced" | "not_synced" } : {}),
+    ...(source.library === "synced" || source.library === "not_synced" ? { library: source.library as "synced" | "not_synced" } : {}),
+    ...(source.inbox === "synced" || source.inbox === "partial" || source.inbox === "not_synced" ? { inbox: source.inbox as "synced" | "partial" | "not_synced" } : {}),
+    ...(browserFreshness === undefined ? {} : { browserFreshness }),
+  };
   return {
     version: typeof body.version === "string" ? body.version : typeof body.version === "number" && Number.isFinite(body.version) ? String(body.version) : "",
     courses: rows(body.courses).map(parseCourse).filter((item): item is DashboardCourse => item !== undefined),

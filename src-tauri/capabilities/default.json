@@ -25,6 +25,7 @@
     "allow-start-canvas-refresh",
     "allow-import-browser-capture",
     "allow-start-ical-refresh",
+    "allow-start-full-refresh",
     "allow-prepare-store-promotion",
     "allow-confirm-store-promotion",
     "allow-demote-store-for-rollback",

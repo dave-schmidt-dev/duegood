@@ -85,7 +85,13 @@ fn snapshot(run_id: u64, generation_id: &str, user_id: u64) -> Value {
         json!({"endpoint":"coursesActive","courseId":null,"status":"complete"}),
         json!({"endpoint":"coursesCompleted","courseId":null,"status":"complete"}),
         json!({"endpoint":"quizzes","courseId":COURSE_ID,"status":"gap","reason":"not-attempted"}),
+        json!({"endpoint":"inbox","courseId":null,"status":"gap","reason":"request-failed"}),
+        json!({"endpoint":"courseFiles","courseId":COURSE_ID,"status":"gap","reason":"not-attempted"}),
     ];
+    resources.push(json!({
+        "endpoint":"courseFiles", "courseId":COURSE_ID, "pages":1,
+        "items":[{"id":501,"display_name":"Synthetic unavailable file.pdf","size":42}]
+    }));
     for course_id in active_ids {
         let assignment = if course_id == COURSE_ID {
             vec![
@@ -183,6 +189,10 @@ fn read_coursework(store: &Store) -> Value {
     serde_json::from_slice(&fs::read(store.store_dir().join(COURSEWORK_FILE)).unwrap()).unwrap()
 }
 
+fn read_history(store: &Store) -> Value {
+    serde_json::from_slice(&fs::read(store.store_dir().join(HISTORY_FILE)).unwrap()).unwrap()
+}
+
 fn write_coursework(store: &Store, coursework: &Value) {
     atomic_write(
         &store.store_dir().join(COURSEWORK_FILE),
@@ -227,6 +237,36 @@ fn authoritative_import_preserves_latest_personal_state_and_assigns_stable_folde
         .unwrap()
         .iter()
         .any(|row| row["endpoint"] == "quizzes" && row["status"] == "gap"));
+    let history = read_history(&store);
+    let events = history["events"].as_array().unwrap();
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event["source"], "canvas");
+    assert_eq!(event["sourceLabel"], "canvas");
+    assert_eq!(event["status"], "incomplete");
+    assert_eq!(event["sourceComplete"], false);
+    assert_eq!(event["summary"]["added"], 0);
+    assert_eq!(event["summary"]["updated"], 1);
+    assert_eq!(event["summary"]["removed"], 0);
+    let changes = event["changes"].as_array().unwrap();
+    let changed = changes
+        .iter()
+        .find(|change| change["kind"] == "changed" && change["itemId"] == "course-a-canvas-910001")
+        .expect("item change is recorded");
+    let title = changed["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|field| field["field"] == "title")
+        .expect("title change is recorded");
+    assert_eq!(title["before"], "Synthetic Submitted Work");
+    assert_eq!(title["after"], "Synthetic Updated Assignment");
+    assert!(changes.iter().any(|change| {
+        change["kind"] == "notice" && change["title"] == "Canvas inbox incomplete"
+    }));
+    assert!(changes.iter().any(|change| {
+        change["kind"] == "notice" && change["title"] == "Canvas files incomplete"
+    }));
     let archive: Value = serde_json::from_slice(
         &fs::read(store.store_dir().join("browser-courses-archive.json")).unwrap(),
     )
@@ -404,9 +444,11 @@ fn repeated_import_is_idempotent_and_bound_account_cannot_change() {
     let imported_course = imported["courses"][0].clone();
     let imported_item = imported["items"][0].clone();
     let before = snapshot_tree(&store.store_dir());
+    assert_eq!(read_history(&store)["events"].as_array().unwrap().len(), 1);
     let repeated = run_import(&store, &root, None).unwrap();
     assert!(repeated.already_current);
     assert_eq!(snapshot_tree(&store.store_dir()), before);
+    assert_eq!(read_history(&store)["events"].as_array().unwrap().len(), 1);
 
     let mut placeholders = read_coursework(&store);
     placeholders["courses"][0]["title"] = json!("Canvas course 900001");
@@ -445,12 +487,24 @@ fn repeated_import_is_idempotent_and_bound_account_cannot_change() {
     assert!(repaired_repeat.already_current);
     assert_eq!(snapshot_tree(&store.store_dir()), after_repair);
 
+    let events_before_new_capture = read_history(&store)["events"].as_array().unwrap().len();
+    publish_attempt(&root, USER_ID);
+    let zero_change = run_import(&store, &root, None).unwrap();
+    assert!(!zero_change.already_current);
+    let events = read_history(&store)["events"].as_array().unwrap().clone();
+    assert_eq!(events.len(), events_before_new_capture + 1);
+    assert_eq!(events.last().unwrap()["summary"]["added"], 0);
+    assert_eq!(events.last().unwrap()["summary"]["updated"], 0);
+    assert_eq!(events.last().unwrap()["summary"]["removed"], 0);
+
+    let before_account_mismatch = snapshot_tree(&store.store_dir());
+
     publish_attempt(&root, USER_ID + 1);
     assert!(matches!(
         run_import(&store, &root, None),
         Err(BrowserImportError::AccountMismatch)
     ));
-    assert_eq!(snapshot_tree(&store.store_dir()), before);
+    assert_eq!(snapshot_tree(&store.store_dir()), before_account_mismatch);
 }
 
 #[test]

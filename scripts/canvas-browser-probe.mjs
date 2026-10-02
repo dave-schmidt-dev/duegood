@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 import { readCanvasBrowserApi } from "./canvas-browser-reader.mjs";
+import { waitForCanvasProfile } from "./canvas-browser-session-wait.mjs";
 
 const ORIGIN = "https://marymount.instructure.com";
 const PROFILE_DIR = path.join(homedir(), "Library", "Application Support", "DueGood", "canvas-capture-profile");
@@ -86,47 +87,6 @@ async function profileLockPresent() {
     await lstat(path.join(PROFILE_DIR, "SingletonLock"));
     return true;
   } catch { return false; }
-}
-
-const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-
-async function waitForCanvasProfile(context, timeoutMs, pollIntervalMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    for (const page of context.pages()) {
-      let sameOrigin = false;
-      try { sameOrigin = new URL(page.url()).origin === ORIGIN; } catch { /* A tab may be between navigations. */ }
-      if (!sameOrigin) continue;
-      try {
-        const requestTimeoutMs = Math.max(1, Math.min(5_000, deadline - Date.now()));
-        const available = await page.evaluate(async ({ origin, requestTimeoutMs }) => {
-          if (globalThis.location.origin !== origin) return false;
-          const controller = new AbortController();
-          const timer = globalThis.setTimeout(() => controller.abort(), requestTimeoutMs);
-          try {
-            const response = await fetch(`${origin}/api/v1/users/self/profile`, {
-              method: "GET",
-              credentials: "same-origin",
-              redirect: "manual",
-              cache: "no-store",
-              headers: { Accept: "application/json" },
-              signal: controller.signal,
-            });
-            const responseUrl = new URL(response.url);
-            const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
-            return response.status === 200 && responseUrl.origin === origin
-              && responseUrl.pathname === "/api/v1/users/self/profile" && responseUrl.search === ""
-              && contentType === "application/json";
-          } finally {
-            globalThis.clearTimeout(timer);
-          }
-        }, { origin: ORIGIN, requestTimeoutMs });
-        if (available) return page;
-      } catch { /* Sign-in may still be navigating or the tab may have closed. */ }
-    }
-    if (Date.now() < deadline) await delay(Math.min(pollIntervalMs, deadline - Date.now()));
-  }
-  return undefined;
 }
 
 async function restrictToProbeReads(context) {

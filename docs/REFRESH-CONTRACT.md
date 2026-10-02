@@ -22,7 +22,7 @@ Every row below is a plain claim with a **Status**:
 
 The personal source uses one dedicated, headed Chrome profile. Its saved session is reused across commands; capture makes requests from the existing Canvas page and does not open, navigate, or close a tab for each file, leaving keyboard and mouse input available. A separate headless relaunch did not restore the signed-in session, so the supported capture session stays headed. Session cookies remain inside Chrome; neither cookies nor storageState are exported. SSO may expire and require another attended sign-in. This is an operator source for the Tauri app, with no public onboarding or scheduler.
 
-`npm run canvas:prepare-helper` installs three fixed native helpers in the private DueGood Application Support directory: `duegood-capture-state` journals and leases a run, `duegood-capture-download` streams bounded file bytes, and `duegood-browser-import` validates and publishes the capture into the native store. `npm run canvas:session -- refresh` starts the run, captures, then invokes the native importer; capture success by itself does not make Canvas facts current. The iCal refresh remains a separate source and action.
+`npm run canvas:prepare-helper` installs three fixed native helpers in the private DueGood Application Support directory: `duegood-capture-state` journals and leases a run, `duegood-capture-download` streams bounded file bytes, and `duegood-browser-import` validates and publishes the capture into the native store. The `canvas:session -- refresh` command remains Canvas capture/import only; capture success by itself does not make Canvas facts current. The app’s existing **Refresh** action uses the packaged fixed Node runtime with the saved owner Chrome profile and account binding, attempts Canvas capture/import, then independently attempts calendar refresh. It remains available when Canvas API refresh is disabled. If SSO expires, it waits up to five minutes for the authenticated Canvas page after broker readiness, reporting content-free `WAITING` progress while the owner signs in through Chrome; cookies stay there. Timeout fails closed without publishing incomplete Canvas data. It streams content-free progress, reports each source separately, and reloads dashboard freshness after partial or failed steps.
 
 The candidate capture contract is schema version 2. A fixed native helper allocates a monotonic run before browser collection and holds the capture lock until a bounded terminal result. Snapshot, current pointer, generation manifest, account identity, and captured-at receipt agree on run ID, generation ID, and snapshot hash. Version 1 history remains private but cannot be imported as verified v2 data. The already running legacy broker receives a transient v1 response adapter; its durable archive remains v2.
 
@@ -86,6 +86,15 @@ into the local coursework model is performed by the reconciliation script, not t
 | 34 | Whether the origin-only file-download host allowlist (row 16) and the origin-only pagination check (row 14) are later tightened, following the plan's Worker-side pattern that also validates an explicit `/api/v1/courses` path prefix on both the initial request and every followed `next` link. | intentionally changed — Decision 7 directs the new helper toward the stricter origin+path-prefix validation and (for downloads) credentialed/host-scoped redirect handling already used by this repo's dormant Worker Canvas client, instead of today's origin-only checks and unauthenticated `redirect:"follow"`. |
 | 35 | Whether course exports are committed to the local store one course at a time as each finishes, or staged for all courses and committed together at the end. | intentionally changed — Decision 7 moves from today's confirmed per-course/per-file best-effort install (row 25) to a stage-everything-then-commit-together model with a single content-addressed-storage-style commit point, rather than incremental per-course partial commits. |
 | 36 | Exact byte-for-byte schema (key names/ordering) of `canvas-export/course-inventory.json` and `canvas-course-report.md` beyond the fields enumerated above. | unknown — confirmed structurally from code, but full key enumeration was not exhaustively traced for every optional field; treated as unknown rather than guessed. |
+
+## Current local Activity date rendering
+
+This note describes the current local dashboard projection, not the private legacy
+reconciliation script documented in row 28. In Activity, a date-only deadline retains its
+calendar day and displays an assumed 11:59 PM. Other date-only fields retain their day without
+an invented time. Datetime values that identify real instants with `Z` or a numeric offset keep
+instant semantics and display in the host's local timezone. Synthetic unit coverage checks the
+date-only and instant cases; this does not establish installed-app behavior.
 
 ## Inbox
 

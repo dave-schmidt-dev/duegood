@@ -99,7 +99,11 @@ it("loads the real bounded capture bundle and imports split PDF row text through
     const progress = vi.fn();
     const result = await capture({
       appDirectory: directory, helperPath, stateHelperPath: helperPath, expectedUserId: 41, protocolVersion: 2,
-      context: { pages: () => [{ url: () => "https://marymount.instructure.com/", isClosed: () => false }] },
+      context: { pages: () => [{
+        url: () => "https://marymount.instructure.com/", isClosed: () => false,
+        // Synthetic authenticated profile response; keep the real capture bundle and PDF path under test.
+        evaluate: async () => true,
+      }] },
       progress, saveGeneration,
       withRunLease: async ({ run }: { run: (id: number) => Promise<{ value: unknown }> }) => (await run(52)).value,
       browserFileDownload: async ({ stagingDirectory }: { stagingDirectory: string }) => {

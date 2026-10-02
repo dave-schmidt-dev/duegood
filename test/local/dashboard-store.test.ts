@@ -1,12 +1,23 @@
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { DashboardStore } from "../../src/local/dashboard-store";
 import type { LocalCourse } from "../../src/local/coursework-store";
 
 const directories: string[] = [];
 const COURSE: LocalCourse = { id: "course-a", courseCode: "SYN-101", title: "Synthetic", color: "#123456", folder: "classes/synthetic-course-a", lastSuccessfulCheckAt: null, syncing: false };
+let originalTimeZone: string | undefined;
+
+beforeAll(() => {
+  originalTimeZone = process.env.TZ;
+  process.env.TZ = "America/New_York";
+});
+
+afterAll(() => {
+  if (originalTimeZone === undefined) delete process.env.TZ;
+  else process.env.TZ = originalTimeZone;
+});
 
 async function setup(): Promise<{ root: string; store: DashboardStore }> {
   const root = await mkdtemp(path.join(tmpdir(), "duegood-dashboard-"));
@@ -89,5 +100,94 @@ describe("DashboardStore", () => {
     await expect(store.profile()).resolves.toEqual({ displayName: "Synthetic Student", avatarPath: "/api/local/profile/avatar" });
     await rm(path.join(root, "canvas-profile-avatar.png"));
     await expect(store.profile()).resolves.toEqual({ displayName: "Synthetic Student" });
+  });
+
+  it("preserves date-only calendar values with 11:59 PM assumed deadline while retaining instant semantics for Z timestamps under America/New_York", async () => {
+    const { root, store } = await setup();
+    const historyPath = path.join(root, "coursework-refresh-history.json");
+    await writeFile(historyPath, JSON.stringify({
+      schema: 1,
+      events: [{
+        id: "tz-regression",
+        status: "succeeded",
+        sourceComplete: true,
+        startedAt: "2030-01-03T00:00:00Z",
+        finishedAt: "2030-01-03T00:01:00Z",
+        summary: { added: 0, updated: 5, removed: 0 },
+        changes: [
+          {
+            kind: "changed",
+            title: "Winter assignment",
+            course: "SYN-101",
+            fields: [
+              { field: "at", before: "2030-01-06", after: "2030-01-13" },
+              { field: "gradedAt", before: "2030-01-06", after: "2030-01-07" },
+              { field: "grade", before: "80%", after: "90%" },
+            ],
+          },
+          {
+            kind: "changed",
+            title: "Summer assignment",
+            course: "SYN-101",
+            fields: [
+              { field: "at", before: "2026-09-20", after: "2026-09-27" },
+              { field: "gradedAt", before: "2026-09-20", after: "2026-09-27" },
+              { field: "score", before: 8, after: 9 },
+            ],
+          },
+          {
+            kind: "changed",
+            title: "Winter midnight Z",
+            course: "SYN-101",
+            fields: [
+              { field: "at", before: "2030-01-04T00:00:00Z", after: "2030-01-04T17:30:00Z" },
+            ],
+          },
+          {
+            kind: "changed",
+            title: "Summer midnight Z",
+            course: "SYN-101",
+            fields: [
+              { field: "at", before: "2026-06-01T00:00:00Z", after: "2026-06-01T16:00:00Z" },
+            ],
+          },
+          {
+            kind: "changed",
+            title: "Invalid date item",
+            course: "SYN-101",
+            fields: [
+              { field: "at", before: "2030-02-31", after: "2030-04-31" },
+            ],
+          },
+        ],
+      }],
+    }));
+
+    const refreshes = await store.refreshes();
+    const run = refreshes.find((refresh) => refresh.id === "tz-regression");
+    expect(run).toBeDefined();
+
+    const winter = run?.changes.find((c) => c.title === "Winter assignment");
+    expect(winter?.detail).toContain("Due date: Jan 6, 2030, 11:59 PM → Jan 13, 2030, 11:59 PM");
+    expect(winter?.detail).toContain("Graded at: Jan 6, 2030 → Jan 7, 2030");
+    expect(winter?.detail).toContain("Grade: 80% → 90%");
+    expect(winter?.detail).not.toContain("7:00 PM");
+
+    const summer = run?.changes.find((c) => c.title === "Summer assignment");
+    expect(summer?.detail).toContain("Due date: Sep 20, 2026, 11:59 PM → Sep 27, 2026, 11:59 PM");
+    expect(summer?.detail).toContain("Graded at: Sep 20, 2026 → Sep 27, 2026");
+    expect(summer?.detail).toContain("Score: 8 → 9");
+    expect(summer?.detail).not.toContain("8:00 PM");
+
+    const winterMidnight = run?.changes.find((c) => c.title === "Winter midnight Z");
+    expect(winterMidnight?.detail).toContain("Due date: Jan 3, 2030, 7:00 PM → Jan 4, 2030, 12:30 PM");
+
+    const summerMidnight = run?.changes.find((c) => c.title === "Summer midnight Z");
+    expect(summerMidnight?.detail).toContain("Due date: May 31, 2026, 8:00 PM → Jun 1, 2026, 12:00 PM");
+
+    const invalid = run?.changes.find((c) => c.title === "Invalid date item");
+    expect(invalid?.detail).toContain("Due date: 2030-02-31 → 2030-04-31");
+    expect(invalid?.detail).not.toContain("Mar 3");
+    expect(invalid?.detail).not.toContain("May 1");
   });
 });

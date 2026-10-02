@@ -337,6 +337,45 @@ describe("dashboard production UI contract", () => {
     expect(words(dashboard)).toContain("No existing data was removed.");
   });
 
+  it("labels calendar activity by its deadline-only scope and preserves held counts", () => {
+    const calendar = parseDashboard({ ...DATA, refreshes: [{ id: "calendar-run", source: "calendar", startedAt: NOW, finishedAt: NOW, status: "partial", summary: "Calendar deadlines only · 0 added · 0 updated · 2 held", added: 0, changed: 0, removed: 0, held: 2, changes: [{ kind: "notice", title: "Calendar items held", detail: "2 changes were held for review." }] }] });
+    const calendarActivity = { ...state("activity"), desktop: { ...state("activity").desktop!, refreshAvailable: false, icalRefreshAvailable: true }, data: calendar };
+    const dashboard = renderDashboard(calendarActivity, handlers);
+    expect(words(dashboard)).toContain("Calendar refresh ·");
+    expect(words(dashboard)).toContain("Calendar refresh updates deadlines only. Grades, Inbox, and library items keep the prior Canvas capture.");
+    expect(words(dashboard)).toContain("2 Held");
+    expect(words(dashboard)).not.toContain("this run may not include complete Canvas history");
+    const activityButton = findAll(dashboard, (item) => Boolean(item.attrs?.class?.includes("more-action refresh-button")))[0];
+    expect(activityButton?.text).toBe("Refresh calendar");
+    const runningActivity = renderDashboard({ ...calendarActivity, refreshState: "running" }, handlers);
+    expect(findAll(runningActivity, (item) => Boolean(item.attrs?.class?.includes("more-action refresh-button")))[0]?.text).toBe("Refreshing calendar…");
+
+    const reopened = renderDashboard({ ...state("timeline"), desktop: { ...state("timeline").desktop!, refreshAvailable: false, icalRefreshAvailable: true }, data: calendar }, handlers);
+    expect(findAll(reopened, (item) => item.attrs?.class === "sync-note")[0]?.text).toContain("Calendar deadlines only");
+    expect(findAll(reopened, (item) => Boolean(item.attrs?.class?.includes("refresh-button")))[0]?.attrs?.title).toContain("Calendar deadlines only");
+    expect(findAll(reopened, (item) => Boolean(item.attrs?.class?.includes("refresh-button")))[0]?.text).toBe("Refresh calendar");
+    const canvas = renderDashboard({ ...state("timeline"), desktop: { ...state("timeline").desktop!, refreshAvailable: true, icalRefreshAvailable: false }, data: { ...DATA, refreshAvailable: true } }, handlers);
+    expect(findAll(canvas, (item) => Boolean(item.attrs?.class?.includes("refresh-button")))[0]?.text).toBe("Refresh");
+    const canvasActivity = renderDashboard({ ...state("activity"), desktop: { ...state("activity").desktop!, refreshAvailable: true, icalRefreshAvailable: false }, data: { ...DATA, refreshAvailable: true } }, handlers);
+    expect(findAll(canvasActivity, (item) => Boolean(item.attrs?.class?.includes("more-action refresh-button")))[0]?.text).toBe("Refresh now");
+    const failed = parseDashboard({ refreshes: [{ id: "failed-calendar", startedAt: NOW, source: "calendar", status: "failed" }, { id: "failed-inbox", startedAt: NOW, source: "inbox", status: "failed" }] });
+    expect(failed.refreshes.map((refresh) => refresh.summary)).toEqual([
+      "Calendar refresh failed; prior deadlines were kept.",
+      "Inbox update failed; existing messages were kept.",
+    ]);
+  });
+
+  it("keeps Canvas freshness status visible across every dashboard page", () => {
+    const data = parseDashboard({ ...DATA, sourceStatus: { state: "not_synced", label: "Desktop app store", detail: "Canvas capture unverified", coursework: "not_synced", inbox: "not_synced", library: "not_synced", browserFreshness: { current: false, reason: "capture-unverified", runId: null, observedAt: null, sections: [] } } });
+    expect(data.sourceStatus).toMatchObject({ coursework: "not_synced", inbox: "not_synced", library: "not_synced", browserFreshness: { current: false } });
+    for (const route of DASHBOARD_ROUTES) {
+      const dashboard = renderDashboard({ ...state(route.page), data }, handlers);
+      const notice = findAll(dashboard, (item) => item.attrs?.["data-source-freshness"] === "stale")[0];
+      expect(words(notice!)).toContain("Canvas coursework and grades, Inbox, library items may be stale or incomplete.");
+      expect(words(notice!)).toContain("independent calendar and personal records remain");
+    }
+  });
+
   it("keeps refresh progress and terminal feedback in the top bar on every page", () => {
     const running = renderDashboard({ ...state("timeline"), refreshState: "running" }, handlers);
     const runningNote = findAll(running, (item) => item.attrs?.class === "sync-note")[0];
@@ -613,11 +652,22 @@ describe("desktop transport and first-run screen", () => {
         receiveProgress?.({ phase: "private coursework title" });
         return { status: "complete", updatedAt: "2026-09-25T12:00:00Z", added: 2, updated: 1, held: 3, removed: 0 };
       }
+      if (command === "start_full_refresh") {
+        receiveProgress?.({ phase: "browser-capture" });
+        receiveProgress?.({ phase: "private course title" });
+        return { status: "incomplete", browserStatus: "incomplete", calendarStatus: "complete", gapCount: 2, calendarAdded: 1, calendarUpdated: 0, calendarHeld: 3, updatedAt: null, errorCode: "coverage-gap" };
+      }
       throw new Error(`unexpected ${command}`);
     }, (onMessage) => { receiveProgress = onMessage; return { channel: "calendar" }; });
     await expect(transport.startIcalRefresh((progress) => phases.push(progress.phase))).resolves.toMatchObject({ added: 2, updated: 1, held: 3, removed: 0 });
+    const fullPhases: string[] = [];
+    await expect(transport.startFullRefresh((progress) => fullPhases.push(progress.phase))).resolves.toMatchObject({ status: "incomplete", browserStatus: "incomplete", calendarStatus: "complete", gapCount: 2, calendarHeld: 3, errorCode: "coverage-gap" });
     expect(phases).toEqual(["waiting-for-calendar"]);
-    expect(calls).toEqual([["start_ical_refresh", { onProgress: { channel: "calendar" } }]]);
+    expect(fullPhases).toEqual(["browser-capture"]);
+    expect(calls).toEqual([
+      ["start_ical_refresh", { onProgress: { channel: "calendar" } }],
+      ["start_full_refresh", { onProgress: { channel: "calendar" } }],
+    ]);
   });
 
   it("validates native promotion, demotion, and frozen-export commands without accepting paths or confirmation shortcuts", async () => {
@@ -908,6 +958,15 @@ describe("desktop transport and first-run screen", () => {
     expect(findAll(running, (item) => item.tag === "button" && item.attrs?.class?.includes("refresh-button") === true)[0]?.attrs).toMatchObject({ disabled: "", "aria-busy": "true" });
     const calendar = renderDashboard({ ...state("timeline"), desktop: { ...desktop, icalRefreshAvailable: true }, data: { ...DATA, refreshAvailable: true }, refreshState: "running", refreshProgress: { phase: "waiting-for-calendar", completed: 0, total: null, bytesDone: null } }, handlers);
     expect(findAll(calendar, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Calendar refresh · Waiting for calendar");
+    const fullDesktop = { ...desktop, browserRefreshAvailable: true, refreshAvailable: false, icalRefreshAvailable: true };
+    const fullMore = renderDashboard({ ...state("more"), desktop: fullDesktop, data: { ...DATA, refreshAvailable: true } }, handlers);
+    expect(words(fullMore)).toContain("Full refresh is available. It reads Canvas through the bundled browser and then updates calendar deadlines; Canvas may ask you to sign in.");
+    expect(findAll(fullMore, (item) => item.tag === "input" && item.attrs?.["aria-label"] === "Enable Canvas refresh")).toHaveLength(0);
+    const fullRunning = renderDashboard({ ...state("timeline"), desktop: fullDesktop, data: { ...DATA, refreshAvailable: true }, refreshState: "running", refreshProgress: { phase: "browser-import", completed: 0, total: null, bytesDone: null } }, handlers);
+    expect(findAll(fullRunning, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Canvas and calendar refresh · Importing Canvas coursework");
+    expect(findAll(fullRunning, (item) => item.tag === "button" && item.attrs?.class?.includes("refresh-button") === true)[0]?.attrs?.title).toContain("calendar deadlines");
+    const fullActivity = renderDashboard({ ...state("activity"), desktop: fullDesktop, data: { ...DATA, refreshAvailable: true }, refreshState: "partial", refreshDetail: "Full refresh partial. Canvas incomplete (2 coverage gaps); calendar complete (1 added, 0 updated, 3 held)." }, handlers);
+    expect(words(fullActivity)).toContain("Full refresh partial. Canvas incomplete (2 coverage gaps); calendar complete (1 added, 0 updated, 3 held).");
   });
 
   it("routes native mutations, avatar bytes, resource IDs, clipboard, and snapshots through narrow commands", async () => {
