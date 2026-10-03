@@ -171,12 +171,19 @@ export function createCanvasFileCapture({ downloadFile, progress }) {
     const candidate = remember(item);
     if (candidate === undefined) return;
     if (attempted.has(candidate.fileId)) {
+      const lockedGap = receipts.some((receipt) => receipt.fileId === candidate.fileId
+        && receipt.status === "gap" && receipt.reason === "locked");
       if (candidate.revisionConflict && !candidate.conflictRetried
-          && reusedStagedFiles.get(candidate.fileId) !== undefined) {
+          && (reusedStagedFiles.get(candidate.fileId) !== undefined || lockedGap)) {
         // A later duplicate makes the revision ambiguous, so the normal downloader must fetch bytes.
         candidate.conflictRetried = true;
         reusedStagedFiles.delete(candidate.fileId);
         dropStagedReceipt(candidate.fileId);
+        if (lockedGap) {
+          const index = receipts.findIndex((receipt) => receipt.fileId === candidate.fileId
+            && receipt.status === "gap" && receipt.reason === "locked");
+          if (index >= 0) receipts.splice(index, 1);
+        }
         await attemptDownload(candidate, undefined);
       }
       return;
@@ -184,6 +191,11 @@ export function createCanvasFileCapture({ downloadFile, progress }) {
     if (candidate.invalidSize || candidate.expectedSize !== null && candidate.expectedSize > MAX_FILE_BYTES) {
       attempted.add(candidate.fileId);
       gap(candidate.fileId, "invalid-or-oversized-file-size");
+      return;
+    }
+    if (candidate.revision?.locked === true || candidate.revision?.lockedForUser === true) {
+      attempted.add(candidate.fileId);
+      gap(candidate.fileId, "locked");
       return;
     }
     if (candidate.sourceUrl === undefined) return;

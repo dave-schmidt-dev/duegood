@@ -1,6 +1,6 @@
 [package]
 name = "duegood-desktop"
-version = "0.2.0"
+version = "0.3.0"
 description = "Due Good desktop application: local coursework store, legacy import, and read-only dashboard commands."
 license = "MIT"
 edition = "2021"

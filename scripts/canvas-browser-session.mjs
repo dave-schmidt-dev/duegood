@@ -8,6 +8,7 @@ import { chromium } from "@playwright/test";
 import { runCanvasBrowserProbe } from "./canvas-browser-probe.mjs";
 import { readCanvasIdentity } from "./canvas-browser-identity.mjs";
 import { loadCurrentCanvasCapture } from "./canvas-browser-runtime-loader.mjs";
+import { isCanvasCoverageEntry, summarizeCanvasRefreshScope } from "./canvas-browser-refresh-scope.mjs";
 export { runCanvasCapture } from "./canvas-browser-session-capture.mjs";
 
 const ORIGIN = "https://marymount.instructure.com";
@@ -144,8 +145,7 @@ function validateCapture(snapshot, expectedUserId) {
     throw new Error("CAPTURE_IDENTITY_OR_SHAPE_REJECTED");
   }
   if (snapshot.coverage.some((entry) => !isRecord(entry) || typeof entry.endpoint !== "string"
-      || !["complete", "gap"].includes(entry.status)
-      || (entry.status === "gap" && !["forbidden-optional", "disabled", "not-attempted", "not-found", "request-failed"].includes(entry.reason)))) {
+      || !isCanvasCoverageEntry(entry))) {
     throw new Error("CAPTURE_COVERAGE_INCOMPLETE");
   }
   const activeInventory = snapshot.resources.find((resource) => resource?.endpoint === "coursesActive" && resource.courseId === null);
@@ -175,6 +175,7 @@ function validateCapture(snapshot, expectedUserId) {
     if (!Number.isSafeInteger(itemCount)) throw new Error("CAPTURE_BUDGET_EXCEEDED");
   }
   const partial = { ...snapshot, complete: false, coverage };
+  const dailyScope = summarizeCanvasRefreshScope(partial);
   const serialized = `${JSON.stringify(partial)}\n`;
   if (Buffer.byteLength(serialized) > MAX_SNAPSHOT_BYTES) throw new Error("CAPTURE_BUDGET_EXCEEDED");
   return {
@@ -182,7 +183,9 @@ function validateCapture(snapshot, expectedUserId) {
     serialized,
     resourceCount: snapshot.resources.length,
     itemCount,
-    gapCount: coverage.filter((entry) => entry.status === "gap").length,
+    gapCount: coverage.filter((entry) => entry.status !== "complete").length,
+    dailyGapCount: dailyScope.requiredGapCount,
+    omissionCount: dailyScope.omissionCount,
   };
 }
 
@@ -469,6 +472,8 @@ export async function startSessionBroker({
               resourceCount: validated.resourceCount,
               itemCount: validated.itemCount,
               gapCount: validated.gapCount,
+              dailyGapCount: validated.dailyGapCount,
+              omissionCount: validated.omissionCount,
               fileBodiesIncomplete: true,
             });
           }

@@ -12,10 +12,13 @@ import { pathToFileURL } from "node:url";
 const COURSES = [
   { key: "2048", title: "Applied Network Defense" },
   { key: "31", title: "Data Ethics in Society" },
-  { key: "5001", title: "Statistics for Research and Applied Measurement" },
+  { key: "5001", title: "Statistics for Research, Measurement, and Applied Analytics" },
   { key: "777", title: "" },
+  { key: "6002", title: "Secure Cloud Operations and Incident Response" },
 ] as const;
-const EXPECTED_LABELS = ["Applied Network Defense", "Data Ethics in Society", "Statistics for Research and Applied Measurement", "Course name unknown"];
+type SyntheticCourse = (typeof COURSES)[number];
+// Matches orderedCourses(): known IT codes first, then normalized course-code order (6002 before 777).
+const EXPECTED_LABELS = ["Applied Network Defense", "Data Ethics in Society", "Statistics for Research, Measurement, and Applied Analytics", "Secure Cloud Operations and Incident Response", "Course name unknown"];
 const ITEMS: readonly { readonly course: string; readonly day: number }[] = [
   { course: "2048", day: 0 },
   { course: "31", day: 1 },
@@ -29,15 +32,17 @@ const ITEMS: readonly { readonly course: string; readonly day: number }[] = [
   { course: "31", day: 8 },
   { course: "5001", day: 9 },
   { course: "2048", day: 9 },
+  { course: "6002", day: 10 },
 ];
 
-const at = (days: number): string => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 16);
+const assignmentAt = (days: number): string => new Date(Date.now() + days * 86_400_000).toISOString();
 
-function courseworkDocument(): string {
+function courseworkDocument(courses: readonly SyntheticCourse[]): string {
+  const courseCodes = new Set<string>(courses.map((course) => course.key));
   return JSON.stringify({
     generated: new Date().toISOString(),
-    courses: COURSES.map((course) => ({ key: course.key, code: course.key, ...(course.title === "" ? {} : { title: course.title }), color: "#3a6ea5", folder: course.key })),
-    items: ITEMS.map((item, index) => ({ id: `syn-item-${index}`, course: item.course, kind: "assignment", title: `Synthetic assignment ${String(index + 1)}`, at: at(item.day), submissionStatus: "unsubmitted", done: false })),
+    courses: courses.map((course) => ({ key: course.key, code: course.key, ...(course.title === "" ? {} : { title: course.title }), color: "#3a6ea5", folder: course.key })),
+    items: ITEMS.filter((item) => courseCodes.has(item.course)).map((item, index) => ({ id: `syn-item-${index}`, course: item.course, kind: "assignment", title: `Synthetic assignment ${String(index + 1)}`, at: assignmentAt(item.day + 0.5), submissionStatus: "unsubmitted", done: false })),
   });
 }
 
@@ -85,17 +90,71 @@ function installTauriMock(coursework: string): void {
   };
 }
 
-async function openTimeline(page: Page): Promise<void> {
-  await page.addInitScript(installTauriMock, courseworkDocument());
+async function openTimeline(page: Page, courses: readonly SyntheticCourse[] = COURSES): Promise<void> {
+  await page.addInitScript(installTauriMock, courseworkDocument(courses));
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
-  await expect(page.locator(".lane-header .lane-label")).toHaveCount(COURSES.length);
+  await expect(page.locator(".lane-header .lane-label")).toHaveCount(courses.length);
 }
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 }
+
+test("keeps header columns aligned in wrapped three and five course lanes", async ({ page }) => {
+  for (const width of [1040, 1160]) {
+    for (const courses of [COURSES.slice(0, 3), COURSES]) {
+      await page.setViewportSize({ width, height: 900 });
+      await openTimeline(page, courses);
+      await expectNoHorizontalOverflow(page);
+
+      const layout = await page.evaluate(() => {
+        const parent = document.querySelector<HTMLElement>(".timeline-layout");
+        const timeline = document.querySelector<HTMLElement>(".timeline-shell");
+        const rail = document.querySelector<HTMLElement>(".timeline-rail");
+        if (parent === null || timeline === null || rail === null) return null;
+        const parentRect = parent.getBoundingClientRect();
+        const timelineRect = timeline.getBoundingClientRect();
+        const railRect = rail.getBoundingClientRect();
+        return { parentWidth: parentRect.width, parentRight: parentRect.right, timelineRight: timelineRect.right, railLeft: railRect.left, railRight: railRect.right, railWidth: railRect.width };
+      });
+      expect(layout).not.toBeNull();
+      expect(layout?.railLeft ?? 0).toBeGreaterThanOrEqual((layout?.timelineRight ?? 0) - 0.5);
+      expect(layout?.railRight ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual((layout?.parentRight ?? 0) + 0.5);
+      expect(layout?.railWidth ?? 0).toBeGreaterThanOrEqual(220);
+      expect(layout?.railWidth ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual((layout?.parentWidth ?? 0) * 0.3);
+
+      const deltas = await page.evaluate(() => {
+        const headerCells = [...document.querySelectorAll(".lane-header .lane-label")].map((cell) => cell.getBoundingClientRect());
+        const firstDay = document.querySelector(".day-slot .course-lanes");
+        const lanes = firstDay === null ? [] : [...firstDay.querySelectorAll(".course-lane")].map((lane) => lane.getBoundingClientRect());
+        return headerCells.map((cell, index) => {
+          const lane = lanes[index];
+          return lane === undefined ? null : Math.max(Math.abs(cell.left - lane.left), Math.abs(cell.right - lane.right));
+        });
+      });
+      expect(deltas).toHaveLength(courses.length);
+      expect(deltas.every((delta) => delta !== null && delta <= 0.5)).toBe(true);
+      const wrappedTitleCount = await page.locator(".lane-label b").evaluateAll((labels) => labels.filter((label) => {
+        const lineHeight = Number.parseFloat(getComputedStyle(label).lineHeight);
+        return label.getBoundingClientRect().height >= lineHeight * 1.8;
+      }).length);
+      expect(wrappedTitleCount, `${width}px with ${courses.length} courses`).toBeGreaterThan(0);
+      const thirdTitleWrapped = await page.locator(".lane-label b").nth(2).evaluate((label) => {
+        const lineHeight = Number.parseFloat(getComputedStyle(label).lineHeight);
+        return label.getBoundingClientRect().height >= lineHeight * 1.8;
+      });
+      expect(thirdTitleWrapped, `third course title wraps at ${width}px with ${courses.length} courses`).toBe(true);
+
+      const railDates = await page.locator(".rail-due-row .rail-date").evaluateAll((dates) => dates.map((date) => (date as HTMLTimeElement).dateTime));
+      expect(railDates.length).toBeGreaterThan(0);
+      expect(railDates).toEqual([...railDates].sort((left, right) => Date.parse(left) - Date.parse(right)));
+      await expect(page.locator(".rail-due-row .rail-date strong").first()).toBeVisible();
+      await expect(page.locator(".rail-due-row .rail-course").first()).toHaveText("2048");
+    }
+  }
+});
 
 for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "mobile", width: 390, height: 844 }] as const) {
   test.describe(`timeline lane headers at ${viewport.name} width`, () => {
@@ -110,7 +169,7 @@ for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "
       await expect(page.locator(".lane-header")).not.toContainText("2048");
       await expect(page.locator(".lane-header")).not.toContainText("5001");
       // Course filters retain their Canvas course codes.
-      await expect(page.locator(".filters .filter")).toHaveText(["All courses", "2048", "31", "5001", "777"]);
+      await expect(page.locator(".filters .filter")).toHaveText(["All courses", "2048", "31", "5001", "6002", "777"]);
       await expectNoHorizontalOverflow(page);
     });
 
@@ -159,10 +218,33 @@ for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "
 
       // Lengthen the rail below the timeline, then scroll past the timeline end.
       await page.locator(".rail-more summary").click();
+      await page.locator(".timeline-rail").evaluate((rail) => {
+        const timeline = document.querySelector<HTMLElement>(".timeline-shell");
+        if (timeline !== null) rail.style.minHeight = `${timeline.getBoundingClientRect().height + window.innerHeight}px`;
+      });
       await page.evaluate(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "instant" }));
-      const releasedTop = await page.evaluate(() => document.querySelector(".lane-header")?.getBoundingClientRect().top ?? null);
+      const releaseLayout = await page.evaluate(() => {
+        const scrollRoot = document.scrollingElement;
+        const shell = document.querySelector<HTMLElement>(".timeline-shell");
+        const header = document.querySelector<HTMLElement>(".lane-header");
+        const rect = (element: HTMLElement | null) => {
+          if (element === null) return null;
+          const bounds = element.getBoundingClientRect();
+          return { top: bounds.top, bottom: bounds.bottom, height: bounds.height };
+        };
+        return {
+          scrollRoot: scrollRoot === null ? null : `${scrollRoot.tagName.toLowerCase()}${scrollRoot.id === "" ? "" : `#${scrollRoot.id}`}${scrollRoot.className === "" ? "" : `.${String(scrollRoot.className).replaceAll(" ", ".")}`}`,
+          scrollTop: scrollRoot?.scrollTop ?? null,
+          maxScrollTop: scrollRoot === null ? null : scrollRoot.scrollHeight - scrollRoot.clientHeight,
+          viewportHeight: window.innerHeight,
+          shell: rect(shell),
+          header: rect(header),
+          shellOverflow: shell === null ? null : getComputedStyle(shell).overflow,
+        };
+      });
+      const releasedTop = releaseLayout.header?.top ?? null;
       expect(releasedTop).not.toBeNull();
-      expect(releasedTop ?? 0).toBeLessThan(0);
+      expect(releasedTop ?? 0, JSON.stringify(releaseLayout)).toBeLessThan(0);
     });
   });
 }

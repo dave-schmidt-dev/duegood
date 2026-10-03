@@ -161,17 +161,37 @@ fn missing_profile_or_required_list_coverage_omits_replacement_documents() {
 
 #[test]
 fn a_gap_in_a_required_inbox_list_omits_the_inbox_document() {
+    for status in ["gap", "incomplete"] {
+        let mut snapshot = account_snapshot();
+        let row = snapshot["coverage"]
+            .as_array_mut()
+            .expect("coverage")
+            .iter_mut()
+            .find(|row| row["endpoint"] == "inboxAll")
+            .expect("inboxAll coverage");
+        row["status"] = Value::from(status);
+        let documents = project_account_documents(&snapshot).expect("partial snapshot is projectable");
+        assert!(documents.contains_key(PROFILE));
+        assert!(!documents.contains_key(INBOX));
+    }
+}
+
+#[test]
+fn incomplete_expected_conversation_detail_is_kept_as_an_incomplete_inbox() {
     let mut snapshot = account_snapshot();
     let row = snapshot["coverage"]
         .as_array_mut()
         .expect("coverage")
         .iter_mut()
-        .find(|row| row["endpoint"] == "inboxAll")
-        .expect("inboxAll coverage");
-    row["status"] = Value::from("gap");
-    let documents = project_account_documents(&snapshot).expect("partial snapshot is projectable");
-    assert!(documents.contains_key(PROFILE));
-    assert!(!documents.contains_key(INBOX));
+        .find(|row| row["endpoint"] == "conversation")
+        .expect("conversation coverage");
+    row["status"] = Value::from("incomplete");
+
+    let documents = project_account_documents(&snapshot).expect("partial inbox remains projectable");
+    let inbox = document(&documents, INBOX);
+    assert_eq!(inbox["complete"], false);
+    assert_eq!(inbox["rejected"], 1);
+    assert_eq!(inbox["conversations"][0]["historyComplete"], true);
 }
 
 #[test]

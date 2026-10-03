@@ -7,6 +7,7 @@ export interface FullRefreshResult {
   readonly browserStatus: "complete" | "incomplete" | "failed";
   readonly calendarStatus: "complete" | "incomplete" | "failed" | "unavailable";
   readonly gapCount: number;
+  readonly omissionCount: number;
   readonly calendarAdded: number;
   readonly calendarUpdated: number;
   readonly calendarHeld: number;
@@ -26,11 +27,12 @@ export function parseFullRefreshResult(value: unknown): FullRefreshResult | null
   const status = row.status;
   const browserStatus = row.browserStatus;
   const calendarStatus = row.calendarStatus;
-  const counts = [row.gapCount, row.calendarAdded, row.calendarUpdated, row.calendarHeld];
+  const counts = [row.gapCount, row.omissionCount, row.calendarAdded, row.calendarUpdated, row.calendarHeld];
   if ((status !== "complete" && status !== "incomplete") ||
       (browserStatus !== "complete" && browserStatus !== "incomplete" && browserStatus !== "failed") ||
       (calendarStatus !== "complete" && calendarStatus !== "incomplete" && calendarStatus !== "failed" && calendarStatus !== "unavailable") ||
       !counts.every((count) => typeof count === "number" && Number.isSafeInteger(count) && count >= 0) ||
+      (row.omissionCount as number) > 100_000 ||
       (row.updatedAt !== null && typeof row.updatedAt !== "string") ||
       (row.errorCode !== undefined && row.errorCode !== null && (typeof row.errorCode !== "string" || !/^[a-z0-9][a-z0-9_-]{0,79}$/.test(row.errorCode)))) return null;
   return {
@@ -38,6 +40,7 @@ export function parseFullRefreshResult(value: unknown): FullRefreshResult | null
     browserStatus,
     calendarStatus,
     gapCount: row.gapCount as number,
+    omissionCount: row.omissionCount as number,
     calendarAdded: row.calendarAdded as number,
     calendarUpdated: row.calendarUpdated as number,
     calendarHeld: row.calendarHeld as number,

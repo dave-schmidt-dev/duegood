@@ -8,6 +8,23 @@ use super::{
     ActiveCourseCoverage, BundleError, CaptureCoverage, MAX_ACTIVE_COURSES, REQUIRED_ENDPOINTS,
 };
 
+const COVERAGE_GAP_REASONS: [&str; 14] = [
+    "capture-budget",
+    "detail-budget",
+    "disabled",
+    "forbidden-optional",
+    "invalid-slug",
+    "locked",
+    "not-applicable",
+    "not-attempted",
+    "not-found",
+    "pagination-budget",
+    "parent-unavailable",
+    "request-failed",
+    "unsupported",
+    "unpublished",
+];
+
 pub(super) fn validate_active_coverage(
     snapshot: &Value,
 ) -> Result<(Vec<ActiveCourseCoverage>, Vec<CaptureCoverage>), BundleError> {
@@ -191,16 +208,12 @@ pub(super) fn validate_active_coverage(
                 .get("reason")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
-            if reason.as_deref().is_some_and(|value| {
-                ![
-                    "forbidden-optional",
-                    "disabled",
-                    "not-attempted",
-                    "not-found",
-                    "request-failed",
-                ]
-                .contains(&value)
-            }) {
+            if (status == "complete" && reason.is_some())
+                || (status != "complete"
+                    && !reason
+                        .as_deref()
+                        .is_some_and(|value| COVERAGE_GAP_REASONS.contains(&value)))
+            {
                 return Err(BundleError::InvalidSnapshot);
             }
             Ok(CaptureCoverage {

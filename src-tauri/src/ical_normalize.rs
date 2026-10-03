@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use chrono::NaiveDate;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -35,6 +36,11 @@ fn checkpoint(id: &str, kind: &str) -> bool {
         return false;
     };
     numeric_id(assignment) && suffix == kind
+}
+
+fn valid_date(value: &str) -> bool {
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .is_ok_and(|date| date.format("%Y-%m-%d").to_string() == value)
 }
 
 fn identifier(parts: &[&str]) -> String {
@@ -152,7 +158,24 @@ pub(super) fn normalize_canvas_ical(
             );
             continue;
         };
+        let explicit = event
+            .url
+            .is_none()
+            .then(|| options.explicit_uid_mappings.get(uid))
+            .flatten();
         let parsed_start = parse_start(start)?;
+        if let Some(expected_date) = explicit.and_then(|mapping| mapping.expected_date.as_deref()) {
+            if !matches!(&parsed_start, StartTime::Date(date) if date == expected_date) {
+                add_held(
+                    &mut held,
+                    event,
+                    link.as_ref(),
+                    "ambiguous-event",
+                    candidates,
+                );
+                continue;
+            }
+        }
         let at = match parsed_start {
             StartTime::Date(value) => IcalDateValue {
                 kind: "date",
@@ -188,11 +211,6 @@ pub(super) fn normalize_canvas_ical(
                 zone,
             },
         };
-        let explicit = event
-            .url
-            .is_none()
-            .then(|| options.explicit_uid_mappings.get(uid))
-            .flatten();
         if link.is_none() && explicit.is_none() {
             add_held(&mut held, event, None, "unsupported-event", candidates);
             continue;
@@ -227,6 +245,13 @@ pub(super) fn normalize_canvas_ical(
                 continue;
             }
             if !valid_identity(explicit.kind, &explicit.stable_identity) {
+                return fail(IcalNormalizationError::InvalidInput);
+            }
+            if explicit
+                .expected_date
+                .as_deref()
+                .is_some_and(|date| !valid_date(date))
+            {
                 return fail(IcalNormalizationError::InvalidInput);
             }
             (

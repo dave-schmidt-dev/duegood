@@ -15,6 +15,8 @@ use crate::store::{node_json_bytes, sha256_hex, Store, StoreCondition, StoreErro
 
 #[path = "ical_apply_bootstrap.rs"]
 mod bootstrap;
+#[path = "ical_confirmation.rs"]
+mod confirmation;
 #[path = "ical_apply_facts.rs"]
 mod facts;
 #[path = "ical_apply_history.rs"]
@@ -118,7 +120,7 @@ pub(crate) fn apply_normalization(
         .map_err(|_| StoreError::Invalid("the native coursework document is invalid"))?;
     let mut document = prior_document.clone();
     let result = apply_to_document(&mut document, options, finished_at, normalized)?;
-    if result.changed {
+    if result.source_facts_changed {
         crate::snapshots::snapshot_before_refresh_locked(store, "ical-import")?;
     }
     let diff = crate::history::diff_coursework(&prior_document, &document)?;
@@ -302,6 +304,139 @@ mod tests {
         assert_eq!(options.courses[0].canvas_course_id, "900001");
         assert!(options.verified_events.is_empty());
         assert!(options.explicit_uid_mappings.is_empty());
+    }
+
+    #[test]
+    fn normalization_options_loads_only_current_course_bound_calendar_metadata() {
+        let (_root, store) = store("authoritative");
+        let coursework_path = store.store_dir().join(COURSEWORK_FILE);
+        let mut coursework: Value =
+            serde_json::from_slice(&fs::read(&coursework_path).unwrap()).unwrap();
+        coursework["courses"][0]["folder"] = json!("classes/canvas-900001");
+        atomic_write(&coursework_path, &node_json_bytes(&coursework)).unwrap();
+
+        let course_folder = store.store_dir().join("classes");
+        create_private_dir(&course_folder, false).unwrap();
+        let course_folder = course_folder.join("canvas-900001");
+        create_private_dir(&course_folder, false).unwrap();
+        let export_folder = course_folder.join("canvas-export");
+        create_private_dir(&export_folder, false).unwrap();
+        let api_folder = export_folder.join("api");
+        create_private_dir(&api_folder, false).unwrap();
+        let metadata_path = api_folder.join("calendar-event-identities.json");
+        let generation_id = "b".repeat(32);
+        atomic_write(
+            &store.store_dir().join("browser-capture-status.json"),
+            &node_json_bytes(&json!({
+                "format": "duegood-browser-import",
+                "version": 1,
+                "runId": 72,
+                "generationId": generation_id,
+                "userId": 7001
+            })),
+        )
+        .unwrap();
+        let metadata = json!({
+            "format": "duegood-calendar-event-identities",
+            "version": 1,
+            "runId": 72,
+            "generationId": generation_id,
+            "userId": 7001,
+            "origin": CANVAS_ORIGIN,
+            "institution": "synthetic.institution.invalid",
+            "courseKey": "course-a",
+            "canvasCourseId": 900001,
+            "coverage": {
+                "endpoint": "calendarEvents",
+                "contextCode": "course_900001",
+                "status": "complete"
+            },
+            "events": [{
+                "id": "83",
+                "uid": "event-calendar-event-83",
+                "contextCode": "course_900001",
+                "type": "event",
+                "allDay": true,
+                "startAt": "2030-01-20T00:00:00Z"
+            }]
+        });
+        atomic_write(&metadata_path, &node_json_bytes(&metadata)).unwrap();
+
+        let options = normalization_options(&store).unwrap();
+        let mapping = &options.explicit_uid_mappings["event-calendar-event-83"];
+        assert_eq!(mapping.course_key, "course-a");
+        assert_eq!(mapping.stable_identity, "event:83");
+        assert_eq!(mapping.kind, crate::ical::EventKind::OtherEvent);
+        assert_eq!(mapping.expected_date.as_deref(), Some("2030-01-20"));
+
+        // A concurrent refresh may replace the API metadata after the feed fetch captured these
+        // options. Reject that stale identity before publishing any coursework changes.
+        let coursework_before = fs::read(&coursework_path).unwrap();
+        let mut changed_date = metadata.clone();
+        changed_date["events"][0]["startAt"] = json!("2030-01-21T00:00:00Z");
+        atomic_write(&metadata_path, &node_json_bytes(&changed_date)).unwrap();
+        assert!(matches!(
+            apply_normalization(
+                &store,
+                &options,
+                "2030-01-10T12:00:00Z",
+                &normalized(Vec::new())
+            ),
+            Err(IcalApplyError::Store(StoreError::StoreChanged))
+        ));
+        assert_eq!(fs::read(&coursework_path).unwrap(), coursework_before);
+
+        // A context change invalidates the source mapping and must fail the same acceptance guard.
+        let mut changed_context = metadata.clone();
+        changed_context["events"][0]["contextCode"] = json!("course_900002");
+        atomic_write(&metadata_path, &node_json_bytes(&changed_context)).unwrap();
+        assert!(matches!(
+            apply_normalization(
+                &store,
+                &options,
+                "2030-01-10T12:00:00Z",
+                &normalized(Vec::new())
+            ),
+            Err(IcalApplyError::Store(StoreError::StoreChanged))
+        ));
+        assert_eq!(fs::read(&coursework_path).unwrap(), coursework_before);
+
+        let status_path = store.store_dir().join("browser-capture-status.json");
+        atomic_write(&metadata_path, &node_json_bytes(&metadata)).unwrap();
+        let mut valid_status = json!({
+            "format": "duegood-browser-import",
+            "version": 1,
+            "runId": 72,
+            "generationId": generation_id,
+            "userId": 7001
+        });
+        atomic_write(&status_path, &node_json_bytes(&valid_status)).unwrap();
+        assert!(normalization_options(&store)
+            .unwrap()
+            .explicit_uid_mappings
+            .contains_key("event-calendar-event-83"));
+
+        let mut stale_status = valid_status.clone();
+        stale_status["generationId"] = json!("c".repeat(32));
+        atomic_write(&status_path, &node_json_bytes(&stale_status)).unwrap();
+        assert!(normalization_options(&store)
+            .unwrap()
+            .explicit_uid_mappings
+            .is_empty());
+
+        valid_status["userId"] = json!(7002);
+        atomic_write(&status_path, &node_json_bytes(&valid_status)).unwrap();
+        assert!(normalization_options(&store)
+            .unwrap()
+            .explicit_uid_mappings
+            .is_empty());
+
+        valid_status["userId"] = json!(7001);
+        atomic_write(&status_path, &node_json_bytes(&valid_status)).unwrap();
+        assert!(normalization_options(&store)
+            .unwrap()
+            .explicit_uid_mappings
+            .contains_key("event-calendar-event-83"));
     }
 
     #[test]

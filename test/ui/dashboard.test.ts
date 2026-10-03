@@ -655,13 +655,13 @@ describe("desktop transport and first-run screen", () => {
       if (command === "start_full_refresh") {
         receiveProgress?.({ phase: "browser-capture" });
         receiveProgress?.({ phase: "private course title" });
-        return { status: "incomplete", browserStatus: "incomplete", calendarStatus: "complete", gapCount: 2, calendarAdded: 1, calendarUpdated: 0, calendarHeld: 3, updatedAt: null, errorCode: "coverage-gap" };
+        return { status: "incomplete", browserStatus: "incomplete", calendarStatus: "complete", gapCount: 2, omissionCount: 0, calendarAdded: 1, calendarUpdated: 0, calendarHeld: 3, updatedAt: null, errorCode: "coverage-gap" };
       }
       throw new Error(`unexpected ${command}`);
     }, (onMessage) => { receiveProgress = onMessage; return { channel: "calendar" }; });
     await expect(transport.startIcalRefresh((progress) => phases.push(progress.phase))).resolves.toMatchObject({ added: 2, updated: 1, held: 3, removed: 0 });
     const fullPhases: string[] = [];
-    await expect(transport.startFullRefresh((progress) => fullPhases.push(progress.phase))).resolves.toMatchObject({ status: "incomplete", browserStatus: "incomplete", calendarStatus: "complete", gapCount: 2, calendarHeld: 3, errorCode: "coverage-gap" });
+    await expect(transport.startFullRefresh((progress) => fullPhases.push(progress.phase))).resolves.toMatchObject({ status: "incomplete", browserStatus: "incomplete", calendarStatus: "complete", gapCount: 2, omissionCount: 0, calendarHeld: 3, errorCode: "coverage-gap" });
     expect(phases).toEqual(["waiting-for-calendar"]);
     expect(fullPhases).toEqual(["browser-capture"]);
     expect(calls).toEqual([

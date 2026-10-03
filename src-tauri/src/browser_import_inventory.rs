@@ -1,14 +1,14 @@
 //! Exact native-course mapping and inactive archive records for browser import.
 
 use std::collections::BTreeSet;
-use std::path::{Component, Path};
+use std::path::Path;
 
 use serde_json::{json, Map, Value};
 
 use crate::browser_bundle::ValidatedCaptureBundle;
 use crate::browser_projection::BrowserCourseScope;
 use crate::config::ImportLimits;
-use crate::store::{read_capped, Store};
+use crate::store::{read_capped_under, Store};
 
 use super::{BrowserImportError, MAX_COURSES};
 
@@ -172,35 +172,7 @@ fn read_existing_under(root: &Path, path: &Path) -> Result<Option<Vec<u8>>, Brow
     let relative = path
         .strip_prefix(root)
         .map_err(|_| BrowserImportError::InvalidInventory)?;
-    if relative
-        .components()
-        .any(|part| !matches!(part, Component::Normal(_)))
-    {
-        return Err(BrowserImportError::InvalidInventory);
-    }
-    let mut current = root.to_path_buf();
-    let components = relative.components().collect::<Vec<_>>();
-    for (index, component) in components.iter().enumerate() {
-        let Component::Normal(name) = component else {
-            return Err(BrowserImportError::InvalidInventory);
-        };
-        current.push(name);
-        let metadata = match std::fs::symlink_metadata(&current) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(_) => return Err(BrowserImportError::InvalidInventory),
-        };
-        if index + 1 == components.len() {
-            if !metadata.file_type().is_file()
-                || metadata.len() > ImportLimits::PRODUCTION.max_json_bytes
-            {
-                return Err(BrowserImportError::InvalidInventory);
-            }
-        } else if !metadata.file_type().is_dir() {
-            return Err(BrowserImportError::InvalidInventory);
-        }
-    }
-    read_capped(path, ImportLimits::PRODUCTION.max_json_bytes)
+    read_capped_under(root, relative, ImportLimits::PRODUCTION.max_json_bytes)
         .map_err(|_| BrowserImportError::InvalidInventory)
 }
 

@@ -3,6 +3,7 @@ use crate::store::node_json_bytes;
 use serde_json::json;
 
 use std::fs;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::config::canvas_capture_archive_root;
@@ -245,6 +246,9 @@ fn authoritative_import_preserves_latest_personal_state_and_assigns_stable_folde
     assert_eq!(event["sourceLabel"], "canvas");
     assert_eq!(event["status"], "incomplete");
     assert_eq!(event["sourceComplete"], false);
+    assert_eq!(event["dailyScopeStatus"], "incomplete");
+    assert!(event["dailyGapCount"].as_u64().unwrap() > 0);
+    assert!(event["dailyOmissionCount"].as_u64().is_some());
     assert_eq!(event["summary"]["added"], 0);
     assert_eq!(event["summary"]["updated"], 1);
     assert_eq!(event["summary"]["removed"], 0);
@@ -262,10 +266,7 @@ fn authoritative_import_preserves_latest_personal_state_and_assigns_stable_folde
     assert_eq!(title["before"], "Synthetic Submitted Work");
     assert_eq!(title["after"], "Synthetic Updated Assignment");
     assert!(changes.iter().any(|change| {
-        change["kind"] == "notice" && change["title"] == "Canvas inbox incomplete"
-    }));
-    assert!(changes.iter().any(|change| {
-        change["kind"] == "notice" && change["title"] == "Canvas files incomplete"
+        change["kind"] == "notice" && change["title"] == "Daily Canvas pages incomplete"
     }));
     let archive: Value = serde_json::from_slice(
         &fs::read(store.store_dir().join("browser-courses-archive.json")).unwrap(),
@@ -431,6 +432,53 @@ fn import_migrates_only_verified_legacy_materials_after_snapshot() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn nested_course_metadata_rejects_a_symlinked_ancestor() {
+    use std::os::unix::fs::symlink;
+
+    let root = TempRoot::new("browser-import-nested-metadata-symlink");
+    let store = open_store(&root, "authoritative", false);
+    publish_attempt(&root, USER_ID);
+    let export_root = store
+        .store_dir()
+        .join("classes/synthetic-course-a/canvas-export");
+    let api = export_root.join("api");
+    let outside = root.path().join("outside-api");
+    fs::rename(&api, &outside).unwrap();
+    symlink(&outside, &api).unwrap();
+    let data_before = snapshot_tree(&store.store_dir());
+
+    let result = run_import(&store, &root, Some(USER_ID));
+
+    assert!(matches!(result, Err(BrowserImportError::InvalidInventory)));
+    assert_eq!(snapshot_tree(&store.store_dir()), data_before);
+    assert_eq!(
+        fs::read(outside.join("course.json")).unwrap(),
+        node_json_bytes(&json!({"id":COURSE_ID,"name":"Synthetic"}))
+    );
+}
+
+#[test]
+fn verified_legacy_deletion_keeps_every_file_when_inventory_validation_fails() {
+    let root = TempRoot::new("browser-import-delete-inventory");
+    let first = root
+        .path()
+        .join("classes/synthetic-course/materials/first.pdf");
+    fs::create_dir_all(first.parent().unwrap()).unwrap();
+    fs::write(&first, b"synthetic verified material").unwrap();
+    let paths = [
+        PathBuf::from("classes/synthetic-course/materials/first.pdf"),
+        PathBuf::from("classes/synthetic-course/materials/missing.pdf"),
+    ];
+
+    assert!(matches!(
+        state::remove_verified_legacy_materials(root.path(), &paths),
+        Err(BrowserImportError::Stage)
+    ));
+    assert_eq!(fs::read(first).unwrap(), b"synthetic verified material");
+}
+
 #[test]
 fn repeated_import_is_idempotent_and_bound_account_cannot_change() {
     let root = TempRoot::new("browser-import-repeat");
@@ -505,6 +553,60 @@ fn repeated_import_is_idempotent_and_bound_account_cannot_change() {
         Err(BrowserImportError::AccountMismatch)
     ));
     assert_eq!(snapshot_tree(&store.store_dir()), before_account_mismatch);
+}
+
+#[test]
+fn same_generation_repairs_missing_calendar_identity_without_duplicate_history() {
+    let root = TempRoot::new("browser-import-calendar-identity-repair");
+    let store = open_store(&root, "authoritative", false);
+    let run_id = publish_attempt(&root, USER_ID);
+    assert!(
+        !run_import(&store, &root, Some(USER_ID))
+            .unwrap()
+            .already_current
+    );
+
+    let folder = read_coursework(&store)["courses"][0]["folder"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let identity_path = store
+        .store_dir()
+        .join(folder)
+        .join("canvas-export/api/calendar-event-identities.json");
+    assert!(identity_path.is_file());
+
+    // Model a prior importer’s untagged Activity entry for this same capture.
+    let history_path = store.store_dir().join(HISTORY_FILE);
+    let mut history = read_history(&store);
+    let event = history["events"]
+        .as_array_mut()
+        .unwrap()
+        .last_mut()
+        .unwrap();
+    let event = event.as_object_mut().unwrap();
+    event.remove("captureRunId");
+    event.remove("captureGenerationId");
+    event.remove("dailyScopeStatus");
+    event.remove("dailyGapCount");
+    event.remove("dailyOmissionCount");
+    atomic_write(&history_path, &node_json_bytes(&history)).unwrap();
+    fs::remove_file(&identity_path).unwrap();
+
+    let repaired = run_import(&store, &root, None).unwrap();
+    assert!(!repaired.already_current);
+    assert!(identity_path.is_file());
+    assert_eq!(read_history(&store)["events"].as_array().unwrap().len(), 1);
+    assert_eq!(read_history(&store)["events"][0]["status"], "incomplete");
+    let status: Value =
+        serde_json::from_slice(&fs::read(store.store_dir().join(STATUS_FILE)).unwrap()).unwrap();
+    assert_eq!(status["runId"], run_id);
+    assert_eq!(read_history(&store)["events"][0]["summary"]["removed"], 0);
+
+    let after_repair = snapshot_tree(&store.store_dir());
+    assert!(run_import(&store, &root, None).unwrap().already_current);
+    assert_eq!(snapshot_tree(&store.store_dir()), after_repair);
+    assert_eq!(read_history(&store)["events"].as_array().unwrap().len(), 1);
 }
 
 #[test]

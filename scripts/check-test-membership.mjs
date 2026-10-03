@@ -109,6 +109,9 @@ let tauriTestCount = 0;
   const discovery = list("cargo", [...cargoArgs, "--lib", "--", "--list", "--format", "terse"]);
   const discovered = new Map();
   const pathModules = new Map([
+    ["ical_apply::confirmation", "ical_confirmation_tests.rs"],
+    ["snapshots::tests", "snapshots_tests.rs"],
+    ["store::store_read", "store_read_tests.rs"],
     ["ical::bootstrap", "ical_bootstrap.rs"],
     ["ical_apply::bootstrap", "ical_apply_bootstrap.rs"],
     ["ical_apply::history", "ical_apply_history_tests.rs"],
@@ -118,6 +121,7 @@ let tauriTestCount = 0;
     ["commands::full_refresh_commands", "commands_full_refresh_tests.rs"],
     ["browser_bundle::tests", "browser_bundle_tests.rs"],
     ["browser_import::tests", "browser_import_tests.rs"],
+    ["browser_import::daily_scope_tests", "browser_import_daily_scope_tests.rs"],
     ["browser_import::course_metadata", "browser_import_course_metadata.rs"],
     ["browser_import_helper::tests", "browser_import_helper_tests.rs"],
     ["browser_projection::tests", "browser_projection_tests.rs"],
@@ -198,6 +202,7 @@ if (typeof allScript !== "string" || !allScript.includes(`npm run ${desktopUi.ru
   for (const [runner, scriptPath, testCase] of [
     [native.smokeRunner, native.smokeScript, native.smokeCase],
     [native.productionRunner, native.productionScript, native.productionCase],
+    [native.liveRunner, native.liveScript, native.liveCase],
   ]) {
     if (packageJson.scripts[runner] !== `node ${scriptPath}`) throw new Error(`${runner} must run its registered native host script.`);
     if (!existsSync(path.join(root, scriptPath))) throw new Error(`Native host script is missing: ${scriptPath}.`);
@@ -209,7 +214,7 @@ if (typeof allScript !== "string" || !allScript.includes(`npm run ${desktopUi.ru
   if (!existsSync(path.join(root, native.testFile))) throw new Error(`Native UI test file is missing: ${native.testFile}.`);
   const swift = readFileSync(path.join(root, native.testFile), "utf8");
   const discovered = [...swift.matchAll(/\bfunc\s+(test[A-Za-z0-9_]+)\s*\(/g)].map((match) => match[1]).sort();
-  const expected = [native.smokeCase, native.productionCase].sort();
+  const expected = [native.smokeCase, native.productionCase, native.liveCase].sort();
   if (JSON.stringify(discovered) !== JSON.stringify(expected)) {
     throw new Error("Native XCUITest cases differ from test membership.");
   }
@@ -217,7 +222,8 @@ if (typeof allScript !== "string" || !allScript.includes(`npm run ${desktopUi.ru
     if (!existsSync(path.join(root, file))) throw new Error(`Native UI support file is missing: ${file}.`);
   }
   if ((packageJson.scripts["test:all"] ?? "").includes(native.smokeRunner)
-      || (packageJson.scripts["test:all"] ?? "").includes(native.productionRunner)) {
+      || (packageJson.scripts["test:all"] ?? "").includes(native.productionRunner)
+      || (packageJson.scripts["test:all"] ?? "").includes(native.liveRunner)) {
     throw new Error("Native UI checks must remain explicit host gates outside test:all.");
   }
 }
@@ -228,4 +234,4 @@ console.log(`Verified ${manifest.container.tests.length} container checks in the
 console.log(`Verified ${manifest.local.tests.length} local-source tests in ${manifest.local.runner} and test:all.`);
 console.log(`Verified ${tauriTestCount} Rust tests in ${Object.keys(manifest.tauri.tests).length} files via cargo test --list in ${manifest.tauri.runner} and test:all.`);
 console.log(`Verified ${(manifest.fixtures ?? []).length} listed test/fixtures files match what's on disk.`);
-console.log("Verified both explicit native XCUITest cases and their host runners.");
+console.log("Verified all three explicit native XCUITest cases and their host runners.");

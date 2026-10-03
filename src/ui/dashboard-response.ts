@@ -58,6 +58,7 @@ function parseEvent(value: unknown): DashboardEvent | undefined {
     completed: item.completed === true, completedAt: typeof item.completedAt === "number" ? item.completedAt : null,
     ...(optionalText(item.submissionState) === undefined ? {} : { submissionState: optionalText(item.submissionState) }),
     source: typeof item.source === "string" ? item.source : null,
+    ...(item.calendarRetained === true && item.source !== "canvas" ? { calendarRetained: true } : {}),
     points: nullableNumeric(item.points),
     score: nullableNumeric(item.score),
     grade: typeof item.grade === "string" ? item.grade : null,

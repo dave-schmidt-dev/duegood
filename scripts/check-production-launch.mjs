@@ -5,9 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createOwnedScratchRoot, preserveScratchEvidence } from "./owned-scratch-root.mjs";
+import { assertSingleOwnedRunningApplication, queryRunningApplicationIdentities } from "./install-desktop-launch.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PRODUCTION_BUNDLE_ID = "com.zerodelta.duegood";
+const APP_EXECUTABLE = "duegood-desktop";
 const TEST_SCHEME = "DueGoodDesktopUITests";
 const TEST_CASE = `${TEST_SCHEME}/DueGoodDesktopUITests/testProductionIdentifierLaunchOnly`;
 const PROJECT = path.join(ROOT, "test/native/macos/DueGoodDesktopUITests.xcodeproj");
@@ -442,6 +444,31 @@ async function cleanupRoot(root) {
   rmdirSync(root);
 }
 
+/** Attach to a populated production app using only its bundle path, PID, and executable identity. */
+async function checkInstalledPathPidOnly() {
+  if (process.platform !== "darwin") throw new Error("The installed path/PID check requires macOS.");
+  const configuredApp = process.env.DUEGOOD_PRODUCTION_APP_PATH;
+  if (!configuredApp) throw new Error("Set DUEGOOD_PRODUCTION_APP_PATH to /Applications/Due Good.app.");
+  const appPath = realpathSync(configuredApp);
+  if (appPath !== realpathSync("/Applications/Due Good.app")) throw new Error("The path/PID check only attaches to the installed /Applications/Due Good.app.");
+  progress("Checking the installed production bundle identity and signature without opening or changing its data store.");
+  const identifier = (await bundleIdentifier(appPath)).toString("utf8").trim();
+  if (identifier !== PRODUCTION_BUNDLE_ID) throw new Error("The installed app does not use the production bundle identifier.");
+  await runCapture("/usr/bin/codesign", ["--verify", "--strict", appPath]);
+  const signatureDetails = await runCaptureBoth("/usr/bin/codesign", ["-dv", "--verbose=2", appPath]);
+  const authority = signatureDetails.split(/\r?\n/u).find((line) => line.startsWith("Authority="))?.slice("Authority=".length);
+  if (!authority?.startsWith("Developer ID Application:")) throw new Error("The installed production app lacks a verified Developer ID Application signature.");
+  const executable = path.join(appPath, "Contents", "MacOS", APP_EXECUTABLE);
+  const executableStat = lstatSync(executable);
+  if (!executableStat.isFile() || executableStat.isSymbolicLink()) throw new Error("The installed production executable is unavailable.");
+  const identity = assertSingleOwnedRunningApplication(await queryRunningApplicationIdentities({ bundleId: PRODUCTION_BUNDLE_ID, run: runSwift }), {
+    bundleId: PRODUCTION_BUNDLE_ID,
+    appPath,
+  });
+  progress("Attached to the already-running installed app by exact bundle URL, PID, and executable path.");
+  process.stdout.write(`${JSON.stringify({ status: "attached", pid: identity.pid })}\n`);
+}
+
 async function main() {
   if (process.platform !== "darwin") throw new Error("The production launch check requires macOS and Xcode.");
   const configuredApp = process.env.DUEGOOD_PRODUCTION_APP_PATH;
@@ -594,7 +621,8 @@ if (checkFailure) throw checkFailure;
 }
 
 installSignalHandlers();
-main().catch((error) => {
+const runCheck = process.argv.includes("--path-pid-only") ? checkInstalledPathPidOnly : main;
+runCheck().catch((error) => {
   process.stderr.write(`[production launch] ${error.message}\n`);
   process.exitCode = requestedSignal === "SIGINT" ? 130 : requestedSignal === "SIGTERM" ? 143 : 1;
 });

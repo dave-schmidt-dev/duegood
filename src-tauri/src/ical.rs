@@ -27,11 +27,13 @@ pub struct VerifiedCalendarEvent {
     pub parent_assignment_id: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExplicitFeedIdentity {
     pub course_key: String,
     pub stable_identity: String,
     pub kind: EventKind,
+    /// Source-backed calendar date required for an all-day identity mapping.
+    pub expected_date: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -215,6 +217,71 @@ mod tests {
             second.observations[0]["localId"]
         );
         assert_eq!(first.deletions, 0);
+    }
+
+    #[test]
+    fn exact_calendar_metadata_maps_only_matching_date_only_feed_without_url() {
+        let mut options = options();
+        options.explicit_uid_mappings.insert(
+            "event-calendar-event-83".into(),
+            ExplicitFeedIdentity {
+                course_key: "course-a".into(),
+                stable_identity: "event:83".into(),
+                kind: EventKind::OtherEvent,
+                expected_date: Some("2030-01-20".into()),
+            },
+        );
+
+        let accepted = normalize_canvas_ical(
+            &feed(
+                &["BEGIN:VEVENT\r\nUID:event-calendar-event-83\r\nSUMMARY:Synthetic all-day event\r\nDTSTART;VALUE=DATE:20300120\r\nEND:VEVENT\r\n".into()],
+                "",
+            ),
+            &options,
+        )
+        .unwrap();
+        assert_eq!(accepted.events.len(), 1);
+        assert_eq!(accepted.events[0].calendar_identity, "event:83");
+        assert_eq!(accepted.events[0].at.kind, "date");
+        assert_eq!(accepted.events[0].at.value, "2030-01-20");
+
+        let mismatched_date = normalize_canvas_ical(
+            &feed(
+                &["BEGIN:VEVENT\r\nUID:event-calendar-event-83\r\nSUMMARY:Synthetic all-day event\r\nDTSTART;VALUE=DATE:20300121\r\nEND:VEVENT\r\n".into()],
+                "",
+            ),
+            &options,
+        )
+        .unwrap();
+        assert!(mismatched_date.events.is_empty());
+        assert_eq!(mismatched_date.held[0].reason, "ambiguous-event");
+
+        let timed = normalize_canvas_ical(
+            &feed(
+                &["BEGIN:VEVENT\r\nUID:event-calendar-event-83\r\nSUMMARY:Synthetic all-day event\r\nDTSTART:20300120T120000Z\r\nEND:VEVENT\r\n".into()],
+                "",
+            ),
+            &options,
+        )
+        .unwrap();
+        assert!(timed.events.is_empty());
+        assert_eq!(timed.held[0].reason, "ambiguous-event");
+
+        let unknown_url = normalize_canvas_ical(
+            &feed(
+                &[event(
+                    "event-calendar-event-83",
+                    "https://canvas.synthetic.invalid/courses/42/calendar_events/999",
+                    "",
+                    "DTSTART;VALUE=DATE:20300120",
+                )],
+                "",
+            ),
+            &options,
+        )
+        .unwrap();
+        assert!(unknown_url.events.is_empty());
+        assert_eq!(unknown_url.held[0].reason, "ambiguous-event");
     }
 
     #[test]

@@ -67,14 +67,17 @@ function sanitizeFrame(frame, command) {
   if (typeof frame?.status !== "string" || !/^[A-Z0-9_]+$/.test(frame.status)) throw new Error("INVALID_RESPONSE");
   const keys = Object.keys(frame);
   if ((command === "capture" || command === "refresh") && keys.includes("resourceCount")) {
-    if (frame.status !== "PARTIAL" || keys.length !== 5
-        || !["resourceCount", "itemCount", "gapCount"].every((key) => Number.isSafeInteger(frame[key]) && frame[key] >= 0)
+    if (frame.status !== "PARTIAL" || keys.length !== 7
+        || !["resourceCount", "itemCount", "gapCount", "dailyGapCount", "omissionCount"]
+          .every((key) => Number.isSafeInteger(frame[key]) && frame[key] >= 0 && frame[key] <= 100_000)
         || frame.fileBodiesIncomplete !== true) throw new Error("INVALID_RESPONSE");
     return {
       status: frame.status,
       resourceCount: frame.resourceCount,
       itemCount: frame.itemCount,
       gapCount: frame.gapCount,
+      dailyGapCount: frame.dailyGapCount,
+      omissionCount: frame.omissionCount,
       fileBodiesIncomplete: true,
     };
   }
@@ -319,12 +322,12 @@ function safeImportErrorCode(error) {
 }
 
 function captureSummary(frame) {
-  const keys = ["status", "resourceCount", "itemCount", "gapCount", "fileBodiesIncomplete"];
+  const keys = ["status", "resourceCount", "itemCount", "gapCount", "dailyGapCount", "omissionCount", "fileBodiesIncomplete"];
   if (!frame || typeof frame !== "object" || Array.isArray(frame)
       || Object.keys(frame).length !== keys.length || keys.some((key) => !Object.hasOwn(frame, key))
       || frame.status !== "PARTIAL" || frame.fileBodiesIncomplete !== true
-      || !["resourceCount", "itemCount", "gapCount"].every((key) =>
-        Number.isSafeInteger(frame[key]) && frame[key] >= 0)) {
+      || !["resourceCount", "itemCount", "gapCount", "dailyGapCount", "omissionCount"].every((key) =>
+        Number.isSafeInteger(frame[key]) && frame[key] >= 0 && frame[key] <= 100_000)) {
     throw new Error("INVALID_CAPTURE_RESPONSE");
   }
   return {
@@ -332,6 +335,8 @@ function captureSummary(frame) {
     resourceCount: frame.resourceCount,
     itemCount: frame.itemCount,
     gapCount: frame.gapCount,
+    dailyGapCount: frame.dailyGapCount,
+    omissionCount: frame.omissionCount,
     fileBodiesIncomplete: true,
   };
 }

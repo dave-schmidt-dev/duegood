@@ -2,11 +2,14 @@
 
 use std::collections::{HashMap, HashSet};
 
+use chrono::DateTime;
 use serde_json::Value;
 
 use crate::canvas::CANVAS_ORIGIN;
 use crate::config::{ReadLimits, COURSEWORK_FILE};
-use crate::ical::{IcalCourseIdentity, IcalNormalizeOptions};
+use crate::ical::{
+    EventKind, ExplicitFeedIdentity, IcalCourseIdentity, IcalNormalizeOptions, MAX_ICAL_EVENTS,
+};
 use crate::store::{Store, StoreCondition, StoreError};
 
 use super::facts::{canvas_id, numeric_id, validate_text};
@@ -136,13 +139,178 @@ pub(super) fn normalization_options_locked(
         .next()
         .expect("one institution checked");
     validate_text(&institution, 160)?;
+    let explicit_uid_mappings =
+        verified_calendar_event_mappings(store, &institution, &courses, memberships)?;
     Ok(IcalNormalizeOptions {
         institution,
         canvas_origin: CANVAS_ORIGIN.to_owned(),
         courses,
         verified_events: HashMap::new(),
-        explicit_uid_mappings: HashMap::new(),
+        explicit_uid_mappings,
     })
+}
+
+fn verified_calendar_event_mappings(
+    store: &Store,
+    institution: &str,
+    courses: &[IcalCourseIdentity],
+    memberships: &[Value],
+) -> Result<HashMap<String, ExplicitFeedIdentity>, IcalApplyError> {
+    let Some(status_bytes) = store.read_document("browser-capture-status.json", 1024 * 1024)?
+    else {
+        return Ok(HashMap::new());
+    };
+    let Ok(status) = serde_json::from_slice::<Value>(&status_bytes.bytes) else {
+        return Ok(HashMap::new());
+    };
+    if !valid_capture_status(&status) {
+        return Ok(HashMap::new());
+    }
+
+    let mut mappings = HashMap::new();
+    let mut conflicts = HashSet::new();
+    for course in courses {
+        let Some(folder) = projected_course_folder(memberships, &course.key) else {
+            continue;
+        };
+        let path = format!("{folder}/canvas-export/api/calendar-event-identities.json");
+        let Some(bytes) = store.read_document(&path, ReadLimits::PRODUCTION.max_document_bytes)?
+        else {
+            continue;
+        };
+        let Ok(document) = serde_json::from_slice::<Value>(&bytes.bytes) else {
+            continue;
+        };
+        if !valid_identity_document(&document, &status, institution, course) {
+            continue;
+        }
+        let Some(events) = document.get("events").and_then(Value::as_array) else {
+            continue;
+        };
+        if events.len() > MAX_ICAL_EVENTS {
+            continue;
+        }
+        let mut id_counts = HashMap::<String, usize>::new();
+        for event in events {
+            if let Some(id) = event
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| numeric_id(id))
+            {
+                *id_counts.entry(id.to_owned()).or_default() += 1;
+            }
+        }
+        let expected_context = format!("course_{}", course.canvas_course_id);
+        for event in events {
+            let Some(id) = event
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| numeric_id(id))
+            else {
+                continue;
+            };
+            let uid = format!("event-calendar-event-{id}");
+            let Some(start_at) = event.get("startAt").and_then(Value::as_str) else {
+                continue;
+            };
+            if id_counts.get(id) != Some(&1)
+                || event.get("uid").and_then(Value::as_str) != Some(uid.as_str())
+                || event.get("contextCode").and_then(Value::as_str)
+                    != Some(expected_context.as_str())
+                || event.get("type").and_then(Value::as_str) != Some("event")
+                || event.get("allDay").and_then(Value::as_bool) != Some(true)
+                || start_at.len() > 64
+            {
+                continue;
+            }
+            let Ok(start_at) = DateTime::parse_from_rfc3339(start_at) else {
+                continue;
+            };
+            let expected_date = start_at.date_naive().format("%Y-%m-%d").to_string();
+            let mapping = ExplicitFeedIdentity {
+                course_key: course.key.clone(),
+                stable_identity: format!("event:{id}"),
+                kind: EventKind::OtherEvent,
+                expected_date: Some(expected_date),
+            };
+            if conflicts.contains(&uid) {
+                continue;
+            }
+            if mappings.insert(uid.clone(), mapping).is_some() {
+                mappings.remove(&uid);
+                conflicts.insert(uid);
+            }
+        }
+    }
+    Ok(mappings)
+}
+
+fn valid_capture_status(status: &Value) -> bool {
+    status.get("format").and_then(Value::as_str) == Some("duegood-browser-import")
+        && status.get("version").and_then(Value::as_u64) == Some(1)
+        && status
+            .get("runId")
+            .and_then(Value::as_u64)
+            .is_some_and(|id| id > 0)
+        && status
+            .get("userId")
+            .and_then(Value::as_u64)
+            .is_some_and(|id| id > 0)
+        && status
+            .get("generationId")
+            .and_then(Value::as_str)
+            .is_some_and(valid_generation_id)
+}
+
+fn valid_identity_document(
+    document: &Value,
+    status: &Value,
+    institution: &str,
+    course: &IcalCourseIdentity,
+) -> bool {
+    let expected_context = format!("course_{}", course.canvas_course_id);
+    document.get("format").and_then(Value::as_str) == Some("duegood-calendar-event-identities")
+        && document.get("version").and_then(Value::as_u64) == Some(1)
+        && ["runId", "generationId", "userId"]
+            .iter()
+            .all(|field| document.get(*field) == status.get(*field))
+        && document.get("origin").and_then(Value::as_str) == Some(CANVAS_ORIGIN)
+        && document.get("institution").and_then(Value::as_str) == Some(institution)
+        && document.get("courseKey").and_then(Value::as_str) == Some(course.key.as_str())
+        && document.get("canvasCourseId").and_then(Value::as_u64)
+            == course.canvas_course_id.parse::<u64>().ok()
+        && document
+            .pointer("/coverage/endpoint")
+            .and_then(Value::as_str)
+            == Some("calendarEvents")
+        && document
+            .pointer("/coverage/contextCode")
+            .and_then(Value::as_str)
+            == Some(expected_context.as_str())
+        && document.pointer("/coverage/status").and_then(Value::as_str) == Some("complete")
+}
+
+fn valid_generation_id(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn projected_course_folder(memberships: &[Value], course_key: &str) -> Option<String> {
+    let matches = memberships
+        .iter()
+        .filter(|entry| entry.get("key").and_then(Value::as_str) == Some(course_key))
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return None;
+    }
+    let folder = matches[0].get("folder").and_then(Value::as_str)?;
+    let name = folder.strip_prefix("classes/")?;
+    if name.contains('/') || !crate::import::is_course_folder_name(name) {
+        return None;
+    }
+    Some(folder.to_owned())
 }
 
 pub(super) fn same_scope(expected: &IcalNormalizeOptions, current: &IcalNormalizeOptions) -> bool {
@@ -164,4 +332,5 @@ pub(super) fn same_scope(expected: &IcalNormalizeOptions, current: &IcalNormaliz
     expected_courses.sort();
     current_courses.sort();
     expected_courses == current_courses
+        && expected.explicit_uid_mappings == current.explicit_uid_mappings
 }

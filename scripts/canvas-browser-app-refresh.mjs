@@ -39,7 +39,7 @@ function errorCodeFor(result) {
   if (result?.status === "SIGN_IN_REQUIRED") return "SIGN_IN_REQUIRED";
   if (result?.status === "IDENTITY_MISMATCH") return "IDENTITY_MISMATCH";
   if (result?.errorCode === "CAPTURE_STATE_UNAVAILABLE") return "CAPTURE_STATE_UNAVAILABLE";
-  if (result?.status === "PARTIAL" && Number.isSafeInteger(result?.gapCount) && result.gapCount > 0) return "CAPTURE_GAPS";
+  if (result?.status === "PARTIAL" && Number.isSafeInteger(result?.dailyGapCount) && result.dailyGapCount > 0) return "CAPTURE_GAPS";
   return "BROWSER_REFRESH_FAILED";
 }
 
@@ -49,7 +49,9 @@ function sanitizedResult(result) {
     && result?.fileBodiesIncomplete === true
     && validCount(result.resourceCount, MAX_CAPTURE_COUNT)
     && validCount(result.itemCount, MAX_CAPTURE_COUNT)
-    && validCount(result.gapCount, MAX_CAPTURE_COUNT);
+    && validCount(result.gapCount, MAX_CAPTURE_COUNT)
+    && validCount(result.dailyGapCount, MAX_CAPTURE_COUNT)
+    && validCount(result.omissionCount, MAX_CAPTURE_COUNT);
   const importValid = native?.status === "IMPORTED"
     && validCount(native.importedCourses, MAX_IMPORT_COUNT)
     && validCount(native.archivedCourses, MAX_IMPORT_COUNT)
@@ -57,15 +59,16 @@ function sanitizedResult(result) {
     && validCount(native.reusedBlobs, MAX_IMPORT_COUNT)
     && validCount(native.bytesVerified, MAX_VERIFIED_BYTES)
     && typeof native.alreadyCurrent === "boolean";
-  const successfulPartialImport = captureValid && importValid && result.gapCount === 0;
-  const errorCode = successfulPartialImport ? undefined
+  const successfulDailyRefresh = captureValid && importValid && result.dailyGapCount === 0;
+  const errorCode = successfulDailyRefresh ? undefined
     : ERROR_CODES.has(errorCodeFor(result)) ? errorCodeFor(result) : "BROWSER_REFRESH_FAILED";
   return {
     type: "result",
-    status: "incomplete",
+    status: successfulDailyRefresh ? "complete" : "incomplete",
     resourceCount: countOrZero(result?.resourceCount, MAX_CAPTURE_COUNT),
     itemCount: countOrZero(result?.itemCount, MAX_CAPTURE_COUNT),
-    gapCount: countOrZero(result?.gapCount, MAX_CAPTURE_COUNT),
+    gapCount: countOrZero(result?.dailyGapCount, MAX_CAPTURE_COUNT),
+    omissionCount: countOrZero(result?.omissionCount, MAX_CAPTURE_COUNT),
     importedCourses: countOrZero(native?.importedCourses, MAX_IMPORT_COUNT),
     archivedCourses: countOrZero(native?.archivedCourses, MAX_IMPORT_COUNT),
     promotedBlobs: countOrZero(native?.promotedBlobs, MAX_IMPORT_COUNT),
@@ -141,6 +144,7 @@ export async function main(args = process.argv.slice(2)) {
     const writeFrame = frameWriter((line) => process.stdout.write(line));
     writeFrame({
       type: "result", status: "incomplete", resourceCount: 0, itemCount: 0, gapCount: 0,
+      omissionCount: 0,
       importedCourses: 0, archivedCourses: 0, promotedBlobs: 0, reusedBlobs: 0,
       bytesVerified: 0, alreadyCurrent: false, errorCode: "BROWSER_REFRESH_FAILED",
     });
@@ -156,6 +160,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const writeFrame = frameWriter((line) => process.stdout.write(line));
     writeFrame({
       type: "result", status: "incomplete", resourceCount: 0, itemCount: 0, gapCount: 0,
+      omissionCount: 0,
       importedCourses: 0, archivedCourses: 0, promotedBlobs: 0, reusedBlobs: 0,
       bytesVerified: 0, alreadyCurrent: false, errorCode: "BROWSER_REFRESH_FAILED",
     });

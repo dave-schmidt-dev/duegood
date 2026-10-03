@@ -9,7 +9,7 @@
 
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -22,6 +22,9 @@ use crate::config::{
     STAGING_PREFIX, STORE_DIR,
 };
 use crate::locking::{InstanceLock, LockError, ReadLock, RefreshLock, SnapshotLock, WriteLock};
+
+#[path = "store_read.rs"]
+mod store_read;
 
 const REFRESH_JOURNAL_FILE: &str = "refresh-journal.json";
 
@@ -707,25 +710,21 @@ fn source_owned_field(field: &str) -> bool {
 
 /// Reads a regular, non-symlink file up to `cap` bytes; `None` when absent.
 pub fn read_capped(path: &Path, cap: u64) -> Result<Option<Vec<u8>>, StoreError> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    if !metadata.file_type().is_file() {
-        return Err(StoreError::Invalid(
-            "a store document is not a regular file",
-        ));
-    }
-    if metadata.len() > cap {
-        return Err(StoreError::TooLarge);
-    }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    File::open(path)?.take(cap + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > cap {
-        return Err(StoreError::TooLarge);
-    }
-    Ok(Some(bytes))
+    store_read::read_capped(path, cap)
+}
+
+/// Reads a capped file beneath an already selected root using no-follow descriptor traversal.
+pub(crate) fn read_capped_under(
+    root: &Path,
+    relative: &Path,
+    cap: u64,
+) -> Result<Option<Vec<u8>>, StoreError> {
+    store_read::read_capped_under(root, relative, cap)
+}
+
+/// Removes a previously validated set of regular files beneath a root through held parent FDs.
+pub(crate) fn remove_files_under(root: &Path, relatives: &[PathBuf]) -> Result<(), StoreError> {
+    store_read::remove_files_under(root, relatives)
 }
 
 /// An open store: holds the instance lock for as long as it lives.

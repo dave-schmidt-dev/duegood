@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { consumeOwnedStageHandoff, validateOwnedStageHandoff } from "./owned-stage-root.mjs";
+import { runColdLaunchProof, stopColdVerifiedCandidate, stopRunningInstalledCandidate } from "./install-desktop-launch.mjs";
 
 const BUNDLE_ID = "com.zerodelta.duegood";
 const LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
@@ -17,6 +18,20 @@ const IDENTITY_RE = /^Developer ID Application: .+$/u;
 const RETAINED_BACKUP_NAME_RE = /^\.Due Good\.backup-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.app$/u;
 
 const fsOps = Object.freeze({ cp, lstat, readFile, readdir, realpath, rename, rm, writeFile });
+
+class RestoredAppRegistrationError extends Error {
+  constructor(appPath, cause) {
+    super(`The previous app was restored at ${appPath}, but LaunchServices registration failed.`, { cause });
+    this.name = "RestoredAppRegistrationError";
+  }
+}
+
+function restorationFailureDetail(error, installApp, backupPath) {
+  if (error instanceof RestoredAppRegistrationError) {
+    return `the previous app was restored at ${installApp}, but its LaunchServices registration could not be confirmed`;
+  }
+  return `the previous app remains in its backup at ${backupPath}`;
+}
 
 /** Run one fixed executable without a shell, while retaining output only for parsing. */
 function runCommand(command, args, { cwd, timeoutMs = 60_000, allowExitCodes = [], maxOutputBytes = 8 * 1024 * 1024 } = {}) {
@@ -201,11 +216,24 @@ async function verifyCopiedBundle({ files, run, appPath, signingName, helperDige
   return copiedDigests;
 }
 
-async function restoreBackup({ files, run, installApp, backupPath }) {
+async function restoreBackup({ files, run, installApp, backupPath, signingName, candidateIdentity, productionDataRoot, stopCandidate = stopColdVerifiedCandidate }) {
   if (!(await exists(files, backupPath))) throw new Error("The retained previous app backup is unavailable.");
-  await ensureProductionAppStopped(run, "restoring the previous app");
+  if (!(await isOwnedRetainedBackup({ files, run, applicationsDirectory: path.dirname(installApp), appPath: backupPath, signingName }))) {
+    throw new Error("The retained previous app no longer passes its ownership and signature checks.");
+  }
+  if (candidateIdentity?.pid) {
+    await stopCandidate({ appPath: installApp, pid: candidateIdentity.pid, dataRoot: productionDataRoot });
+  } else {
+    await ensureProductionAppStopped(run, "restoring the previous app");
+  }
+  await run(LSREGISTER, ["-u", installApp]);
   await files.rm(installApp, { recursive: true, force: true });
   await files.rename(backupPath, installApp);
+  try {
+    await run(LSREGISTER, ["-f", installApp]);
+  } catch (error) {
+    throw new RestoredAppRegistrationError(installApp, error);
+  }
 }
 
 async function canonicalFuturePath(fs, target) {
@@ -240,19 +268,15 @@ function isOwnedStageHandoff({ ownership, candidateRootReal, sourceRootReal }) {
     && path.dirname(candidateRootReal) === path.join(sourceRootReal, STAGE_DIRECTORY_NAME);
 }
 
-/**
- * Unregister and remove every retained backup in the Applications directory that this installer
- * can prove it owns. Each entry is verified individually before its own unregister and remove, so
- * an unknown or competing bundle is never part of a bulk deletion.
- */
-async function removeInstallerOwnedBackups({ files, run, applicationsDirectory, signingName, log }) {
+/** Unregister only verified installer-owned backups while retaining their bytes for both proofs. */
+async function unregisterInstallerOwnedBackups({ files, run, applicationsDirectory, signingName, log }) {
   let entries;
   try {
     entries = await files.readdir(applicationsDirectory, { withFileTypes: true });
   } catch {
     throw new Error("The Applications directory could not be inspected for installer-owned backups.");
   }
-  const removed = [];
+  const owned = [];
   for (const entry of entries) {
     if (!RETAINED_BACKUP_NAME_RE.test(entry.name)) continue;
     const backupPath = path.join(applicationsDirectory, entry.name);
@@ -260,9 +284,21 @@ async function removeInstallerOwnedBackups({ files, run, applicationsDirectory, 
       log(`install: leaving an unverified backup-like entry untouched: ${entry.name}`);
       continue;
     }
-    log(`install: unregistering and removing installer-owned backup: ${entry.name}`);
+    log(`install: unregistering installer-owned backup while retaining its bytes: ${entry.name}`);
     await run(LSREGISTER, ["-u", backupPath]);
-    await files.rm(backupPath, { recursive: true, force: true });
+    owned.push(backupPath);
+  }
+  return owned;
+}
+
+async function removeVerifiedInstallerBackups({ files, run, applicationsDirectory, signingName, backupPaths, log }) {
+  const removed = [];
+  for (const backupPath of backupPaths) {
+    if (!(await isOwnedRetainedBackup({ files, run, applicationsDirectory, appPath: backupPath, signingName }))) {
+      throw new Error("An installer-owned backup changed before post-proof cleanup; its bytes were preserved.");
+    }
+    log(`install: removing previously unregistered backup after both cold proofs: ${path.basename(backupPath)}`);
+    await files.rm(backupPath, { recursive: true, force: false });
     removed.push(backupPath);
   }
   return removed;
@@ -287,6 +323,9 @@ export async function installDesktopApp({
   platform = process.platform,
   files = fsOps,
   run = runCommand,
+  launchProof = runColdLaunchProof,
+  stopCandidate = stopColdVerifiedCandidate,
+  stopExistingApp = stopRunningInstalledCandidate,
   log = console.log,
 } = {}) {
   if (platform !== "darwin") throw new Error("The desktop installer can run only on macOS.");
@@ -487,7 +526,10 @@ export async function installDesktopApp({
     const stagedCopy = await uniqueSiblingPath(files, applicationsDirectory, "staging");
     let backupPath;
     log("install: copying the verified app into a same-volume staging directory");
-    if (upgrade) await ensureProductionAppStopped(run, "copying an upgrade");
+    if (upgrade) {
+      await stopExistingApp({ bundleId: BUNDLE_ID, appPath: installApp, dataRoot: productionDataRoot });
+      await ensureProductionAppStopped(run, "copying an upgrade");
+    }
     try {
       await files.cp(candidateApp, stagedCopy, { recursive: true, force: false, errorOnExist: true, preserveTimestamps: true });
     } catch (error) {
@@ -550,9 +592,9 @@ export async function installDesktopApp({
       if (upgrade && backupPath && await exists(files, backupPath)) {
         log("install: restoring the retained app after installed-copy verification failed");
         try {
-          await restoreBackup({ files, run, installApp, backupPath });
+          await restoreBackup({ files, run, installApp, backupPath, signingName });
         } catch (restoreError) {
-          throw new Error(`Installed-copy verification failed; the previous app remains in its backup at ${backupPath}, but automatic restoration failed.`, { cause: restoreError });
+          throw new Error(`Installed-copy verification failed; ${restorationFailureDetail(restoreError, installApp, backupPath)}.`, { cause: restoreError });
         }
       } else if (!upgrade) {
         log("install: removing the new unregistered app after verification failed");
@@ -567,32 +609,52 @@ export async function installDesktopApp({
     } catch (error) {
       if (upgrade && backupPath) {
         try {
-          await restoreBackup({ files, run, installApp, backupPath });
+          await restoreBackup({ files, run, installApp, backupPath, signingName });
         } catch (restoreError) {
-          throw new Error(`LaunchServices registration failed; the new app remains installed and the previous app remains in its backup at ${backupPath}.`, { cause: restoreError });
+          if (restoreError instanceof RestoredAppRegistrationError) {
+            throw new Error(`LaunchServices registration failed; the previous app was restored at ${installApp}, but its registration could not be confirmed.`, { cause: restoreError });
+          }
+          throw new Error(`LaunchServices registration failed; restoration did not complete, and the previous app remains in its backup at ${backupPath}.`, { cause: restoreError });
         }
         throw new Error("LaunchServices registration failed; the previous app was restored.", { cause: error });
       }
       throw error;
     }
 
-    log("install: resolving the installed bundle by identifier");
+    const ownedBackupPaths = await unregisterInstallerOwnedBackups({ files, run, applicationsDirectory, signingName, log });
+    let candidateIdentity;
+    let coldProof;
     try {
-      await run("/usr/bin/open", ["-b", BUNDLE_ID]);
+      log("install: proving two cold launches against the installed path and bundle identifier");
+      coldProof = await launchProof({
+        bundleId: BUNDLE_ID,
+        appPath: installApp,
+        dataRoot: productionDataRoot,
+        progress: (message) => log(`install: ${message}`),
+        onOwnedLaunch: (identity, method) => {
+          candidateIdentity = identity;
+          log(`install: observed the owned candidate process from ${method} launch`);
+        },
+      });
     } catch (error) {
       if (upgrade && backupPath) {
         try {
-          await restoreBackup({ files, run, installApp, backupPath });
+          await restoreBackup({
+            files, run, installApp, backupPath, signingName,
+            candidateIdentity, productionDataRoot, stopCandidate,
+          });
         } catch (restoreError) {
-          throw new Error(`The installed app could not be opened; the previous app remains in its backup at ${backupPath}. Automatic restoration was unsafe or failed.`, { cause: restoreError });
+          throw new Error(`The cold launch proof failed; ${restorationFailureDetail(restoreError, installApp, backupPath)}.`, { cause: restoreError });
         }
-        throw new Error("The installed app could not be opened; the previous app was restored.", { cause: error });
+        throw new Error("The installed app cold launch proof failed; the previous app was restored.", { cause: error });
       }
       throw error;
     }
 
-    log("install: unregistering and removing installer-owned backups");
-    const removedBackupPaths = await removeInstallerOwnedBackups({ files, run, applicationsDirectory, signingName, log });
+    if (backupPath && !ownedBackupPaths.includes(backupPath)) ownedBackupPaths.push(backupPath);
+    const removedBackupPaths = await removeVerifiedInstallerBackups({
+      files, run, applicationsDirectory, signingName, backupPaths: ownedBackupPaths, log,
+    });
     const dataRootExistsAfterOpen = await exists(files, productionDataRoot);
     log(`Production data root before install: ${dataRootExistedBeforeInstall ? "present" : "absent"}`);
     log(`Production data root after open: ${dataRootExistsAfterOpen ? "present" : "absent"}`);
@@ -609,6 +671,7 @@ export async function installDesktopApp({
       candidateTree: tree,
       helperDigest: installedHelperDigests["duegood-refresh"],
       helperDigests: installedHelperDigests,
+      coldProof,
       backupPath: backupPath && await exists(files, backupPath) ? backupPath : undefined,
       removedBackupPaths,
     };

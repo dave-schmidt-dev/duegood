@@ -15,6 +15,14 @@ use crate::store::{
     StoreError, StoreState,
 };
 
+#[cfg(test)]
+#[path = "snapshots_tests.rs"]
+mod tests;
+
+#[cfg(unix)]
+#[path = "snapshots_pending.rs"]
+mod pending_cleanup;
+
 /// Maximum number of daily and pre-refresh snapshots retained together.
 pub const MAX_SNAPSHOTS: usize = 14;
 
@@ -98,6 +106,59 @@ fn valid_id(id: &str) -> bool {
         && suffix.bytes().all(|c| c.is_ascii_hexdigit())
 }
 
+fn valid_pending_name(name: &str) -> bool {
+    let Some(name) = name.strip_prefix(".pending-") else {
+        return false;
+    };
+    let Some(uuid_start) = name.len().checked_sub(36) else {
+        return false;
+    };
+    if uuid_start == 0
+        || !name.is_char_boundary(uuid_start)
+        || name.as_bytes()[uuid_start - 1] != b'-'
+    {
+        return false;
+    }
+    let id = &name[..uuid_start - 1];
+    let nonce = &name[uuid_start..];
+    let bytes = nonce.as_bytes();
+    valid_id(id)
+        && bytes.len() == 36
+        && [8, 13, 18, 23].iter().all(|index| bytes[*index] == b'-')
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            [8, 13, 18, 23].contains(&index)
+                || byte.is_ascii_digit()
+                || (b'a'..=b'f').contains(byte)
+        })
+        && bytes[14] == b'4'
+        && b"89ab".contains(&bytes[19])
+}
+
+/// Removes only app-shaped, app-owned interrupted copies from a plain snapshots directory.
+/// Callers hold the snapshot catalog lock, so no live publisher can own one of these entries.
+fn cleanup_pending_snapshots(directory: &Path) -> Result<(), StoreError> {
+    #[cfg(unix)]
+    {
+        return pending_cleanup::cleanup(directory);
+    }
+    #[cfg(not(unix))]
+    {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !valid_pending_name(&name) {
+                continue;
+            }
+            let metadata = fs::symlink_metadata(entry.path())?;
+            if metadata.file_type().is_dir() {
+                fs::remove_dir_all(entry.path())?;
+            }
+        }
+        fsync_dir(directory)?;
+        Ok(())
+    }
+}
+
 /// Lists newest snapshots first without exposing a filesystem path.
 pub fn list_snapshots(store: &Store) -> Result<Vec<SnapshotInfo>, StoreError> {
     let _snapshot_lock = store.snapshot_lock()?;
@@ -115,16 +176,39 @@ fn take(
     take_locked(store, kind, now, progress)
 }
 
-/// Snapshot implementation for callers that already hold a shared or exclusive store lock.
+/// Snapshot implementation for callers that hold the catalog lock and a stable store lock.
 fn take_locked(
     store: &Store,
     kind: &str,
     now: SystemTime,
     progress: &mut dyn FnMut(ExportProgress),
 ) -> Result<Option<SnapshotInfo>, StoreError> {
+    take_locked_with_copy(
+        store,
+        kind,
+        now,
+        progress,
+        |source, destination, progress| {
+            crate::export::copy_tree_into_private_root(source, destination, true, progress)
+                .map(|_| ())
+        },
+    )
+}
+
+fn take_locked_with_copy(
+    store: &Store,
+    kind: &str,
+    now: SystemTime,
+    progress: &mut dyn FnMut(ExportProgress),
+    copy: impl Fn(&Path, &Path, &mut dyn FnMut(ExportProgress)) -> Result<(), StoreError>,
+) -> Result<Option<SnapshotInfo>, StoreError> {
     if !matches!(store.condition()?, StoreCondition::Ready(_)) {
         return Ok(None);
     }
+    let _existing = snapshots(store)?;
+    let directory = root(store);
+    create_private_dir(&directory, true)?;
+    cleanup_pending_snapshots(&directory)?;
     let existing = snapshots(store)?;
     let stamp = utc_stamp(now);
     if kind == "daily"
@@ -136,20 +220,13 @@ fn take_locked(
     {
         return Ok(None);
     }
-    let directory = root(store);
-    create_private_dir(&directory, true)?;
     let id = format!(
         "{kind}-{}-{}",
         stamp.compact,
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     );
-    let target = directory.join(&id);
-    let result = copy_tree(&store.store_dir(), &target, true, progress);
-    if result.is_err() {
-        let _ = fs::remove_dir_all(&target);
-    }
-    result?;
-    fsync_dir(&directory)?;
+    let source = store.store_dir();
+    publish_snapshot(&directory, &id, |pending| copy(&source, pending, progress))?;
     let mut all = snapshots(store)?;
     all.sort_by(|a, b| {
         a.created_at
@@ -170,6 +247,43 @@ fn take_locked(
             "pre-refresh"
         },
     }))
+}
+
+/// Publishes a copied tree only after its contents are complete and synced. A crash during the
+/// copy leaves a hidden pending directory, which snapshot discovery deliberately ignores.
+fn publish_snapshot(
+    directory: &Path,
+    id: &str,
+    copy: impl FnOnce(&Path) -> Result<(), StoreError>,
+) -> Result<(), StoreError> {
+    let target = directory.join(id);
+    match fs::symlink_metadata(&target) {
+        Ok(_) => return Err(StoreError::Invalid("snapshot already exists")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+
+    let pending = directory.join(format!(".pending-{id}-{}", uuid::Uuid::new_v4()));
+    create_private_dir(&pending, false)?;
+    let result = (|| {
+        copy(&pending)?;
+        fsync_dir(&pending)?;
+        // Persist the pending directory before publishing its final name.
+        fsync_dir(directory)?;
+        fs::rename(&pending, &target)?;
+        fsync_dir(directory)?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        // This path is private and uniquely created above. If rename completed but the following
+        // parent sync failed, pending no longer exists and the committed snapshot is preserved.
+        if fs::symlink_metadata(&pending).is_ok() {
+            let _ = fs::remove_dir_all(&pending);
+            let _ = fsync_dir(directory);
+        }
+    }
+    result
 }
 
 /// Takes at most one daily snapshot on the first open of a ready store each UTC day.
@@ -291,54 +405,4 @@ pub fn restore_snapshot(store: &Store, id: &str) -> Result<(), StoreError> {
     fs::remove_file(journal)?;
     fsync_dir(store.data_root())?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::store::{new_preview_manifest, node_json_bytes};
-    use crate::testutil::{assert_private_tree, TempRoot};
-    use std::time::{Duration, UNIX_EPOCH};
-
-    #[test]
-    fn daily_dedup_rotation_and_restore_archive() {
-        let temp = TempRoot::new("snapshots");
-        let store = Store::open(temp.path(), Duration::from_millis(200)).unwrap();
-        create_private_dir(&store.store_dir(), false).unwrap();
-        atomic_write(
-            &store.store_dir().join(MANIFEST_FILE),
-            &node_json_bytes(&new_preview_manifest(1, 1, "x", UNIX_EPOCH)),
-        )
-        .unwrap();
-        atomic_write(&store.store_dir().join("coursework.json"), b"first").unwrap();
-        let first = snapshot_daily(&store, UNIX_EPOCH).unwrap().unwrap();
-        assert!(snapshot_daily(&store, UNIX_EPOCH).unwrap().is_none());
-        for n in 1..=MAX_SNAPSHOTS {
-            take(
-                &store,
-                "refresh",
-                UNIX_EPOCH + std::time::Duration::from_secs(n as u64),
-                &mut |_| {},
-            )
-            .unwrap();
-        }
-        assert_eq!(
-            snapshot_before_refresh(&store, "synthetic refresh")
-                .unwrap()
-                .kind,
-            "pre-refresh"
-        );
-        assert_eq!(list_snapshots(&store).unwrap().len(), MAX_SNAPSHOTS);
-        assert!(!root(&store).join(first.id).exists());
-        let latest = list_snapshots(&store).unwrap()[0].id.clone();
-        atomic_write(&store.store_dir().join("coursework.json"), b"second").unwrap();
-        restore_snapshot(&store, &latest).unwrap();
-        assert_eq!(
-            fs::read(store.store_dir().join("coursework.json")).unwrap(),
-            b"first"
-        );
-        assert_eq!(fs::read_dir(store.backups_dir()).unwrap().count(), 1);
-        assert_private_tree(&store.backups_dir());
-        assert_private_tree(&root(&store));
-    }
 }

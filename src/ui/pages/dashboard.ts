@@ -2,10 +2,11 @@ import type { ElementDescriptor } from "../dom";
 import { dashboardNav, type DashboardPage } from "../routes";
 import type { BrowserFreshness } from "../../shared/browser-freshness";
 import { canvasRefreshSettingRow, refreshActionLabel, refreshNote, refreshOutcome } from "./dashboard-refresh";
+import { renderTimelineEventCard, type TimelineEventCardRenderers } from "./timeline-event-card";
 
 export interface DashboardGradeGroup { readonly id: string | null; readonly name: string | null; readonly weight: number | null }
 export interface DashboardCourse { readonly id: string; readonly courseCode: string; readonly title: string; readonly term?: string; readonly lastSuccessfulCheckAt?: number | null; readonly gradeGroups?: readonly DashboardGradeGroup[] }
-export interface DashboardEvent { readonly id: string; readonly sourceItemId?: string; readonly courseId: string; readonly courseCode: string; readonly kind: "deadline" | "class" | "discussion"; readonly title: string; readonly startsAt: string; readonly endsAt?: string | null; readonly location?: string | null; readonly detail?: string | null; readonly notes?: string | null; readonly completed: boolean; readonly completedAt?: number | null; readonly submissionState?: string; readonly source?: string | null; readonly points?: number | null; readonly score?: number | null; readonly grade?: string | null; readonly manualGrade?: string | null; readonly manualGradeVersion?: 1 | null; readonly manualGradeSource?: "manual" | "pdf" | null; readonly gradedAt?: string | null; readonly assignmentGroupId?: string | null; readonly assignmentGroupName?: string | null; readonly assignmentGroupWeight?: number | null; readonly discussionPostDone?: boolean; readonly discussionRepliesDone?: boolean }
+export interface DashboardEvent { readonly id: string; readonly sourceItemId?: string; readonly courseId: string; readonly courseCode: string; readonly kind: "deadline" | "class" | "discussion"; readonly title: string; readonly startsAt: string; readonly endsAt?: string | null; readonly location?: string | null; readonly detail?: string | null; readonly notes?: string | null; readonly completed: boolean; readonly completedAt?: number | null; readonly submissionState?: string; readonly source?: string | null; readonly calendarRetained?: boolean; readonly points?: number | null; readonly score?: number | null; readonly grade?: string | null; readonly manualGrade?: string | null; readonly manualGradeVersion?: 1 | null; readonly manualGradeSource?: "manual" | "pdf" | null; readonly gradedAt?: string | null; readonly assignmentGroupId?: string | null; readonly assignmentGroupName?: string | null; readonly assignmentGroupWeight?: number | null; readonly discussionPostDone?: boolean; readonly discussionRepliesDone?: boolean }
 export interface DashboardResource { readonly id: string; readonly courseId: string; readonly courseCode: string; readonly type: string; readonly title: string; readonly context?: string | null; readonly updatedAt?: string | number | null; readonly localUrl?: string | null; readonly savedLocally?: boolean }
 export interface DashboardMessage { readonly id?: string | null; readonly author: string; readonly createdAt?: string | number | null; readonly body: string; readonly bodyTruncated?: boolean; readonly attachments: readonly DashboardAttachment[] }
 export interface DashboardAttachment { readonly name: string; readonly contentType?: string | null; readonly sizeBytes?: number | null }
@@ -231,24 +232,19 @@ function copyButton(event: DashboardEvent, state: DashboardState, handlers: Dash
   };
 }
 
-function eventCard(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
-  const expanded = state.expandedEventIds.has(event.id);
-  const detailsId = `event-detail-${event.id.replace(/[^A-Za-z0-9_-]/g, "-")}`;
-  return el("article", undefined, { class: `event-card ${event.kind === "class" ? "class-meeting" : ""} ${event.kind === "discussion" ? "discussion-card" : ""} ${event.completed ? "completed" : ""}`.trim(), style: `--course-color:${color(state.data.courses, event.courseCode)}` }, [
-    el("div", undefined, { class: "event-top" }, [el("div", undefined, undefined, [el("div", `${code(event.courseCode)} · ${event.kind === "class" ? "Class meeting" : event.kind === "discussion" ? "Discussion" : "Assignment due"}`, { class: "event-kind" }), el("h2", event.title, { class: "event-title" })]), el("time", eventTime(event), { class: "event-time", datetime: event.startsAt, ...(isDateOnly(event.startsAt) && event.kind !== "class" ? { title: "No time supplied; 11:59 PM assumed." } : {}) })]),
-    el("div", undefined, { class: "event-meta" }, [el("span", event.location ?? (event.kind === "class" ? "Location not supplied" : "Canvas")), el("span", event.kind === "class" ? "Scheduled meeting" : event.completed ? "Completed by you" : "Not completed by you")]),
-    ...(event.kind === "class" ? [] : event.kind === "discussion" ? [
-      el("div", undefined, { class: "discussion-progress", "aria-label": "Discussion requirements" }, [el("span", "Discussion requirements", { class: "discussion-progress__label" }), ...discussionCheckboxes(event, state, handlers)]),
-      el("div", undefined, { class: "discussion-overall" }, [el("span", "Overall assignment"), completionCheckbox(event, state, handlers)]),
-    ] : [completionCheckbox(event, state, handlers)]),
-    ...(state.failedCompletionIds.has(event.id) ? [el("span", failureMessage(state, event.id, "Could not save. Existing completion state was restored."), { class: "inline-error event-failure", role: "status", "aria-live": "polite" })] : []),
-    ...(state.failedDiscussionIds.has(event.id) ? [el("span", failureMessage(state, event.id, "Could not save discussion progress. Existing marks were restored."), { class: "inline-error event-failure", role: "status", "aria-live": "polite" })] : []),
-    el("div", undefined, { class: "event-actions" }, [
-      ...(event.kind !== "class" ? [copyButton(event, state, handlers)] : []),
-      { tag: "button", attrs: { type: "button", class: "event-expand", "aria-expanded": String(expanded), "aria-controls": detailsId }, text: expanded ? "Hide details" : "Details", on: { click: () => handlers.onToggleEvent(event.id) } },
-    ]),
-    el("div", undefined, { id: detailsId, class: "event-detail", ...(expanded ? {} : { hidden: "" }) }, [el("span", event.detail ?? "No additional details were supplied."), ...(event.kind !== "class" ? [completionButton(event, state, handlers)] : []), ...(state.failedCompletionIds.has(event.id) ? [el("span", failureMessage(state, event.id, "Could not save. Existing completion state was restored."), { class: "inline-error", role: "status", "aria-live": "polite" })] : []), ...(state.failedDiscussionIds.has(event.id) ? [el("span", failureMessage(state, event.id, "Could not save discussion progress. Existing marks were restored."), { class: "inline-error", role: "status", "aria-live": "polite" })] : [])]),
-  ]);
+function timelineEventCardRenderers(state: DashboardState, handlers: DashboardHandlers): TimelineEventCardRenderers {
+  return {
+    el,
+    code,
+    color: (courseCode) => color(state.data.courses, courseCode),
+    eventTime,
+    isDateOnly,
+    discussionCheckboxes: (event) => discussionCheckboxes(event, state, handlers),
+    completionCheckbox: (event) => completionCheckbox(event, state, handlers),
+    completionButton: (event) => completionButton(event, state, handlers),
+    failureMessage: (id, fallback) => failureMessage(state, id, fallback),
+    copyButton: (event) => copyButton(event, state, handlers),
+  };
 }
 
 function railCompletionCheckbox(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
@@ -330,12 +326,13 @@ function timelinePage(state: DashboardState, handlers: DashboardHandlers): Eleme
   const hardEnd = new Date(start); hardEnd.setDate(hardEnd.getDate() + 119); if (end > hardEnd) end.setTime(hardEnd.getTime());
   const days: Date[] = []; for (const cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) days.push(new Date(cursor));
   const lanes = Math.max(1, courses.length);
+  const cardRenderers = timelineEventCardRenderers(state, handlers);
   return el("section", undefined, { class: "page", "data-page-panel": "timeline" }, [
     el("section", undefined, { class: "hero" }, [el("div", undefined, undefined, [el("p", `${formatted(start.getTime())} – ${formatted(end.getTime())}`, { class: "eyebrow" }), el("h1", "Timeline"), el("p", "Each row is one full day. Empty rows are time you can use.", { class: "hero-copy" })]), el("div", undefined, { class: "next-deadline", "aria-live": "polite" }, [el("span", "Next deadline"), el("strong", next === undefined ? "All clear" : countdownText(state.now, next.startsAt)), el("small", next?.title ?? "No unfinished deadline was supplied")])]),
     el("section", undefined, { class: "controls", "aria-label": "Timeline controls" }, [el("div", undefined, { class: "segmented", "aria-label": "Event types" }, (["all", "deadlines"] as const).map((mode) => ({ tag: "button", attrs: { type: "button", class: state.eventMode === mode ? "active" : "" }, text: mode === "all" ? "All events" : "Deadlines only", on: { click: () => handlers.onEventMode(mode) } }))), el("div", undefined, { class: "filters", "aria-label": "Course filters" }, [{ tag: "button", attrs: { type: "button", class: `filter ${state.courseFilter === "all" ? "active" : ""}` }, text: "All courses", on: { click: () => handlers.onCourseFilter("all") } }, ...courses.map((course) => ({ tag: "button", attrs: { type: "button", class: `filter ${state.courseFilter === course.courseCode ? "active" : ""}`, style: `--course-color:${color(courses, course.courseCode)}` }, text: code(course.courseCode), on: { click: () => handlers.onCourseFilter(course.courseCode) } }))])]),
     ...(courses.length === 0 ? [empty("No courses have been synced yet.")] : [el("div", undefined, { class: "timeline-layout" }, [el("section", undefined, { class: "timeline-shell" }, [
       el("header", undefined, { class: "lane-header", style: `--lane-count:${String(lanes)}` }, [el("div", undefined, { class: "lane-summary" }, [el("span", `${days.length} days`, { class: "range" }), el("span", `${events.length} matching events`, { class: "range-note" })]), el("div", undefined, { class: "lane-marker", "aria-hidden": "true" }), ...courses.map((course) => el("div", undefined, { class: "lane-label", style: `--lane-color:${color(courses, course.courseCode)}` }, [el("b", laneHeading(course))]))]),
-      el("div", undefined, { class: "timeline" }, days.map((day) => { const currentKey = dayKey(day); const dayEvents = events.filter((event) => dayKey(eventDate(event)) === currentKey); const today = currentKey === dayKey(new Date(state.now)); return el("section", undefined, { class: `day-slot ${day.getDay() === 0 || day.getDay() === 6 ? "weekend" : ""} ${today ? "today" : ""}`.trim(), "data-day": currentKey }, [el("div", undefined, { class: "day-date" }, [el("strong", formatted(day.getTime())), el("span", new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(day)), ...(today ? [el("b", "Today", { class: "today-label" })] : []), ...(dayEvents.length > 1 ? [el("b", `${dayEvents.length} events`, { class: "event-count" })] : [])]), el("div", undefined, { class: "day-rail", "aria-hidden": "true" }), el("div", undefined, { class: "course-lanes", style: `--lane-count:${String(lanes)}` }, [...courses.map((course) => el("div", undefined, { class: "course-lane", "data-course-lane": key(course.courseCode), style: `--lane-tint:${color(courses, course.courseCode)}` }, dayEvents.filter((event) => event.courseId === course.id || key(event.courseCode) === key(course.courseCode)).map((event) => eventCard(event, state, handlers)))), ...(dayEvents.length === 0 ? [el("div", "Open day", { class: "open-day" })] : [])])]); })),
+      el("div", undefined, { class: "timeline" }, days.map((day) => { const currentKey = dayKey(day); const dayEvents = events.filter((event) => dayKey(eventDate(event)) === currentKey); const today = currentKey === dayKey(new Date(state.now)); return el("section", undefined, { class: `day-slot ${day.getDay() === 0 || day.getDay() === 6 ? "weekend" : ""} ${today ? "today" : ""}`.trim(), "data-day": currentKey }, [el("div", undefined, { class: "day-date" }, [el("strong", formatted(day.getTime())), el("span", new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(day)), ...(today ? [el("b", "Today", { class: "today-label" })] : []), ...(dayEvents.length > 1 ? [el("b", `${dayEvents.length} events`, { class: "event-count" })] : [])]), el("div", undefined, { class: "day-rail", "aria-hidden": "true" }), el("div", undefined, { class: "course-lanes", style: `--lane-count:${String(lanes)}` }, [...courses.map((course) => el("div", undefined, { class: "course-lane", "data-course-lane": key(course.courseCode), style: `--lane-tint:${color(courses, course.courseCode)}` }, dayEvents.filter((event) => event.courseId === course.id || key(event.courseCode) === key(course.courseCode)).map((event) => renderTimelineEventCard(event, state, handlers, cardRenderers)))), ...(dayEvents.length === 0 ? [el("div", "Open day", { class: "open-day" })] : [])])]); })),
     ]), timelineRail(state, handlers, dueItems, unreadMessages)] )]),
   ]);
 }
@@ -739,7 +736,7 @@ function morePage(state: DashboardState, handlers: DashboardHandlers): ElementDe
 }
 
 function pagePanel(pageName: DashboardPage, descriptor: ElementDescriptor): ElementDescriptor {
-  return { ...descriptor, attrs: { ...descriptor.attrs, "data-page-panel": pageName } };
+  return { ...descriptor, attrs: { ...descriptor.attrs, "data-page-panel": pageName, "aria-label": `Due Good ${pageName} page` } };
 }
 
 function page(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {

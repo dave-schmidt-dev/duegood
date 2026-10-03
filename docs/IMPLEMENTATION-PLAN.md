@@ -353,3 +353,7 @@ Confirmed `inventory_blobs()` removes validated pending files while it is still 
 ### 2026-10-02 promotion preflight guard correction
 
 Confirmed `prepare_store_promotion()` opens the native backup-folder picker before checking that the local store is a ready preview. Perform a preliminary readiness check before opening the picker; after selection, acquire the existing import, refresh, refresh-lease, and write guards and repeat the authoritative readiness check. Retain the exact backup comparison and confirmation-time proof checks. Add a counting fake-picker regression for rejected store states while preserving valid preview promotion and lock behavior.
+
+## 2026-10-02: Owner-authorized all-task fixes
+
+Owner requested planning and fixing all eight remaining tasks. The frozen draft completed deep PlanRun review at `.logs/all-fixes-20261002/plan-conclusion.json`; separate corrected contracts are `docs/ALL-FIXES-FINAL-PLAN-20261002.md` and `docs/ALL-FIXES-FINAL-TASKS-20261002.md`. Implement compatible lock updates, shared anchored no-follow reads, truthful idempotent calendar confirmation, atomic snapshot publication, bounded cold installer launch proof, and approved responsive rail. Verify full staged checks, installed candidate, and private live pages; preserve owner acceptance, legacy retirement, and exact publication as separate gates. Native fallback is qualified by the current isolated Cargo baseline failure: writer never started, clone removed, lock released. Private store and rollback data remain intact.

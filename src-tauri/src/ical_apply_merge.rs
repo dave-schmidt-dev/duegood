@@ -7,6 +7,7 @@ use serde_json::{json, Map, Value};
 use crate::ical::{IcalNormalization, IcalNormalizeOptions};
 use crate::store::StoreError;
 
+use super::confirmation::{self, CalendarMember};
 use super::facts::*;
 use super::refs::*;
 
@@ -20,7 +21,7 @@ pub(super) struct HeldNotice {
 }
 
 pub(super) struct MergeResult {
-    pub changed: bool,
+    pub source_facts_changed: bool,
     pub added: usize,
     pub updated: usize,
     pub held: usize,
@@ -121,10 +122,11 @@ pub(super) fn apply_to_document(
         }
     }
     let mut incoming = HashSet::new();
-    let mut changed = false;
+    let mut source_facts_changed = false;
     let mut added_ids = HashSet::new();
     let mut updated_ids = HashSet::new();
     let mut held_notices = Vec::new();
+    let mut accepted_members = Vec::new();
     let mut held = 0;
     let mut unresolved = existing_pending_keys(root)?;
 
@@ -193,7 +195,7 @@ pub(super) fn apply_to_document(
             } else {
                 "ambiguous-match"
             };
-            changed |= write_pending(
+            write_pending(
                 root,
                 &primary_key,
                 &local_id,
@@ -245,7 +247,7 @@ pub(super) fn apply_to_document(
                 .push(Value::Object(item.clone()));
             items_by_id.insert(local_id.clone(), Value::Object(item));
             added_ids.insert(local_id.clone());
-            changed = true;
+            source_facts_changed = true;
         }
         let item = item_mut(root, &local_id)?;
         if item.get("course").and_then(Value::as_str) != Some(course.as_str()) {
@@ -253,27 +255,33 @@ pub(super) fn apply_to_document(
                 "calendar source item belongs to another course",
             ));
         }
-        let mut linked = append_reference(item, &reference)?;
+        append_reference(item, &reference)?;
         if let Some(canvas_reference) = assignment_canvas_reference(&reference)? {
-            linked |= append_reference(item, &canvas_reference)?;
+            append_reference(item, &canvas_reference)?;
             owners.insert(reference_key(&canvas_reference)?, local_id.clone());
         }
-        if linked {
-            owners.insert(primary_key.clone(), local_id.clone());
-            changed = true;
-        }
+        owners.insert(primary_key.clone(), local_id.clone());
         let (_field_count, facts_changed) =
             merge_fields(item, &reference, observation, finished_at)?;
         if facts_changed {
             if !added_ids.contains(&local_id) {
                 updated_ids.insert(local_id.clone());
             }
-            changed = true;
+            source_facts_changed = true;
         }
         unresolved.remove(&primary_key);
+        accepted_members.push(CalendarMember {
+            reference,
+            local_id: local_id.clone(),
+        });
     }
+    let _ = confirmation::apply(
+        root,
+        &accepted_members,
+        normalized.held.is_empty() && held == 0,
+    )?;
     Ok(MergeResult {
-        changed,
+        source_facts_changed,
         added: added_ids.len(),
         updated: updated_ids.len(),
         held,

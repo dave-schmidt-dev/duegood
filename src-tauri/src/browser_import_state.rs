@@ -10,8 +10,8 @@ use crate::browser_projection::BrowserCourseScope;
 use crate::browser_resources::PromotionResult;
 use crate::config::{ReadLimits, COURSEWORK_FILE};
 use crate::store::{
-    atomic_write, create_private_dir, node_json_bytes, read_capped, Store, StoreCondition,
-    StoreState,
+    atomic_write, create_private_dir, node_json_bytes, read_capped, read_capped_under,
+    remove_files_under, Store, StoreCondition, StoreState,
 };
 
 use super::{BrowserImportError, MAX_JSON_BYTES, STATUS_FILE, STATUS_FORMAT, STATUS_VERSION};
@@ -71,28 +71,7 @@ fn read_plain_file_under(
     {
         return Err(BrowserImportError::InvalidStore);
     }
-    let mut current = root.to_path_buf();
-    let components = relative.components().collect::<Vec<_>>();
-    for (index, component) in components.iter().enumerate() {
-        let Component::Normal(name) = component else {
-            return Err(BrowserImportError::InvalidStore);
-        };
-        current.push(name);
-        let metadata = match fs::symlink_metadata(&current) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(_) => return Err(BrowserImportError::InvalidStore),
-        };
-        let is_leaf = index + 1 == components.len();
-        if is_leaf {
-            if !metadata.file_type().is_file() || metadata.len() > cap {
-                return Err(BrowserImportError::InvalidStore);
-            }
-        } else if !metadata.file_type().is_dir() {
-            return Err(BrowserImportError::InvalidStore);
-        }
-    }
-    read_capped(path, cap).map_err(BrowserImportError::Store)
+    read_capped_under(root, relative, cap).map_err(BrowserImportError::Store)
 }
 
 pub(super) fn check_prior_receipt(
@@ -317,30 +296,13 @@ pub(super) fn remove_verified_legacy_materials(
     let mut validated = Vec::with_capacity(paths.len());
     let mut unique = std::collections::BTreeSet::new();
     for relative in paths {
-        let components = safe_legacy_material_components(relative)?;
+        safe_legacy_material_components(relative)?;
         if !unique.insert(relative.clone()) {
             return Err(BrowserImportError::Stage);
         }
-        let mut current = stage.to_path_buf();
-        for component in &components[..components.len() - 1] {
-            current.push(component);
-            let metadata = fs::symlink_metadata(&current).map_err(|_| BrowserImportError::Stage)?;
-            if !metadata.file_type().is_dir() {
-                return Err(BrowserImportError::Stage);
-            }
-        }
-        let leaf = components.last().ok_or(BrowserImportError::Stage)?;
-        current.push(leaf);
-        let metadata = fs::symlink_metadata(&current).map_err(|_| BrowserImportError::Stage)?;
-        if !metadata.file_type().is_file() {
-            return Err(BrowserImportError::Stage);
-        }
-        validated.push(current);
+        validated.push(relative.clone());
     }
-    for path in validated {
-        fs::remove_file(path).map_err(|_| BrowserImportError::Stage)?;
-    }
-    Ok(())
+    remove_files_under(stage, &validated).map_err(|_| BrowserImportError::Stage)
 }
 
 fn safe_legacy_material_components(relative: &Path) -> Result<Vec<String>, BrowserImportError> {

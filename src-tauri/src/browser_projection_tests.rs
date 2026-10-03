@@ -270,3 +270,74 @@ fn rejects_invalid_or_duplicate_ids() {
         ProjectionError::InvalidResource
     );
 }
+
+#[test]
+fn projects_current_complete_all_day_calendar_event_identity_without_display_data() {
+    let mut input = snapshot();
+    input["runId"] = json!(72);
+    input["generationId"] = json!("a".repeat(32));
+    input["resources"].as_array_mut().unwrap().push(json!({
+        "endpoint": "calendarEvents",
+        "courseId": 101,
+        "groupId": null,
+        "contextCode": "course_101",
+        "items": [{
+            "id": 808,
+            "context_code": "course_101",
+            "type": "event",
+            "all_day": true,
+            "start_at": "2030-01-20T00:00:00Z",
+            "title": "Synthetic private event title",
+            "html_url": "https://canvas.invalid/private-event"
+        }]
+    }));
+    input["coverage"] = json!([{
+        "endpoint": "calendarEvents",
+        "courseId": 101,
+        "groupId": null,
+        "contextCode": "course_101",
+        "status": "complete"
+    }]);
+
+    let projection = project_snapshot(&input, &[scope()]).expect("projection succeeds");
+    let path = "classes/demo-101/canvas-export/api/calendar-event-identities.json";
+    let document: Value = serde_json::from_slice(&projection.documents[path]).unwrap();
+    assert_eq!(document["runId"], 72);
+    assert_eq!(document["generationId"], "a".repeat(32));
+    assert_eq!(document["userId"], 7001);
+    assert_eq!(document["institution"], "marymount.instructure.com");
+    assert_eq!(document["origin"], "https://marymount.instructure.com");
+    assert_eq!(document["courseKey"], "demo-101");
+    assert_eq!(document["coverage"]["status"], "complete");
+    assert_eq!(document["events"].as_array().unwrap().len(), 1);
+    assert_eq!(document["events"][0]["id"], "808");
+    assert_eq!(document["events"][0]["uid"], "event-calendar-event-808");
+    assert_eq!(document["events"][0]["startAt"], "2030-01-20T00:00:00Z");
+    let serialized = String::from_utf8(projection.documents[path].clone()).unwrap();
+    assert!(!serialized.contains("Synthetic private event title"));
+    assert!(!serialized.contains("html_url"));
+
+    let duplicate = input["resources"]
+        .as_array_mut()
+        .unwrap()
+        .last_mut()
+        .unwrap()["items"][0]
+        .clone();
+    input["resources"]
+        .as_array_mut()
+        .unwrap()
+        .last_mut()
+        .unwrap()["items"]
+        .as_array_mut()
+        .unwrap()
+        .push(duplicate);
+    let duplicated = project_snapshot(&input, &[scope()]).expect("projection succeeds");
+    let document: Value = serde_json::from_slice(&duplicated.documents[path]).unwrap();
+    assert!(document["events"].as_array().unwrap().is_empty());
+
+    input["coverage"][0]["status"] = json!("gap");
+    let incomplete = project_snapshot(&input, &[scope()]).expect("projection succeeds");
+    let document: Value = serde_json::from_slice(&incomplete.documents[path]).unwrap();
+    assert_eq!(document["coverage"]["status"], "unavailable");
+    assert!(document["events"].as_array().unwrap().is_empty());
+}

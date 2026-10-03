@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename as fsRename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { installDesktopApp as installDesktopAppImplementation } from "../../scripts/install-desktop-app.mjs";
+import { installDesktopApp as installDesktopAppImplementationRaw } from "../../scripts/install-desktop-app.mjs";
 import { acquireOwnedStageRoot } from "../../scripts/owned-stage-root.mjs";
 
 const identityHash = "A".repeat(40);
@@ -27,8 +27,14 @@ type InstallResult = {
   removedBackupPaths: string[];
 };
 
-const installDesktopApp = installDesktopAppImplementation as unknown as
-  (options?: Record<string, unknown>) => Promise<InstallResult>;
+const installDesktopAppImplementation = installDesktopAppImplementationRaw as unknown as
+  (options: Record<string, unknown>) => Promise<InstallResult>;
+const installDesktopApp = (options: Record<string, unknown> = {}) => installDesktopAppImplementation({
+  ...options,
+  launchProof: fakeLaunchProof,
+  stopCandidate: fakeStopCandidate,
+  stopExistingApp: async ({ bundleId, appPath, dataRoot }: { bundleId: string; appPath: string; dataRoot: string }) => { expect({ bundleId, appPath, dataRoot }).toStrictEqual({ bundleId: "com.zerodelta.duegood", appPath: path.join(applications, "Due Good.app"), dataRoot: path.join(await realpath(homeDirectory), "Library", "Application Support", "com.zerodelta.duegood") }); commands.push({ command: "native-stop-existing-verified-app", args: [bundleId, appPath] }); },
+});
 const acquireOwnedStageRootForTest = acquireOwnedStageRoot as unknown as
   (options: { source: string; destination?: string; keep?: boolean }) => Promise<{
     ownership: Record<string, unknown>;
@@ -52,8 +58,12 @@ let bundleIds: Map<string, string>;
 let productionRunningAtCheck: number | undefined;
 let productionRunningChecks: number;
 let failedLaunchServicesRegistration: boolean;
+let launchServicesFailureConsumed: boolean;
+let failLaunchServicesRegistrationOnCall: number | undefined;
+let launchServicesRegistrationCalls: number;
 let failedOpen: boolean;
 let stageLockToCorrupt: string | undefined;
+let coldProofBackupSnapshots: Array<Array<{ path: string; exists: boolean }>>;
 
 async function makeApp(appPath: string, id = "com.zerodelta.duegood") {
   const helper = path.join(appPath, helperRelativePath);
@@ -182,16 +192,42 @@ async function fakeRun(command: string, args: string[], options?: { cwd?: string
   }
   if (command.endsWith("/lsregister")) {
     if (args[0] === "-dump") return Promise.resolve({ stdout: registrations, stderr: "" });
-    if (args[0] === "-f" && failedLaunchServicesRegistration) return Promise.reject(new Error("registration failed"));
+    if (args[0] === "-f") {
+      launchServicesRegistrationCalls += 1;
+      if ((failedLaunchServicesRegistration && !launchServicesFailureConsumed)
+          || launchServicesRegistrationCalls === failLaunchServicesRegistrationOnCall) {
+        launchServicesFailureConsumed = true;
+        return Promise.reject(new Error("registration failed"));
+      }
+    }
     return Promise.resolve({ stdout: "", stderr: "" });
-  }
-  if (command.endsWith("/open")) {
-    if (failedOpen) return Promise.reject(new Error("open failed"));
-    return mkdir(path.join(homeDirectory, "Library", "Application Support", "com.zerodelta.duegood"), { recursive: true })
-      .then(() => ({ stdout: "", stderr: "" }));
   }
   return Promise.reject(new Error("Unexpected command in hermetic test."));
 }
+
+async function fakeLaunchProof({
+  appPath,
+  onOwnedLaunch,
+}: {
+  appPath: string;
+  onOwnedLaunch: (identity: { pid: number; appPath: string; executablePath: string }, method: string) => void;
+}) {
+  const recordBackups = async () => coldProofBackupSnapshots.push(await Promise.all(
+    (await readdir(applications)).filter((name) => /^\.Due Good\.backup-[0-9a-f-]{36}\.app$/u.test(name))
+      .map(async (name) => ({ path: path.join(applications, name), exists: await exists(path.join(applications, name)) })),
+  ));
+  const exactPathIdentity = { pid: 801, appPath, executablePath: path.join(appPath, "Contents", "MacOS", "duegood-desktop") };
+  const bundleIdentity = { pid: 802, appPath, executablePath: path.join(appPath, "Contents", "MacOS", "duegood-desktop") };
+  await recordBackups();
+  commands.push({ command: "native-launch-exact-path", args: [appPath] }); onOwnedLaunch(exactPathIdentity, "exact-path");
+  commands.push({ command: "native-stop-under-snapshot-lock", args: [String(exactPathIdentity.pid)] }); await recordBackups();
+  commands.push({ command: "/usr/bin/open", args: ["-b", "com.zerodelta.duegood"] });
+  if (failedOpen) throw new Error("open failed");
+  onOwnedLaunch(bundleIdentity, "bundle-id"); await mkdir(path.join(homeDirectory, "Library", "Application Support", "com.zerodelta.duegood"), { recursive: true });
+  return { exactPath: exactPathIdentity, bundleId: bundleIdentity };
+}
+
+async function fakeStopCandidate({ pid }: { pid: number }) { commands.push({ command: "native-rollback-stop-verified-candidate", args: [String(pid)] }); }
 
 beforeEach(async () => {
   temporary = await mkdtemp(path.join(tmpdir(), "duegood-install-test-"));
@@ -217,8 +253,12 @@ beforeEach(async () => {
   productionRunningAtCheck = undefined;
   productionRunningChecks = 0;
   failedLaunchServicesRegistration = false;
+  launchServicesFailureConsumed = false;
+  failLaunchServicesRegistrationOnCall = undefined;
+  launchServicesRegistrationCalls = 0;
   failedOpen = false;
   stageLockToCorrupt = undefined;
+  coldProofBackupSnapshots = [];
   await makeApp(app);
 });
 
@@ -257,6 +297,7 @@ describe("desktop app installer", () => {
     expect(logs).toContain(`Installed capture download helper SHA-256: ${expectedCaptureDigest}`);
     expect(result.productionDataRootExistedBeforeInstall).toBe(false);
     expect(result.productionDataRootExistsAfterOpen).toBe(true);
+    expect(coldProofBackupSnapshots).toStrictEqual([[], []]);
     const marker = JSON.parse(await readFile(rootMarkerPath, "utf8")) as { root: string; existedBeforePhase: boolean };
     expect(marker).toStrictEqual({
       schemaVersion: 1,
@@ -413,7 +454,10 @@ describe("desktop app installer", () => {
     expect(await readdir(applications)).toEqual(["Due Good.app"]);
     expect(commands.some(({ command, args }) => command.endsWith("/lsregister")
       && args[0] === "-u" && args[1] === removedUpgradeBackup)).toBe(true);
+    expect(coldProofBackupSnapshots).toHaveLength(2);
+    expect(coldProofBackupSnapshots.every((snapshot) => snapshot.length === 1 && snapshot[0]?.exists)).toBe(true);
     expect(commands.filter(({ command }) => command.endsWith("/pgrep"))).toHaveLength(2);
+    expect(commands.findIndex(({ command }) => command === "native-stop-existing-verified-app")).toBeLessThan(commands.findIndex(({ command }) => command.endsWith("/pgrep")));
   });
 
   it("removes an older installer-owned backup and unregisters it after success", async () => {
@@ -566,7 +610,7 @@ describe("desktop app installer", () => {
 
     expect(await readFile(existingHelper, "utf8")).toBe("owner-installed bytes");
     expect(await readdir(applications)).toEqual(["Due Good.app"]);
-    expect(commands.some(({ command, args }) => command.endsWith("/lsregister") && args[0] === "-f")).toBe(false);
+    expect(commands.some(({ command, args }) => command.endsWith("/lsregister") && args[0] === "-f")).toBe(true);
   });
 
   it("restores the prior app when LaunchServices registration fails", async () => {
@@ -594,6 +638,78 @@ describe("desktop app installer", () => {
     expect(commands.some(({ command }) => command.endsWith("/open"))).toBe(false);
   });
 
+  it("reports the restored app path when registering the restored backup fails", async () => {
+    const installed = path.join(applications, "Due Good.app");
+    await makeApp(installed);
+    const existingHelper = path.join(installed, helperRelativePath);
+    await writeFile(existingHelper, "owner-installed bytes");
+    failedLaunchServicesRegistration = true;
+    failLaunchServicesRegistrationOnCall = 2;
+
+    const result = await installDesktopApp({
+      appPath: app,
+      candidateRoot,
+      sourceCheckout,
+      applicationsDirectory: applications,
+      homeDirectory,
+      rootMarkerPath,
+      signingIdentity: identityName,
+      platform: "darwin",
+      run: fakeRun,
+      log: () => undefined,
+    }).then(() => undefined, (error: unknown) => error);
+
+    expect(result).toBeInstanceOf(Error);
+    const message = (result as Error).message;
+    expect(message).toContain(`previous app was restored at ${installed}`);
+    expect(message).toContain("registration could not be confirmed");
+    expect(message).not.toContain("remains in its backup");
+    expect(await readFile(existingHelper, "utf8")).toBe("owner-installed bytes");
+    expect(await readdir(applications)).toEqual(["Due Good.app"]);
+    expect(launchServicesRegistrationCalls).toBe(2);
+  });
+
+  it("reports an incomplete restore when moving the backup back fails after removing the new app", async () => {
+    const installed = path.join(applications, "Due Good.app");
+    await makeApp(installed);
+    const existingHelper = path.join(installed, helperRelativePath);
+    await writeFile(existingHelper, "owner-installed bytes");
+    failedLaunchServicesRegistration = true;
+    let retainedBackupPath = "";
+    const files = {
+      cp, lstat, readFile, readdir, realpath, rm, writeFile,
+      rename: async (source: string, destination: string) => {
+        if (source === installed && path.basename(destination).startsWith(".Due Good.backup-")) retainedBackupPath = destination;
+        if (retainedBackupPath && source === retainedBackupPath && destination === installed) throw new Error("restore rename failed");
+        return fsRename(source, destination);
+      },
+    };
+
+    const result = await installDesktopApp({
+      appPath: app,
+      candidateRoot,
+      sourceCheckout,
+      applicationsDirectory: applications,
+      homeDirectory,
+      rootMarkerPath,
+      signingIdentity: identityName,
+      platform: "darwin",
+      run: fakeRun,
+      files,
+      log: () => undefined,
+    }).then(() => undefined, (error: unknown) => error);
+
+    expect(result).toBeInstanceOf(Error);
+    const message = (result as Error).message;
+    expect(message).toContain("restoration did not complete");
+    expect(message).toContain(`previous app remains in its backup at ${retainedBackupPath}`);
+    expect(message).not.toContain("new app remains installed");
+    expect(retainedBackupPath).not.toBe("");
+    expect(await exists(installed)).toBe(false);
+    expect(await readFile(path.join(retainedBackupPath, helperRelativePath), "utf8")).toBe("owner-installed bytes");
+    expect(await readdir(applications)).toEqual([path.basename(retainedBackupPath)]);
+  });
+
   it("restores the prior app when opening by bundle identifier fails", async () => {
     const installed = path.join(applications, "Due Good.app");
     await makeApp(installed);
@@ -616,6 +732,7 @@ describe("desktop app installer", () => {
 
     expect(await readFile(existingHelper, "utf8")).toBe("owner-installed bytes");
     expect(await readdir(applications)).toEqual(["Due Good.app"]);
+    expect(commands.some(({ command, args }) => command === "native-rollback-stop-verified-candidate" && args[0] === "801")).toBe(true);
   });
 
   it("consumes an owned stage handoff and removes the stage after a successful install", async () => {

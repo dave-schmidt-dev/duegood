@@ -85,7 +85,7 @@ fn browser_runtime_requires_exact_manifest_tree_hashes_and_package_pins() {
 fn browser_client_uses_fixed_entrypoint_and_sanitizes_content_free_frames() {
     let result_frame = serde_json::json!({
         "type": "result", "status": "complete", "resourceCount": 3, "itemCount": 8,
-        "gapCount": 0, "importedCourses": 3, "archivedCourses": 0, "promotedBlobs": 2,
+        "gapCount": 0, "omissionCount": 2, "importedCourses": 3, "archivedCourses": 0, "promotedBlobs": 2,
         "reusedBlobs": 4, "bytesVerified": 1234, "alreadyCurrent": false,
     });
     let result_line = serde_json::to_string(&result_frame).unwrap();
@@ -101,7 +101,7 @@ fn browser_client_uses_fixed_entrypoint_and_sanitizes_content_free_frames() {
         true
     })
     .expect("well-formed helper result");
-    assert_eq!(outcome, BrowserOutcome::Complete { gaps: 0 });
+    assert_eq!(outcome, BrowserOutcome::Complete { gaps: 0, omissions: 2 });
     assert_eq!(
         *phases.lock().unwrap(),
         vec!["browser-capture", "browser-import"]
@@ -156,7 +156,7 @@ fn malformed_or_oversized_helper_output_fails_closed() {
 fn incomplete_capture_gaps_are_distinct_from_browser_import_failure() {
     let frame = serde_json::json!({
         "type": "result", "status": "incomplete", "resourceCount": 3, "itemCount": 8,
-        "gapCount": 2, "importedCourses": 3, "archivedCourses": 0, "promotedBlobs": 2,
+        "gapCount": 2, "omissionCount": 3, "importedCourses": 3, "archivedCourses": 0, "promotedBlobs": 2,
         "reusedBlobs": 4, "bytesVerified": 1234, "alreadyCurrent": false,
         "errorCode": "CAPTURE_GAPS",
     });
@@ -168,7 +168,7 @@ fn incomplete_capture_gaps_are_distinct_from_browser_import_failure() {
     let (_app_root, app) = app_with_store("full-refresh-gaps");
     let outcome = run_browser_client(&app.shared, &runtime, &mut |_| true)
         .expect("partial capture is a valid result");
-    assert_eq!(outcome, BrowserOutcome::Incomplete { gaps: 2 });
+    assert_eq!(outcome, BrowserOutcome::Incomplete { gaps: 2, omissions: 3 });
 
     let failed = combine_outcomes(
         BrowserOutcome::Failed {
@@ -184,7 +184,7 @@ fn incomplete_capture_gaps_are_distinct_from_browser_import_failure() {
 fn browser_partial_or_failed_outcomes_still_attempt_calendar_and_keep_calendar_counts() {
     let mut calendar_called = false;
     let result = run_full_sequence(
-        || Ok(BrowserOutcome::Incomplete { gaps: 3 }),
+        || Ok(BrowserOutcome::Incomplete { gaps: 3, omissions: 2 }),
         || {
             calendar_called = true;
             Ok(CalendarOutcome::Complete(IcalRefreshResult {
@@ -203,6 +203,7 @@ fn browser_partial_or_failed_outcomes_still_attempt_calendar_and_keep_calendar_c
     assert_eq!(result.browser_status, "incomplete");
     assert_eq!(result.calendar_status, "complete");
     assert_eq!(result.gap_count, 3);
+    assert_eq!(result.omission_count, 2);
     assert_eq!(result.calendar_added, 1);
     assert_eq!(result.calendar_updated, 4);
 

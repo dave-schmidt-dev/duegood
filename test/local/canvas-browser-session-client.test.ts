@@ -6,6 +6,8 @@ const captureFrame = {
   resourceCount: 12,
   itemCount: 8,
   gapCount: 2,
+  dailyGapCount: 1,
+  omissionCount: 2,
   fileBodiesIncomplete: true,
 };
 

@@ -10,6 +10,7 @@ export interface AssignmentListItem {
   readonly title: string | null;
   readonly dueAt: string | null;
   readonly dueAtState: FieldState;
+  readonly calendarRetained?: boolean;
   readonly submissionState: SubmissionState;
   readonly completed: boolean;
   readonly completedAt: number | null;

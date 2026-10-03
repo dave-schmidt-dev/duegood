@@ -15,6 +15,8 @@ use serde_json::{json, Map, Value};
 
 use crate::reconcile::CourseAssignments;
 
+#[path = "browser_projection_calendar.rs"]
+mod calendar;
 #[path = "browser_projection_documents.rs"]
 mod documents;
 #[path = "browser_projection_sanitize.rs"]
@@ -254,6 +256,11 @@ pub fn project_snapshot(
             &mut documents,
             &format!("{export_root}/download-manifest.json"),
             &Value::Array(download_manifest),
+        )?;
+        put_json(
+            &mut documents,
+            &format!("{export_root}/api/calendar-event-identities.json"),
+            &calendar::project_event_identities(snapshot, scope),
         )?;
     }
 

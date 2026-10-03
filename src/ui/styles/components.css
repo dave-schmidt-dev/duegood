@@ -109,6 +109,7 @@ button:disabled { opacity: .6; cursor: wait; }
 .event-kind { margin-bottom: 5px; color: color-mix(in srgb, var(--course-color) 45%, #fff); font: 700 10px var(--utility); letter-spacing: .08em; text-transform: uppercase; }
 .event-title { margin: 0; overflow-wrap: anywhere; color: var(--ink); font-family: var(--body); font-size: 14px; font-weight: 750; letter-spacing: -.012em; }
 .event-meta { display: flex; flex-wrap: wrap; gap: 6px 13px; margin-top: 4px; color: var(--muted); font-size: 11px; }
+.calendar-retained-note { margin: 7px 0 0; color: var(--muted); font-size: 10px; line-height: 1.4; }
 .event-check, .event-checklist { display: flex; align-items: center; gap: 7px; }
 .event-check { min-height: 34px; color: var(--ink); font-size: 11px; font-weight: 750; cursor: pointer; }
 .event-check input { width: 16px; height: 16px; accent-color: var(--course-color); }
@@ -295,11 +296,15 @@ button:disabled { opacity: .6; cursor: wait; }
 .setup-progress progress { width: 100%; accent-color: var(--gold); }
 .setup-progress span { color: var(--muted); font-size: 12px; }
 
-/* The wide sidebar leaves less room than the viewport width suggests. */
+/* Keep the existing glance rail beside the timeline at desktop widths. */
 @media (min-width: 861px) and (max-width: 1400px) {
-  .timeline-layout { grid-template-columns: 1fr; }
-  .timeline-rail { position: static; max-height: none; }
-  .timeline-rail__scroll { max-height: none; overflow-y: visible; }
+  .timeline-layout { grid-template-columns: minmax(0, 1fr) minmax(220px, 28%); gap: 12px; }
+  .timeline-rail__head { padding: 14px 14px 12px; }
+  .timeline-rail__head h2 { font-size: 19px; }
+  .rail-due-row { grid-template-columns: 40px minmax(0, 1fr) auto; gap: 8px; padding: 10px; }
+  .rail-date strong { font-size: 15px; }
+  .rail-title { font-size: 11px; }
+  .rail-done { min-width: 30px; }
 }
 
 /* Kept for the disconnected token/OAuth recovery component. */

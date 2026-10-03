@@ -260,7 +260,11 @@ fn retains_repeated_child_detail_coverage_and_each_optional_gap() {
         }
         let coverage = fixture.snapshot["coverage"].as_array_mut().unwrap();
         coverage.extend([row.clone(), row.clone()]);
-        for reason in ["forbidden-optional", "request-failed", "not-attempted"] {
+        for reason in [
+            "capture-budget", "detail-budget", "disabled", "forbidden-optional",
+            "invalid-slug", "locked", "not-applicable", "not-attempted", "not-found",
+            "pagination-budget", "parent-unavailable", "request-failed", "unsupported", "unpublished",
+        ] {
             row["status"] = json!("gap");
             row["reason"] = json!(reason);
             coverage.push(row.clone());
@@ -274,17 +278,38 @@ fn retains_repeated_child_detail_coverage_and_each_optional_gap() {
             .iter()
             .filter(|row| row.endpoint == endpoint)
             .collect::<Vec<_>>();
-        assert_eq!(rows.len(), 5, "{endpoint}");
+        assert_eq!(rows.len(), 16, "{endpoint}");
         assert_eq!(
             rows.iter().filter(|row| row.status == "complete").count(),
             2
         );
-        for reason in ["forbidden-optional", "request-failed", "not-attempted"] {
+        for reason in [
+            "capture-budget", "detail-budget", "disabled", "forbidden-optional",
+            "invalid-slug", "locked", "not-applicable", "not-attempted", "not-found",
+            "pagination-budget", "parent-unavailable", "request-failed", "unsupported", "unpublished",
+        ] {
             assert!(rows
                 .iter()
                 .any(|row| row.status == "gap" && row.reason.as_deref() == Some(reason)));
         }
     }
+}
+
+#[test]
+fn coverage_reason_allowlist_rejects_unrecognized_capture_causes() {
+    let mut fixture = ArchiveFixture::new();
+    let row = fixture.snapshot["coverage"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|row| row["endpoint"] == "calendar")
+        .expect("calendar archive marker");
+    row["reason"] = json!("synthetic-unrecognized-reason");
+    fixture.rewrite_snapshot();
+    assert_eq!(
+        validate_current_bundle(&fixture.app_root, &fixture.expected()).unwrap_err(),
+        BundleError::InvalidSnapshot
+    );
 }
 
 #[test]

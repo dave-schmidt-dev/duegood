@@ -14,6 +14,10 @@ export function fullRefreshFeedback(result: FullRefreshResult): FullRefreshFeedb
   const failed = result.browserStatus === "failed" && (result.calendarStatus === "failed" || result.calendarStatus === "unavailable");
   const state = complete ? "complete" : failed ? "failed" : "partial";
   const gap = result.gapCount === 0 ? "no coverage gaps" : `${String(result.gapCount)} coverage gap${result.gapCount === 1 ? "" : "s"}`;
-  const detail = `Canvas ${sourceStatus(result.browserStatus)} (${gap}); calendar ${sourceStatus(result.calendarStatus)} (${String(result.calendarAdded)} added, ${String(result.calendarUpdated)} updated, ${String(result.calendarHeld)} held).`;
-  return { state, detail: `${complete ? "Full refresh complete." : failed ? "Full refresh failed." : "Full refresh partial."} ${detail}` };
+  const omissions = result.omissionCount === 0 ? "no optional capture omissions"
+    : `${String(result.omissionCount)} optional capture omission${result.omissionCount === 1 ? "" : "s"} recorded`;
+  const detail = `Canvas ${sourceStatus(result.browserStatus)} (${gap}; ${omissions}); calendar ${sourceStatus(result.calendarStatus)} (${String(result.calendarAdded)} added, ${String(result.calendarUpdated)} updated, ${String(result.calendarHeld)} held).`;
+  const headline = complete ? "Current Canvas pages refreshed."
+    : failed ? "Full refresh failed." : "Full refresh partial.";
+  return { state, detail: `${headline} ${detail}` };
 }

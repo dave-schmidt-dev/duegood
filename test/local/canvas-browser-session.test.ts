@@ -416,7 +416,8 @@ describe("Canvas session broker process protocol", () => {
 
       const first = await sendCommand(socketPath, { command: "capture", expectedUserId: 41 });
       expect(first.final).toEqual({
-        status: "PARTIAL", resourceCount: 2, itemCount: 1, gapCount: 1, fileBodiesIncomplete: true,
+        status: "PARTIAL", resourceCount: 2, itemCount: 1, gapCount: 1,
+        dailyGapCount: 4, omissionCount: 0, fileBodiesIncomplete: true,
       });
       expect(first.frames).toContainEqual({ progress: "CAPTURE_RUNNING" });
       expect(first.frames).toContainEqual({ progress: "CAPTURE_SAVING" });

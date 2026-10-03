@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-02
+
 ### Added
 
 - Reuse unchanged files from the prior validated Canvas capture archive generation during refresh, copying hash-verified prior blobs into fresh staging instead of re-downloading; any miss, change, conflict, or unsafe archive falls back to a fresh download.
@@ -9,6 +11,8 @@
 
 ### Fixed
 
+- Report daily Canvas refresh completeness separately from optional capture omissions and the preservation archive; genuine required-data or transfer failures continue to report partial.
+- Reconcile link-free, date-only calendar events using exact event and course identities from the current validated capture, while retaining stale, conflicting, or date-mismatched events.
 - Keep timeline class-name headers visible while scrolling, align them with date and marker columns, and continue painted course dividers through the header and body.
 - Move Recovery and Export into More; display date-only assignment and discussion times at 11:59 p.m. in the owner's default timezone without changing Canvas timestamps or assigning a clock to class meetings whose time is unknown.
 - Wait up to five minutes for the authenticated Canvas page after the browser broker is ready; report content-free `WAITING` progress during SSO and fail closed on timeout without publishing incomplete Canvas data.
@@ -18,6 +22,13 @@
 - Format Activity date-only due dates with the assumed 11:59 p.m. deadline on their stated calendar day and date-only graded dates without invented times, preventing UTC midnight dates from displaying on the previous evening in America/New_York while preserving instant semantics for timestamps with offsets or Z.
 - Validate the full blob archive inventory before removing interrupted-copy files, so an oversized or unsafe directory cannot trigger partial cleanup.
 - Check that the store is a ready preview before opening the native promotion backup picker.
+- Keep import reads and staged-file removal anchored to verified directory handles, with bounded same-handle reads and no-follow checks for leaf files and parent directories.
+- Retain calendar items omitted from a rolling feed and explain that the feed's date window may omit previously imported items; only a complete, successfully applied feed can confirm an omission.
+- Publish snapshots from synced hidden pending directories by atomic rename, excluding interrupted copies from restore and reclaiming their staging safely on the next snapshot.
+- Restore the existing upcoming rail at ordinary desktop widths while keeping course headers aligned and stacking the rail on narrower screens.
+- Verify cold launches by installed path and bundle ID, retaining owned rollback bytes until both launch proofs pass and accurately reporting any rollback registration repair.
+- Add populated-store macOS refresh verification for Timeline, Grades, Inbox, Done, Courses, Library, Activity, and More, with private UI artifacts removed after content-free results are extracted.
+- Update compatible Rust security fixes while documenting the unresolved `glib` advisory against the current upstream Tauri/GTK/WebKit compatibility constraint.
 
 
 ## [0.2.0] (release candidate)

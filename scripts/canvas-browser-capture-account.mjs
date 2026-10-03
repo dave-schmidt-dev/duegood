@@ -50,7 +50,7 @@ export async function collectCanvasAccountCapture({
   for (const endpoint of ["groups", "personalFiles", "personalFolders", "inbox", "inboxAll", "conversationsSent", "conversationsArchived"]) {
     const { result, gap } = await readEndpoint(endpoint);
     if (gap) {
-      if (endpoint === "personalFiles") addNotAttemptedGap("personalFile", null);
+      if (endpoint === "personalFiles") addNotAttemptedGap("personalFile", null, undefined, "parent-unavailable");
       continue;
     }
     await addResource(endpoint, null, result);
@@ -58,7 +58,7 @@ export async function collectCanvasAccountCapture({
     if (endpoint === "personalFiles") {
       for (const file of result.items) {
         if (!positiveId(file.id) || (personalFileIds.size >= MAX_ACCOUNT_FILE_IDS && !personalFileIds.has(file.id))) {
-          addNotAttemptedGap("personalFile", null);
+          addNotAttemptedGap("personalFile", null, undefined, "detail-budget");
         } else personalFileIds.add(file.id);
       }
     }
@@ -78,7 +78,7 @@ export async function collectCanvasAccountCapture({
   const groupIds = knownGroupIds.slice(0, MAX_GROUPS);
   for (const groupId of knownGroupIds.slice(MAX_GROUPS)) {
     for (const endpoint of ["groupFolders", "groupFolderFiles", "groupPages", "groupPage", "groupDiscussions", "groupDiscussionEntries", "groupDiscussionReplies", "file"]) {
-      addNotAttemptedGap(endpoint, null, groupId);
+      addNotAttemptedGap(endpoint, null, groupId, "detail-budget");
     }
   }
 
@@ -102,8 +102,8 @@ export async function collectCanvasAccountCapture({
         const files = [];
         for (const file of filesRead.result.items) {
           if (!positiveId(file.id)) throw accountError("INVALID_GROUP_FILE_ID");
-          if (groupFileIds.size >= MAX_ACCOUNT_FILE_IDS && !groupFileIds.has(file.id)) {
-            addNotAttemptedGap("file", null, groupId);
+        if (groupFileIds.size >= MAX_ACCOUNT_FILE_IDS && !groupFileIds.has(file.id)) {
+            addNotAttemptedGap("file", null, groupId, "detail-budget");
             continue;
           }
           groupFileIds.set(file.id, groupFileIds.get(file.id) ?? groupId);
@@ -114,7 +114,7 @@ export async function collectCanvasAccountCapture({
         }
       }
     } else {
-      addNotAttemptedGap("groupFolderFiles", null, groupId);
+      addNotAttemptedGap("groupFolderFiles", null, groupId, "parent-unavailable");
     }
 
     const pagesRead = await readEndpoint("groupPages", { groupId });
@@ -123,7 +123,10 @@ export async function collectCanvasAccountCapture({
       for (const page of pagesRead.result.items) {
         if (page.published !== true || page.locked_for_user === true || page.locked === true
             || typeof page.url !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/u.test(page.url)) {
-          addNotAttemptedGap("page", null, groupId);
+          const reason = page.locked_for_user === true || page.locked === true ? "locked"
+            : page.published === false ? "unpublished"
+              : typeof page.url !== "string" ? "request-failed" : "invalid-slug";
+          addNotAttemptedGap("page", null, groupId, reason);
           continue;
         }
         if (!reserveDetailRequest("groupPage", null, groupId)) continue;
@@ -138,7 +141,7 @@ export async function collectCanvasAccountCapture({
         }, { groupId });
       }
     } else {
-      addNotAttemptedGap("groupPage", null, groupId);
+      addNotAttemptedGap("groupPage", null, groupId, "parent-unavailable");
     }
 
     const discussionsRead = await readEndpoint("groupDiscussions", { groupId });
@@ -152,8 +155,10 @@ export async function collectCanvasAccountCapture({
       }, { groupId });
       for (const topic of discussionsRead.result.items) {
         if (topic.published !== true || topic.locked_for_user === true || topic.locked === true) {
-          addNotAttemptedGap("groupDiscussionEntries", null, groupId);
-          addNotAttemptedGap("groupDiscussionReplies", null, groupId);
+          const reason = topic.locked_for_user === true || topic.locked === true ? "locked"
+            : topic.published === false ? "unpublished" : "request-failed";
+          addNotAttemptedGap("groupDiscussionEntries", null, groupId, reason);
+          addNotAttemptedGap("groupDiscussionReplies", null, groupId, reason);
           continue;
         }
         if (!reserveDetailRequest("groupDiscussionEntries", null, groupId)) continue;
@@ -185,8 +190,8 @@ export async function collectCanvasAccountCapture({
         }
       }
     } else {
-      addNotAttemptedGap("groupDiscussionEntries", null, groupId);
-      addNotAttemptedGap("groupDiscussionReplies", null, groupId);
+      addNotAttemptedGap("groupDiscussionEntries", null, groupId, "parent-unavailable");
+      addNotAttemptedGap("groupDiscussionReplies", null, groupId, "parent-unavailable");
     }
   }
 

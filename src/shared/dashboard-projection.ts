@@ -6,6 +6,7 @@ import type { ConversationAttachment, ConversationMessage, NormalizedConversatio
 import type { AssignmentListItem } from "../db/types";
 import type { LocalCourse, LocalSnapshot } from "./coursework-types";
 import { pendingSourceLinks } from "./pending-links";
+import { dailyScopeReadiness } from "./refresh-daily-scope";
 import {
   areActiveBrowserCoursesCurrent,
   hasIndependentIcalDue,
@@ -376,6 +377,48 @@ function dueAt(item: JsonObject): Pick<AssignmentListItem, "dueAt" | "dueAtState
   return { dueAt: item.at, dueAtState: "known" };
 }
 
+function hasCanvasProvenance(item: JsonObject): boolean {
+  if (item.source === "canvas") return true;
+  if (Array.isArray(item.sourceReferences) && item.sourceReferences.some((reference) => object(reference)?.source === "canvas")) return true;
+  const observations = object(item.fieldObservations);
+  return observations !== null && Object.values(observations).some((value) => {
+    const fact = object(value);
+    return object(fact?.owner)?.source === "canvas" || object(object(fact?.selected)?.owner)?.source === "canvas";
+  });
+}
+
+function calendarConfirmationRetainedIds(document: JsonObject): ReadonlySet<string> {
+  const confirmation = object(document._calendarConfirmation);
+  const generation = object(confirmation?.eligibleGeneration);
+  const members = generation?.members;
+  const retained = confirmation?.retained;
+  if (confirmation?.schema !== 1
+      || typeof generation?.digest !== "string"
+      || !/^[0-9a-f]{64}$/.test(generation.digest)
+      || !Array.isArray(members) || members.length > 2_000
+      || !Array.isArray(retained) || retained.length > 2_000) return new Set();
+
+  const references = new Set<string>();
+  for (const value of members) {
+    const entry = object(value);
+    const reference = object(entry?.reference);
+    if (typeof entry?.localId !== "string" || entry.localId.length === 0 || entry.localId.length > 200
+        || reference?.source !== "ical"
+        || ![reference.institution, reference.course, reference.id].every((part) => typeof part === "string" && part.length > 0 && part.length <= 160)
+        || reference.instance !== undefined && (typeof reference.instance !== "string" || reference.instance.length === 0 || reference.instance.length > 160)) return new Set();
+    const identity = JSON.stringify([reference.institution, reference.course, reference.source, reference.id, reference.instance ?? null]);
+    if (references.has(identity)) return new Set();
+    references.add(identity);
+  }
+
+  const ids = new Set<string>();
+  for (const id of retained) {
+    if (typeof id !== "string" || id.length === 0 || id.length > 200 || ids.has(id)) return new Set();
+    ids.add(id);
+  }
+  return ids;
+}
+
 /**
  * Validates a parsed coursework document and projects it exactly like the Node store. Throws on
  * the same structural errors (non-object document, duplicate course keys or item IDs, unknown
@@ -385,6 +428,7 @@ function projectCoursework(value: unknown, version: string): ProjectedSnapshot {
   const document = requireObject(value, "coursework document");
   const rawCourses = requireArray(document.courses, "courses");
   const rawItems = requireArray(document.items, "items");
+  const retainedCalendarItemIds = calendarConfirmationRetainedIds(document);
   const coursesByKey = new Map<string, ProjectedCourse>();
   for (const [index, candidate] of rawCourses.entries()) {
     const course = requireObject(candidate, `courses[${index}]`);
@@ -424,6 +468,9 @@ function projectCoursework(value: unknown, version: string): ProjectedSnapshot {
       courseTitle: course.title,
       title: stringOrNull(item.title),
       ...dueAt(item),
+      ...(!hasCanvasProvenance(item) && retainedCalendarItemIds.has(item.id)
+        ? { calendarRetained: true }
+        : {}),
       submissionState: submissionState(item),
       completed: item.done === true,
       completedAt: typeof item.doneAt === "string" ? Date.parse(item.doneAt) || null : null,
@@ -527,8 +574,9 @@ export function projectRefreshes(historyDocument: unknown, inboxDocument: unknow
   const refreshes = raw.map((event, index): LocalRefresh => {
     const source = event.source === "calendar" || event.source === "ical" || event.sourceLabel === "calendar" ? "calendar" : "canvas";
     const isCalendar = source === "calendar";
+    const dailyScope = !isCalendar ? dailyScopeReadiness(event) : null;
     const explicitFailure = event.status === "failed";
-    const complete = !explicitFailure && event.status === "succeeded" && (isCalendar || event.sourceComplete === true);
+    const complete = !explicitFailure && (dailyScope !== null || (event.dailyScopeStatus !== "incomplete" && event.status === "succeeded" && (isCalendar || event.sourceComplete === true)));
     const changes = entries(event.changes, 500).map((change): LocalRefreshChange => {
       const kind = change.kind === "added" ? "added" : change.kind === "removed" ? "removed" : change.kind === "notice" ? "notice" : "changed";
       const detail = changedFieldsDetail(change);
@@ -546,13 +594,22 @@ export function projectRefreshes(historyDocument: unknown, inboxDocument: unknow
     const changed = number(summary?.updated ?? summary?.changed);
     const removed = number(summary?.removed);
     const held = number(summary?.held);
-    const summaryText = isCalendar
+    const summaryText = dailyScope !== null
+      ? `Daily Canvas pages refreshed${dailyScope.omissionCount > 0 ? `; ${String(dailyScope.omissionCount)} optional capture omission${dailyScope.omissionCount === 1 ? "" : "s"} recorded` : ""}. Existing data was preserved.`
+      : isCalendar
       ? status === "failed" ? "Calendar refresh failed; prior deadlines were kept." : status === "partial" ? `Calendar deadlines only · incomplete · ${String(added)} added · ${String(changed)} updated · ${String(held)} held` : `Calendar deadlines only · ${String(added)} added · ${String(changed)} updated · ${String(held)} held`
       : status === "failed" ? "Canvas refresh failed; existing data was kept." : status === "partial" ? "Canvas refresh was incomplete; existing data was kept." : "Canvas refresh completed.";
+    if (dailyScope !== null && !changes.some((change) => change.kind === "notice" && change.title === "Daily Canvas pages refreshed")) {
+      changes.push({
+        kind: "notice",
+        title: "Daily Canvas pages refreshed",
+        detail: `${dailyScope.omissionCount > 0 ? `${String(dailyScope.omissionCount)} optional capture omission${dailyScope.omissionCount === 1 ? "" : "s"} recorded. ` : ""}Existing data was preserved.`,
+      });
+    }
     if (isCalendar && held > 0 && !changes.some((change) => change.kind === "notice")) {
       changes.push({ kind: "notice", title: "Calendar items held", detail: `${String(held)} calendar change${held === 1 ? " was" : "s were"} held for review.` });
     }
-    return { id: text(event.id, 120) ?? `refresh-${String(index)}`, source, status, startedAt: text(event.startedAt, 80), finishedAt: text(event.finishedAt, 80), summary: { added, changed, removed: isCalendar || status !== "complete" ? 0 : removed, ...(isCalendar ? { held } : {}) }, summaryText, changes };
+    return { id: text(event.id, 120) ?? `refresh-${String(index)}`, source, status, startedAt: text(event.startedAt, 80), finishedAt: text(event.finishedAt, 80), summary: { added, changed, removed: isCalendar || status !== "complete" || event.sourceComplete !== true ? 0 : removed, ...(isCalendar ? { held } : {}) }, summaryText, changes };
   });
   const inbox = object(inboxDocument);
   const inboxChanges = object(inbox?.changes);

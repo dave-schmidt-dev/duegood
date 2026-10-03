@@ -213,7 +213,7 @@ describe("synthetic Canvas metadata collector", () => {
     expect(capture.coverage).toContainEqual({ endpoint: "fileBodies", courseId: null, status: "gap", reason: "not-attempted" });
     expect(capture.coverage.some((entry) => entry.endpoint === "calendarEventsHistory")).toBe(false);
     expect(capture.coverage).toContainEqual({ endpoint: "assignmentGroups", courseId: COURSE_ID, status: "complete" });
-    expect(capture.coverage).toContainEqual({ endpoint: "calendar", courseId: COURSE_ID, status: "gap", reason: "not-attempted" });
+    expect(capture.coverage).toContainEqual({ endpoint: "calendar", courseId: COURSE_ID, status: "gap", reason: "unsupported" });
 
     const assignment = capture.resources.find((resource) => resource.endpoint === "assignments" && resource.courseId === COURSE_ID)?.items[0] as Record<string, unknown> | undefined;
     expect(assignment?.description).toBe("Read the guide and the plain file.");
@@ -394,7 +394,7 @@ describe("synthetic Canvas metadata collector", () => {
     expect(capture.resources.some((resource) => resource.endpoint === "pages")).toBe(false);
     expect(capture.coverage).toContainEqual({ endpoint: "pages", courseId: COURSE_ID, status: "gap", reason: "forbidden-optional" });
     for (const endpoint of ["page", "moduleItems", "discussionEntries", "discussionReplies", "quiz"]) {
-      expect(capture.coverage).toContainEqual({ endpoint, courseId: COURSE_ID, status: "gap", reason: "not-attempted" });
+      expect(capture.coverage).toContainEqual({ endpoint, courseId: COURSE_ID, status: "gap", reason: "parent-unavailable" });
     }
     expect(capture.coverage).toContainEqual({ endpoint: "submission", courseId: COURSE_ID, status: "gap", reason: "forbidden-optional" });
     for (const endpoint of ["groups", "personalFiles", "personalFolders", "inboxAll", "conversationsSent", "conversationsArchived", "conversation", "file"]) {
@@ -403,7 +403,7 @@ describe("synthetic Canvas metadata collector", () => {
     expect(capture.coverage).toContainEqual({ endpoint: "calendarEvents", courseId: null, contextCode: "user_41", status: "gap", reason: "forbidden-optional" });
     expect(capture.coverage).toContainEqual({ endpoint: "calendarEvents", courseId: null, contextCode: "account_41", status: "gap", reason: "forbidden-optional" });
     expect(capture.coverage).toContainEqual({ endpoint: "calendarEvents", courseId: COURSE_ID, contextCode: `course_${COURSE_ID}`, status: "gap", reason: "forbidden-optional" });
-    expect(capture.coverage).toContainEqual({ endpoint: "personalFile", courseId: null, status: "gap", reason: "not-attempted" });
+    expect(capture.coverage).toContainEqual({ endpoint: "personalFile", courseId: null, status: "gap", reason: "parent-unavailable" });
 
     const failedRead = testDependencies({
       resultFor: (request) => request.endpoint === "profile"
@@ -503,8 +503,10 @@ describe("synthetic Canvas metadata collector", () => {
     for (const endpoint of ["page", "moduleItems", "discussionEntries", "discussionReplies", "quiz"]) {
       expect(requestedEndpoints).not.toContain(endpoint);
     }
-    for (const endpoint of ["page", "moduleItems", "discussionEntries", "discussionReplies", "quiz"]) {
-      expect(capture.coverage).toContainEqual({ endpoint, courseId: COURSE_ID, status: "gap", reason: "not-attempted" });
+    expect(capture.coverage).toContainEqual({ endpoint: "page", courseId: COURSE_ID, status: "gap", reason: "invalid-slug" });
+    expect(capture.coverage).toContainEqual({ endpoint: "moduleItems", courseId: COURSE_ID, status: "gap", reason: "locked" });
+    for (const endpoint of ["discussionEntries", "discussionReplies", "quiz"]) {
+      expect(capture.coverage).toContainEqual({ endpoint, courseId: COURSE_ID, status: "gap", reason: "unpublished" });
     }
     expect(JSON.stringify(capture)).not.toContain("synthetic-private");
   });
@@ -538,7 +540,7 @@ describe("synthetic Canvas metadata collector", () => {
     expect(pageRequests).toHaveLength(1000);
     expect(pageRequests[0]?.pageSlug).toBe("page-1");
     expect(pageRequests.at(-1)?.pageSlug).toBe("page-1000");
-    expect(capture.coverage).toContainEqual({ endpoint: "page", courseId: COURSE_ID, status: "gap", reason: "not-attempted" });
+    expect(capture.coverage).toContainEqual({ endpoint: "page", courseId: COURSE_ID, status: "gap", reason: "detail-budget" });
   });
 
   it("caps personal file detail reads and records denied and unattempted coverage", async () => {
@@ -572,7 +574,7 @@ describe("synthetic Canvas metadata collector", () => {
     expect(personalFileRequests[0]?.fileId).toBe(1);
     expect(personalFileRequests.at(-1)?.fileId).toBe(1500);
     expect(capture.coverage).toContainEqual({ endpoint: "personalFile", courseId: null, status: "gap", reason: "forbidden-optional" });
-    expect(capture.coverage).toContainEqual({ endpoint: "personalFile", courseId: null, status: "gap", reason: "not-attempted" });
+    expect(capture.coverage).toContainEqual({ endpoint: "personalFile", courseId: null, status: "gap", reason: "detail-budget" });
   });
 
   it("records an optional request failure as a gap and keeps later sections", async () => {
@@ -585,7 +587,7 @@ describe("synthetic Canvas metadata collector", () => {
     expect(capture.coverage).toContainEqual({ endpoint: "quizzes", courseId: COURSE_ID,
       status: "gap", reason: "request-failed" });
     expect(capture.coverage).toContainEqual({ endpoint: "quiz", courseId: COURSE_ID,
-      status: "gap", reason: "not-attempted" });
+      status: "gap", reason: "parent-unavailable" });
     expect(capture.resources.some((resource) => resource.endpoint === "courseFiles")).toBe(true);
   });
 

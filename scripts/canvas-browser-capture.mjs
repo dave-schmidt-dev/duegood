@@ -97,7 +97,7 @@ function isRecord(value) {
 }
 
 /** @typedef {{endpoint: string, courseId: number | null, groupId?: number, contextCode?: string, pages: number, items: Array<Record<string, unknown>>}} CanvasCaptureResource */
-/** @typedef {{endpoint: string, courseId: number | null, groupId?: number, contextCode?: string, status: "complete" | "gap", reason?: string}} CanvasCaptureCoverage */
+/** @typedef {{endpoint: string, courseId: number | null, groupId?: number, contextCode?: string, status: "complete" | "incomplete" | "gap", reason?: string}} CanvasCaptureCoverage */
 /** @typedef {{schemaVersion: 2, source: "canvas-browser", runId: number, generationId: string, capturedAt: string, complete: false, identity: {origin: string, userId: number, accountId?: number}, activeCourses: {complete: true, courseIds: number[]}, coverageRequirements: {activeCoursesComplete: true, perActiveCourse: string[]}, resources: CanvasCaptureResource[], coverage: CanvasCaptureCoverage[]}} CanvasBrowserCapture */
 
 /**
@@ -153,21 +153,33 @@ export async function collectCanvasBrowserCapture({
   const courseFileIds = new Set();
   const resources = [];
   const coverage = [];
-  const recordedGaps = new Set();
+  const recordedGaps = new Map();
 
-  const addNotAttemptedGap = (endpoint, courseId, groupId = undefined) => {
+  const gapReasonPriority = (reason) => {
+    if (["locked", "unpublished", "not-applicable", "unsupported"].includes(reason)) return 0;
+    if (["forbidden-optional", "not-found"].includes(reason)) return 1;
+    if (reason === "not-attempted") return 2;
+    return 3;
+  };
+
+  const addNotAttemptedGap = (endpoint, courseId, groupId = undefined, reason = "not-attempted") => {
     const key = `${endpoint}:${courseId ?? "account"}:${groupId ?? ""}`;
-    if (recordedGaps.has(key)) return;
-    recordedGaps.add(key);
+    const priorIndex = recordedGaps.get(key);
+    if (priorIndex !== undefined) {
+      const prior = coverage[priorIndex];
+      if (gapReasonPriority(reason) > gapReasonPriority(prior.reason)) prior.reason = reason;
+      return;
+    }
+    recordedGaps.set(key, coverage.length);
     coverage.push({ endpoint, courseId: courseId ?? null,
-      ...(groupId === undefined ? {} : { groupId }), status: "gap", reason: "not-attempted" });
+      ...(groupId === undefined ? {} : { groupId }), status: "gap", reason });
   };
 
   const reserveDetailRequest = (endpoint, courseId, groupId = undefined) => {
     const cap = DETAIL_REQUEST_CAPS[endpoint];
     const count = detailRequestCounts.get(endpoint) ?? 0;
     if (cap === undefined || count >= cap || detailRequestCount >= MAX_DETAIL_REQUESTS || requestCount >= MAX_REQUESTS) {
-      addNotAttemptedGap(endpoint, courseId, groupId);
+      addNotAttemptedGap(endpoint, courseId, groupId, "detail-budget");
       return false;
     }
     detailRequestCounts.set(endpoint, count + 1);
@@ -342,9 +354,11 @@ export async function collectCanvasBrowserCapture({
     for (const courseId of courseIds) {
       const courseReads = new Map();
       for (const endpoint of COURSE_ENDPOINTS) {
-        const { result, gap } = await readEndpoint(endpoint, { courseId });
+        const { result, gap } = await readEndpoint(endpoint, { courseId }, {
+          optional: !activeCourseIds.has(courseId) || OPTIONAL_ENDPOINTS.has(endpoint),
+        });
         if (gap) {
-          if (endpoint === "courseFiles") addNotAttemptedGap("file", courseId);
+          if (endpoint === "courseFiles") addNotAttemptedGap("file", courseId, undefined, "parent-unavailable");
           continue;
         }
         if (endpoint === "course" && (result.items.length !== 1 || result.items[0].id !== courseId)) {
@@ -372,7 +386,7 @@ export async function collectCanvasBrowserCapture({
         if (endpoint === "courseFiles") {
           for (const file of result.items) {
             if (!positiveId(file.id) || (courseFileIds.size >= MAX_ACCOUNT_FILE_IDS && !courseFileIds.has(file.id))) {
-              addNotAttemptedGap("file", courseId);
+              addNotAttemptedGap("file", courseId, undefined, "detail-budget");
             } else courseFileIds.add(file.id);
           }
         }
@@ -386,7 +400,10 @@ export async function collectCanvasBrowserCapture({
           const slug = pageItem.url;
           if (pageItem.published !== true || pageItem.locked_for_user === true || pageItem.locked === true
               || !isSafePageSlug(slug)) {
-            addNotAttemptedGap("page", courseId);
+            const reason = pageItem.locked_for_user === true || pageItem.locked === true ? "locked"
+              : pageItem.published === false ? "unpublished"
+                : isSafePageSlug(slug) ? "request-failed" : "invalid-slug";
+            addNotAttemptedGap("page", courseId, undefined, reason);
             continue;
           }
           if (!reserveDetailRequest("page", courseId)) continue;
@@ -396,14 +413,16 @@ export async function collectCanvasBrowserCapture({
           await addResource("page", courseId, result);
         }
       } else {
-        addNotAttemptedGap("page", courseId);
+        addNotAttemptedGap("page", courseId, undefined, "parent-unavailable");
       }
 
       const modulesRead = courseReads.get("modules");
       if (modulesRead) {
         for (const module of modulesRead.items) {
           if (!isReadableModule(module)) {
-            addNotAttemptedGap("moduleItems", courseId);
+            const reason = module.locked_for_user === true || module.state === "locked" ? "locked"
+              : module.published === false ? "unpublished" : "request-failed";
+            addNotAttemptedGap("moduleItems", courseId, undefined, reason);
             continue;
           }
           if (!reserveDetailRequest("moduleItems", courseId)) continue;
@@ -415,15 +434,17 @@ export async function collectCanvasBrowserCapture({
           await addResource("moduleItems", courseId, result);
         }
       } else {
-        addNotAttemptedGap("moduleItems", courseId);
+        addNotAttemptedGap("moduleItems", courseId, undefined, "parent-unavailable");
       }
 
       const discussionsRead = courseReads.get("discussions");
       if (discussionsRead) {
         for (const topic of discussionsRead.items) {
           if (!isReadablePublished(topic)) {
-            addNotAttemptedGap("discussionEntries", courseId);
-            addNotAttemptedGap("discussionReplies", courseId);
+            const reason = topic.locked_for_user === true || topic.locked === true ? "locked"
+              : topic.published === false ? "unpublished" : "request-failed";
+            addNotAttemptedGap("discussionEntries", courseId, undefined, reason);
+            addNotAttemptedGap("discussionReplies", courseId, undefined, reason);
             continue;
           }
           if (!reserveDetailRequest("discussionEntries", courseId)) continue;
@@ -451,8 +472,8 @@ export async function collectCanvasBrowserCapture({
           }
         }
       } else {
-        addNotAttemptedGap("discussionEntries", courseId);
-        addNotAttemptedGap("discussionReplies", courseId);
+        addNotAttemptedGap("discussionEntries", courseId, undefined, "parent-unavailable");
+        addNotAttemptedGap("discussionReplies", courseId, undefined, "parent-unavailable");
       }
 
       const assignmentsRead = courseReads.get("assignments");
@@ -467,7 +488,9 @@ export async function collectCanvasBrowserCapture({
           const assignment = assignmentsById.get(assignmentId);
           if (!assignment) throw captureError("SUBMISSION_ASSIGNMENT_MISMATCH");
           if (assignment.published !== true || assignment.locked_for_user === true || assignment.locked === true) {
-            addNotAttemptedGap("submission", courseId);
+            const reason = assignment.locked_for_user === true || assignment.locked === true ? "locked"
+              : assignment.published === false ? "unpublished" : "request-failed";
+            addNotAttemptedGap("submission", courseId, undefined, reason);
             continue;
           }
           if (!reserveDetailRequest("submission", courseId)) continue;
@@ -483,7 +506,9 @@ export async function collectCanvasBrowserCapture({
       if (quizzesRead) {
         for (const quiz of quizzesRead.items) {
           if (!isReadablePublished(quiz)) {
-            addNotAttemptedGap("quiz", courseId);
+            const reason = quiz.locked_for_user === true || quiz.locked === true ? "locked"
+              : quiz.published === false ? "unpublished" : "request-failed";
+            addNotAttemptedGap("quiz", courseId, undefined, reason);
             continue;
           }
           if (!reserveDetailRequest("quiz", courseId)) continue;
@@ -493,7 +518,7 @@ export async function collectCanvasBrowserCapture({
           await addResource("quiz", courseId, result);
         }
       } else {
-        addNotAttemptedGap("quiz", courseId);
+        addNotAttemptedGap("quiz", courseId, undefined, "parent-unavailable");
       }
     }
 
@@ -512,7 +537,7 @@ export async function collectCanvasBrowserCapture({
     if (fileBodyReceipts.length > 0) {
       resources.push({ endpoint: "fileBodies", courseId: null, items: fileBodyReceipts, pages: 1 });
     }
-    for (const courseId of courseIds) addNotAttemptedGap("calendar", courseId);
+    for (const courseId of courseIds) addNotAttemptedGap("calendar", courseId, undefined, "unsupported");
     addNotAttemptedGap("fileBodies", null);
     const identity = { origin: ORIGIN, userId: expectedUserId };
     if (observedAccountId !== undefined) identity.accountId = observedAccountId;

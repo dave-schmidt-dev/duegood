@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { DashboardStore } from "../../src/local/dashboard-store";
 import type { LocalCourse } from "../../src/local/coursework-store";
+import { projectRefreshes } from "../../src/shared/dashboard-projection";
 
 const directories: string[] = [];
 const COURSE: LocalCourse = { id: "course-a", courseCode: "SYN-101", title: "Synthetic", color: "#123456", folder: "classes/synthetic-course-a", lastSuccessfulCheckAt: null, syncing: false };
@@ -42,6 +43,34 @@ async function setup(): Promise<{ root: string; store: DashboardStore }> {
 afterEach(async () => Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))));
 
 describe("DashboardStore", () => {
+  it("shows validated daily readiness without granting archive removals or promoting failures", () => {
+    const event = {
+      id: "daily-complete-archive-incomplete",
+      source: "canvas",
+      sourceLabel: "canvas",
+      status: "incomplete",
+      sourceComplete: false,
+      dailyScopeStatus: "complete",
+      dailyGapCount: 0,
+      dailyOmissionCount: 2,
+      summary: { added: 0, updated: 0, removed: 7 },
+      changes: [],
+    };
+    const refresh = projectRefreshes({ events: [event] }, null)[0]!;
+    expect(refresh).toMatchObject({ status: "complete", summary: { removed: 0 } });
+    expect(refresh.summaryText).toContain("Daily Canvas pages refreshed");
+    expect(refresh.summaryText).toContain("2 optional capture omissions");
+    expect(refresh.summaryText).toContain("Existing data was preserved");
+
+    const failed = projectRefreshes({ events: [{ ...event, status: "failed", sourceComplete: true }] }, null)[0]!;
+    expect(failed.status).toBe("failed");
+    expect(failed.summary.removed).toBe(0);
+
+    const withDailyGap = projectRefreshes({ events: [{ ...event, dailyGapCount: 1 }] }, null)[0]!;
+    expect(withDailyGap.status).toBe("partial");
+    expect(withDailyGap.summary.removed).toBe(0);
+  });
+
   it("projects sanitized resource metadata and only local file open paths", async () => {
     const { store } = await setup();
     const resources = await store.resources([COURSE]);

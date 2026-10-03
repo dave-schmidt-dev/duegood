@@ -228,6 +228,7 @@ fn unchanged_repeat_history() {
     )
     .unwrap();
     let coursework_after_first = fs::read(store.store_dir().join(COURSEWORK_FILE)).unwrap();
+    let snapshots_after_first = crate::snapshots::list_snapshots(&store).unwrap();
 
     let second = crate::ical_apply::apply_normalization(
         &store,
@@ -243,6 +244,10 @@ fn unchanged_repeat_history() {
         fs::read(store.store_dir().join(COURSEWORK_FILE)).unwrap(),
         coursework_after_first
     );
+    assert_eq!(
+        crate::snapshots::list_snapshots(&store).unwrap(),
+        snapshots_after_first
+    );
 
     let history_bytes = fs::read(store.store_dir().join(HISTORY_FILE)).unwrap();
     let history: Value = serde_json::from_slice(&history_bytes).unwrap();
@@ -251,6 +256,208 @@ fn unchanged_repeat_history() {
     assert_eq!(events[1]["summary"]["added"], 0);
     assert_eq!(events[1]["summary"]["updated"], 0);
     assert_eq!(events[1]["status"], "succeeded");
+}
+
+#[test]
+fn eligible_omission_persists_retained_state_without_a_source_update_or_snapshot() {
+    let (_root, store) = test_store();
+    let first_feed = test_normalized(
+        vec![
+            test_observation("990001", "ical-item-a", "900001", "Synthetic A"),
+            test_observation("990002", "ical-item-b", "900001", "Synthetic B"),
+        ],
+        Vec::new(),
+    );
+    crate::ical_apply::apply_normalization(
+        &store,
+        &test_options(),
+        "2030-01-10T12:00:00Z",
+        &first_feed,
+    )
+    .unwrap();
+    let prior_snapshots = crate::snapshots::list_snapshots(&store).unwrap();
+    let prior_b: Value =
+        serde_json::from_slice(&fs::read(store.store_dir().join(COURSEWORK_FILE)).unwrap())
+            .unwrap();
+    let prior_generation = prior_b["_calendarConfirmation"]["eligibleGeneration"].clone();
+    let mut second_document = prior_b;
+    let item_b = second_document["items"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|item| item["id"] == "ical-item-b")
+        .unwrap();
+    item_b["done"] = Value::Bool(true);
+    item_b["notes"] = Value::String("Keep this note".into());
+    atomic_write(
+        &store.store_dir().join(COURSEWORK_FILE),
+        &node_json_bytes(&second_document),
+    )
+    .unwrap();
+
+    let second_feed = test_normalized(
+        vec![test_observation(
+            "990001",
+            "ical-item-a",
+            "900001",
+            "Synthetic A",
+        )],
+        Vec::new(),
+    );
+    let outcome = crate::ical_apply::apply_normalization(
+        &store,
+        &test_options(),
+        "2030-01-11T12:00:00Z",
+        &second_feed,
+    )
+    .unwrap();
+    assert_eq!(outcome.added, 0);
+    assert_eq!(outcome.updated, 0);
+    assert_eq!(outcome.held, 0);
+    assert_eq!(
+        crate::snapshots::list_snapshots(&store).unwrap(),
+        prior_snapshots
+    );
+
+    let after_bytes = fs::read(store.store_dir().join(COURSEWORK_FILE)).unwrap();
+    let after: Value = serde_json::from_slice(&after_bytes).unwrap();
+    assert_ne!(
+        after["_calendarConfirmation"]["eligibleGeneration"],
+        prior_generation
+    );
+    assert_eq!(
+        after["_calendarConfirmation"]["retained"],
+        json!(["ical-item-b"])
+    );
+    let retained = after["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == "ical-item-b")
+        .unwrap();
+    assert_eq!(retained["done"], true);
+    assert_eq!(retained["notes"], "Keep this note");
+
+    let history: Value =
+        serde_json::from_slice(&fs::read(store.store_dir().join(HISTORY_FILE)).unwrap()).unwrap();
+    let event = history["events"]
+        .as_array()
+        .and_then(|events| events.last())
+        .expect("second refresh history event present");
+    assert_eq!(event["status"], "succeeded");
+    assert_eq!(event["summary"]["added"], 0);
+    assert_eq!(event["summary"]["updated"], 0);
+
+    let repeated = crate::ical_apply::apply_normalization(
+        &store,
+        &test_options(),
+        "2030-01-12T12:00:00Z",
+        &second_feed,
+    )
+    .unwrap();
+    assert_eq!(repeated.version, outcome.version);
+    assert_eq!(
+        fs::read(store.store_dir().join(COURSEWORK_FILE)).unwrap(),
+        after_bytes
+    );
+    assert_eq!(
+        crate::snapshots::list_snapshots(&store).unwrap(),
+        prior_snapshots
+    );
+}
+
+#[test]
+fn exact_positive_during_a_held_feed_clears_retention_without_advancing_generation() {
+    let (_root, store) = test_store();
+    let first_feed = test_normalized(
+        vec![
+            test_observation("990001", "ical-item-a", "900001", "Synthetic A"),
+            test_observation("990002", "ical-item-b", "900001", "Synthetic B"),
+        ],
+        Vec::new(),
+    );
+    crate::ical_apply::apply_normalization(
+        &store,
+        &test_options(),
+        "2030-01-10T12:00:00Z",
+        &first_feed,
+    )
+    .unwrap();
+    let omission = test_normalized(
+        vec![test_observation(
+            "990001",
+            "ical-item-a",
+            "900001",
+            "Synthetic A",
+        )],
+        Vec::new(),
+    );
+    crate::ical_apply::apply_normalization(
+        &store,
+        &test_options(),
+        "2030-01-11T12:00:00Z",
+        &omission,
+    )
+    .unwrap();
+    let prior: Value =
+        serde_json::from_slice(&fs::read(store.store_dir().join(COURSEWORK_FILE)).unwrap())
+            .unwrap();
+    let prior_generation = prior["_calendarConfirmation"]["eligibleGeneration"].clone();
+
+    let held_feed = test_normalized(
+        vec![
+            test_observation("990002", "ical-item-b", "900001", "Synthetic B"),
+            test_observation("990003", "ical-item-c", "900001", "Synthetic C"),
+        ],
+        vec![HeldIcalEvent {
+            uid: "synthetic-held-event".into(),
+            reason: "unsupported-event",
+            canvas_course_id: Some("900001".into()),
+            candidate_courses: vec!["course-a".into()],
+            cancelled: false,
+        }],
+    );
+    let outcome = crate::ical_apply::apply_normalization(
+        &store,
+        &test_options(),
+        "2030-01-12T12:00:00Z",
+        &held_feed,
+    )
+    .unwrap();
+    assert_eq!(outcome.parser_held, 1);
+
+    let after: Value =
+        serde_json::from_slice(&fs::read(store.store_dir().join(COURSEWORK_FILE)).unwrap())
+            .unwrap();
+    assert_eq!(
+        after["_calendarConfirmation"]["eligibleGeneration"],
+        prior_generation
+    );
+    assert_eq!(after["_calendarConfirmation"]["retained"], json!([]));
+
+    let next_eligible_feed = test_normalized(
+        vec![test_observation(
+            "990001",
+            "ical-item-a",
+            "900001",
+            "Synthetic A",
+        )],
+        Vec::new(),
+    );
+    crate::ical_apply::apply_normalization(
+        &store,
+        &test_options(),
+        "2030-01-13T12:00:00Z",
+        &next_eligible_feed,
+    )
+    .unwrap();
+    let after_eligible: Value =
+        serde_json::from_slice(&fs::read(store.store_dir().join(COURSEWORK_FILE)).unwrap())
+            .unwrap();
+    assert_eq!(
+        after_eligible["_calendarConfirmation"]["retained"],
+        json!(["ical-item-b", "ical-item-c"])
+    );
 }
 
 #[test]

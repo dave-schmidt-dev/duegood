@@ -5,31 +5,40 @@ import { expect, test, type Page } from "@playwright/test";
 const COURSES = [
   { key: "4101", title: "Applied Network Defense" },
   { key: "4102", title: "Data Ethics in Society" },
-  { key: "4103", title: "Statistics for Research and Measurement" },
+  { key: "4103", title: "Statistics for Research, Measurement, and Applied Analytics" },
 ] as const;
+const EXTRA_COURSES = [
+  { key: "4104", title: "Secure Cloud Operations" },
+  { key: "4105", title: "Digital Forensics and Incident Response" },
+] as const;
+const ALL_COURSES = [...COURSES, ...EXTRA_COURSES];
+type SyntheticCourse = (typeof ALL_COURSES)[number];
 const at = (days: number): string => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 16);
+const assignmentAt = (days: number): string => new Date(Date.now() + days * 86_400_000).toISOString();
 const DATE_ONLY_CLASS_DATE = at(10).slice(0, 10);
 const TIMED_CLASS_START = at(11);
 const DATE_ONLY_DEADLINE = at(9).slice(0, 10);
 
-const coursework = JSON.stringify({
-  generated: new Date().toISOString(),
-  courses: COURSES.map((course) => ({ ...course, code: course.key, color: "#3a6ea5", folder: course.key })),
-  items: [
-    ...Array.from({ length: 12 }, (_, index) => ({
-      id: `synthetic-${String(index)}`,
-      course: COURSES[index % COURSES.length]?.key ?? "4101",
-      kind: "assignment",
-      title: `Synthetic assignment ${String(index + 1)}`,
-      at: at(index),
-      submissionStatus: "unsubmitted",
-      done: false,
-    })),
-    { id: "synthetic-date-only-deadline", course: "4103", kind: "assignment", title: "Synthetic date-only deadline", at: DATE_ONLY_DEADLINE, submissionStatus: "unsubmitted", done: false },
-    { id: "synthetic-date-only-class", course: "4101", kind: "class", title: "Synthetic date-only class", at: DATE_ONLY_CLASS_DATE },
-    { id: "synthetic-timed-class", course: "4102", kind: "class", title: "Synthetic timed class", at: TIMED_CLASS_START },
-  ],
-});
+function courseworkDocument(courses: readonly SyntheticCourse[]): string {
+  return JSON.stringify({
+    generated: new Date().toISOString(),
+    courses: courses.map((course) => ({ ...course, code: course.key, color: "#3a6ea5", folder: course.key })),
+    items: [
+      ...Array.from({ length: 12 }, (_, index) => ({
+        id: `synthetic-${String(index)}`,
+        course: courses[index % courses.length]?.key ?? "4101",
+        kind: "assignment",
+        title: `Synthetic assignment ${String(index + 1)}`,
+        at: assignmentAt(index + 0.5),
+        submissionStatus: "unsubmitted",
+        done: false,
+      })),
+      { id: "synthetic-date-only-deadline", course: "4103", kind: "assignment", title: "Synthetic date-only deadline", at: DATE_ONLY_DEADLINE, submissionStatus: "unsubmitted", done: false },
+      { id: "synthetic-date-only-class", course: "4101", kind: "class", title: "Synthetic date-only class", at: DATE_ONLY_CLASS_DATE },
+      { id: "synthetic-timed-class", course: "4102", kind: "class", title: "Synthetic timed class", at: TIMED_CLASS_START },
+    ],
+  });
+}
 
 function installTauriMock(document: string): void {
   type Callback = (message: unknown) => void;
@@ -56,14 +65,68 @@ function installTauriMock(document: string): void {
   };
 }
 
-async function openTimeline(page: Page): Promise<void> {
-  await page.addInitScript(installTauriMock, coursework);
+async function openTimeline(page: Page, courses: readonly SyntheticCourse[] = COURSES): Promise<void> {
+  await page.addInitScript(installTauriMock, courseworkDocument(courses));
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
-  await expect(page.locator(".lane-header .lane-label")).toHaveCount(COURSES.length);
-  await expect(page.locator(".lane-header .lane-label b")).toHaveText(COURSES.map((course) => course.title));
+  await expect(page.locator(".lane-header .lane-label")).toHaveCount(courses.length);
+  await expect(page.locator(".lane-header .lane-label b")).toHaveText(courses.map((course) => course.title));
   await expect(page.locator(".lane-header .lane-marker")).toHaveAttribute("aria-hidden", "true");
 }
+
+test("keeps the upcoming rail beside aligned wrapped three and five course lanes", async ({ page }) => {
+  for (const width of [1040, 1160]) {
+    for (const courses of [COURSES, ALL_COURSES]) {
+      await page.setViewportSize({ width, height: 900 });
+      await openTimeline(page, courses);
+
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      expect(overflow, `${width}px with ${courses.length} courses`).toBeLessThanOrEqual(0);
+      const layout = await page.evaluate(() => {
+        const parent = document.querySelector<HTMLElement>(".timeline-layout");
+        const timeline = document.querySelector<HTMLElement>(".timeline-shell");
+        const rail = document.querySelector<HTMLElement>(".timeline-rail");
+        if (parent === null || timeline === null || rail === null) return null;
+        const parentRect = parent.getBoundingClientRect();
+        const timelineRect = timeline.getBoundingClientRect();
+        const railRect = rail.getBoundingClientRect();
+        return {
+          parentWidth: parentRect.width,
+          parentRight: parentRect.right,
+          timelineRight: timelineRect.right,
+          railLeft: railRect.left,
+          railRight: railRect.right,
+          railWidth: railRect.width,
+        };
+      });
+      expect(layout).not.toBeNull();
+      expect(layout?.railLeft ?? 0).toBeGreaterThanOrEqual((layout?.timelineRight ?? 0) - 0.5);
+      expect(layout?.railRight ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual((layout?.parentRight ?? 0) + 0.5);
+      expect(layout?.railWidth ?? 0).toBeGreaterThanOrEqual(220);
+      expect(layout?.railWidth ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual((layout?.parentWidth ?? 0) * 0.3);
+
+      const deltas = await gridDeltas(page);
+      expect(deltas, `${width}px with ${courses.length} courses`).not.toBeNull();
+      expect(deltas?.every((delta) => delta <= 0.5)).toBe(true);
+      const wrappedTitleCount = await page.locator(".lane-label b").evaluateAll((labels) => labels.filter((label) => {
+        const lineHeight = Number.parseFloat(getComputedStyle(label).lineHeight);
+        return label.getBoundingClientRect().height >= lineHeight * 1.8;
+      }).length);
+      expect(wrappedTitleCount, `${width}px with ${courses.length} courses`).toBeGreaterThan(0);
+      const thirdTitleWrapped = await page.locator(".lane-label b").nth(2).evaluate((label) => {
+        const lineHeight = Number.parseFloat(getComputedStyle(label).lineHeight);
+        return label.getBoundingClientRect().height >= lineHeight * 1.8;
+      });
+      expect(thirdTitleWrapped, `third course title wraps at ${width}px with ${courses.length} courses`).toBe(true);
+
+      const railDates = await page.locator(".rail-due-row .rail-date").evaluateAll((dates) => dates.map((date) => (date as HTMLTimeElement).dateTime));
+      expect(railDates.length).toBeGreaterThan(0);
+      expect(railDates).toEqual([...railDates].sort((left, right) => Date.parse(left) - Date.parse(right)));
+      await expect(page.locator(".rail-due-row .rail-date strong").first()).toBeVisible();
+      await expect(page.locator(".rail-due-row .rail-course").first()).toHaveText("4101");
+    }
+  }
+});
 
 async function gridDeltas(page: Page): Promise<number[] | null> {
   return page.evaluate(() => {

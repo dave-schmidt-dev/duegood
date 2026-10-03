@@ -26,6 +26,8 @@ use crate::store::{utc_stamp, Store, StoreError};
 
 #[path = "browser_import_course_metadata.rs"]
 mod course_metadata;
+#[path = "browser_import_daily_scope.rs"]
+mod daily_scope;
 #[path = "browser_import_inventory.rs"]
 mod inventory;
 #[path = "browser_import_state.rs"]
@@ -286,6 +288,7 @@ fn import_current_capture_inner(
     if scopes != initial_scopes {
         return Err(BrowserImportError::InvalidInventory);
     }
+    let mut repairing_same_capture = false;
     if check_prior_receipt(
         latest.status.as_ref(),
         bundle.run_id,
@@ -302,10 +305,15 @@ fn import_current_capture_inner(
             &latest.coursework,
             &receipt_projection.documents,
             &scopes,
+        )? && calendar_identity_documents_current(
+            store,
+            &receipt_projection.documents,
+            scopes.len(),
         )? {
             progress(progress_value(BrowserImportPhase::Complete, 0, 0));
             return Ok(make_result(bundle.run_id, scopes.len(), 0, promoted, true));
         }
+        repairing_same_capture = true;
     }
 
     crate::snapshots::snapshot_before_refresh_locked_with_progress(
@@ -388,7 +396,9 @@ fn import_current_capture_inner(
         &started_at,
         history_time,
     )?;
-    history::append_event(&stage.join(HISTORY_FILE), history_event, history_time)?;
+    if !repairing_same_capture {
+        history::append_event(&stage.join(HISTORY_FILE), history_event, history_time)?;
+    }
 
     progress(progress_value(
         BrowserImportPhase::Publishing,
@@ -433,6 +443,40 @@ fn projected_file_gap_count(
     })
 }
 
+fn calendar_identity_documents_current(
+    store: &Store,
+    documents: &std::collections::BTreeMap<String, Vec<u8>>,
+    expected_count: usize,
+) -> Result<bool, BrowserImportError> {
+    let identity_documents = documents
+        .iter()
+        .filter(|(relative, _)| {
+            Path::new(relative)
+                .file_name()
+                .and_then(|name| name.to_str())
+                == Some("calendar-event-identities.json")
+        })
+        .collect::<Vec<_>>();
+    if identity_documents.len() != expected_count {
+        return Ok(false);
+    }
+    for (relative, expected) in identity_documents {
+        let path = Path::new(relative);
+        if !path
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err(BrowserImportError::InvalidStore);
+        }
+        let actual = crate::store::read_capped_under(&store.store_dir(), path, MAX_JSON_BYTES)
+            .map_err(BrowserImportError::Store)?;
+        if actual.as_deref() != Some(expected.as_slice()) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn canvas_import_history_event(
     bundle: &ValidatedCaptureBundle,
     file_gap_count: usize,
@@ -447,21 +491,11 @@ fn canvas_import_history_event(
         .iter()
         .filter(|row| row.status != "complete")
         .count();
-    let inbox_gap_count = bundle
-        .coverage
-        .iter()
-        .filter(|row| {
-            row.status != "complete"
-                && matches!(
-                    row.endpoint.as_str(),
-                    "inbox"
-                        | "inboxAll"
-                        | "conversation"
-                        | "conversationsSent"
-                        | "conversationsArchived"
-                )
-        })
-        .count();
+    let (daily_gap_count, daily_omission_count) = daily_scope::summarize_daily_scope(
+        &bundle.snapshot,
+        &bundle.active_courses,
+        &bundle.coverage,
+    )?;
     let source_complete = bundle.manifest.get("complete").and_then(Value::as_bool) == Some(true)
         && bundle.snapshot.get("complete").and_then(Value::as_bool) == Some(true)
         && coverage_gap_count == 0
@@ -470,41 +504,57 @@ fn canvas_import_history_event(
     event["source"] = Value::String("canvas".into());
     event["sourceLabel"] = Value::String("canvas".into());
     event["sourceComplete"] = Value::Bool(source_complete);
+    event["captureRunId"] = Value::from(bundle.run_id);
+    event["captureGenerationId"] = Value::String(bundle.generation_id.clone());
+    event["dailyScopeStatus"] = Value::String(
+        if daily_gap_count == 0 {
+            "complete"
+        } else {
+            "incomplete"
+        }
+        .into(),
+    );
+    event["dailyGapCount"] = Value::from(daily_gap_count);
+    event["dailyOmissionCount"] = Value::from(daily_omission_count);
     if !source_complete {
         event["status"] = Value::String("incomplete".into());
         event["summary"]["removed"] = Value::from(0);
+    }
+    if daily_gap_count > 0 {
+        event["status"] = Value::String("incomplete".into());
     }
 
     let changes = event
         .get_mut("changes")
         .and_then(Value::as_array_mut)
         .ok_or(BrowserImportError::Stage)?;
-    if coverage_gap_count > inbox_gap_count {
+    if daily_gap_count > 0 {
+        let omission_summary = if daily_omission_count > 0 {
+            format!(
+                "{daily_omission_count} optional capture omission{} recorded; ",
+                if daily_omission_count == 1 { "" } else { "s" }
+            )
+        } else {
+            String::new()
+        };
         changes.push(serde_json::json!({
             "kind": "notice",
-            "title": "Canvas coverage incomplete",
-            "detail": format!("{} Canvas coverage section(s) were incomplete.", coverage_gap_count - inbox_gap_count),
+            "title": "Daily Canvas pages incomplete",
+            "detail": format!("{daily_gap_count} required or eligible daily section(s) were incomplete; {omission_summary}existing data was preserved."),
         }));
-    }
-    if inbox_gap_count > 0 {
+    } else if !source_complete {
+        let omission_summary = if daily_omission_count > 0 {
+            format!(
+                "; {daily_omission_count} optional capture omission{} recorded",
+                if daily_omission_count == 1 { "" } else { "s" }
+            )
+        } else {
+            String::new()
+        };
         changes.push(serde_json::json!({
             "kind": "notice",
-            "title": "Canvas inbox incomplete",
-            "detail": format!("{inbox_gap_count} inbox coverage section(s) were incomplete."),
-        }));
-    }
-    if file_gap_count > 0 {
-        changes.push(serde_json::json!({
-            "kind": "notice",
-            "title": "Canvas files incomplete",
-            "detail": format!("{file_gap_count} course file(s) were unavailable in this capture."),
-        }));
-    }
-    if !source_complete && coverage_gap_count == 0 && file_gap_count == 0 {
-        changes.push(serde_json::json!({
-            "kind": "notice",
-            "title": "Canvas capture incomplete",
-            "detail": "This browser capture does not represent a complete Canvas record.",
+            "title": "Daily Canvas pages refreshed",
+            "detail": format!("Daily Canvas pages refreshed{omission_summary}. Existing data was preserved."),
         }));
     }
     Ok(event)
@@ -557,6 +607,9 @@ fn parse_capture_time(value: &str) -> Result<SystemTime, BrowserImportError> {
         .map_err(|_| BrowserImportError::InvalidInventory)
 }
 
+#[cfg(test)]
+#[path = "browser_import_daily_scope_tests.rs"]
+mod daily_scope_tests;
 #[cfg(test)]
 #[path = "browser_import_tests.rs"]
 mod tests;

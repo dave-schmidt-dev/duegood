@@ -157,7 +157,7 @@ fn index_coverage(value: Option<&Value>) -> ProjectionResult<CoverageIndex> {
             }
             match row.get("status").and_then(Value::as_str) {
                 Some("complete") => result.conversation_complete += 1,
-                Some("gap") => result.conversation_gaps += 1,
+                Some("gap" | "incomplete") => result.conversation_gaps += 1,
                 _ => return Err(BrowserAccountProjectionError::InvalidCoverage),
             }
             continue;
@@ -170,7 +170,7 @@ fn index_coverage(value: Option<&Value>) -> ProjectionResult<CoverageIndex> {
         }
         let complete = match row.get("status").and_then(Value::as_str) {
             Some("complete") => true,
-            Some("gap") => false,
+            Some("gap" | "incomplete") => false,
             _ => return Err(BrowserAccountProjectionError::InvalidCoverage),
         };
         if result.endpoints.insert(key, complete).is_some() {

@@ -13,7 +13,7 @@ const SYNTHETIC_GENERATION_ID = "d".repeat(32);
 type Request = { endpoint: string; courseId?: number; fileId?: number };
 type ReaderResult = { status: "ok"; identity: { userId: number }; pages: number; items: Array<Record<string, unknown>> };
 
-function syntheticRead(input: unknown, fileItem: Record<string, unknown> = {}): ReaderResult {
+function syntheticRead(input: unknown, fileItem: Record<string, unknown> = {}, pageItems: Array<Record<string, unknown>> = []): ReaderResult {
   const request = input as Request;
   const identity = { userId: USER_ID };
   let items: Array<Record<string, unknown>> = [];
@@ -22,6 +22,7 @@ function syntheticRead(input: unknown, fileItem: Record<string, unknown> = {}): 
     items = [{ id: COURSE_ID, name: "SYN-101", url: `${ORIGIN}/courses/${COURSE_ID}` }];
   }
   if (request.endpoint === "course") items = [{ id: COURSE_ID, name: "SYN-101", syllabus_body: "" }];
+  if (request.endpoint === "pages") items = pageItems;
   if (["courseFiles", "personalFiles"].includes(request.endpoint)) {
     items = [{ id: FILE_ID, display_name: "Synthetic handout", url: FILE_URL, size: 27, ...fileItem,
       ...(request.endpoint === "courseFiles" ? { description: "<p>file-metadata-sanitize-marker</p>" } : {}) }];
@@ -33,9 +34,9 @@ function syntheticRead(input: unknown, fileItem: Record<string, unknown> = {}): 
 }
 
 function testCollector(options: { downloadFile?: (input: { fileId: number; sourceUrl: string; expectedSize: number | null }) => unknown;
-  fileItem?: Record<string, unknown> } = {}) {
+  fileItem?: Record<string, unknown>; pageItems?: Array<Record<string, unknown>> } = {}) {
   const order: string[] = [];
-  const reader = vi.fn((input: unknown) => syntheticRead(input, options.fileItem));
+  const reader = vi.fn((input: unknown) => syntheticRead(input, options.fileItem, options.pageItems));
   const htmlReader = vi.fn(({ html }: { html: string }) => {
     if (html.includes("file-metadata-sanitize-marker")) order.push("sanitize-file-metadata");
     return { text: "Synthetic text", links: [], textTruncated: false, linksTruncated: false };
@@ -133,6 +134,15 @@ describe("Canvas file body capture", () => {
     expect(JSON.stringify(capture)).not.toContain("synthetic private transfer detail");
   });
 
+  it("records a locked file as an explicit omission without attempting a download", async () => {
+    const test = testCollector({ fileItem: { locked_for_user: true } });
+    const capture = await test.capture;
+    expect(test.downloadFile).not.toHaveBeenCalled();
+    expect(capture.resources.find((resource) => resource.endpoint === "fileBodies")?.items).toEqual([
+      { fileId: FILE_ID, status: "gap", reason: "locked" },
+    ]);
+  });
+
   it("passes raw revision evidence to the staging callback content-free", async () => {
     const stamps = { modified_at: "2026-09-01T10:00:00Z", updated_at: "2026-09-01T11:00:00Z",
       "content-type": "application/pdf", locked: false, hidden: false, locked_for_user: false,
@@ -155,6 +165,18 @@ describe("Canvas file body capture", () => {
       stagedFile: `${"b".repeat(32)}.blob`,
       sourceAuthenticity: "unverified",
     }]);
+  });
+});
+
+describe("Canvas detail gap aggregation", () => {
+  it("keeps an invalid page slug blocking after an earlier locked page", async () => {
+    const test = testCollector({ pageItems: [
+      { id: 901, url: "locked-page", published: true, locked_for_user: true },
+      { id: 902, url: "unsafe/page", published: true, locked_for_user: false },
+    ] });
+    const capture = await test.capture;
+    expect(capture.coverage.find((row) => row.endpoint === "page" && row.courseId === COURSE_ID))
+      .toMatchObject({ status: "gap", reason: "invalid-slug" });
   });
 });
 
