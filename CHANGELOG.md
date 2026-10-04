@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Accept verified archived Canvas receipt statuses, separate Canvas coverage gaps from calendar held events, preserve bounded capture-reason counts, and omit nonapplicable quiz children from incomplete-refresh reporting.
+- Sort date-only assignment deadlines at the assumed 11:59 p.m. while leaving class meetings with unspecified times unchanged.
+- Show immediate desktop startup and recovery loading or retry states, require confirmation before a recovery restore, retain bounded local dashboard view state, and latch duplicate Library file actions per resource.
+- Wrap long timeline course labels and let Escape cancel a pending recovery-restore confirmation.
+- Use consistent accepted action styling for Recovery controls and distinguish failed Activity statuses from completed refreshes.
+- Keep Timeline Copy assignment and Details controls inside narrow course cards.
+
 ## [0.3.0] - 2026-10-02
 
 ### Added

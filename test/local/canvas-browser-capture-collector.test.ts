@@ -26,6 +26,7 @@ type ReaderRequest = {
   fileId?: number;
   assignmentId?: number;
   pageSlug?: string;
+  pageId?: number;
   moduleId?: number;
   topicId?: number;
   entryId?: number;
@@ -474,7 +475,7 @@ describe("synthetic Canvas metadata collector", () => {
     expect(JSON.stringify(deps.progressEvents)).not.toMatch(/private\.invalid|ignored|https?:|synthetic/u);
   });
 
-  it("rejects unsafe page slugs and skips locked or unpublished content", async () => {
+  it("uses a bounded page ID for unsafe slugs and skips locked or unpublished content", async () => {
     const deps = testDependencies({
       resultFor: (request) => {
         if (request.endpoint === "pages" && request.courseId === COURSE_ID) {
@@ -500,15 +501,59 @@ describe("synthetic Canvas metadata collector", () => {
     });
 
     const requestedEndpoints = deps.reader.mock.calls.map(([input]) => (input as ReaderRequest).endpoint);
-    for (const endpoint of ["page", "moduleItems", "discussionEntries", "discussionReplies", "quiz"]) {
-      expect(requestedEndpoints).not.toContain(endpoint);
-    }
-    expect(capture.coverage).toContainEqual({ endpoint: "page", courseId: COURSE_ID, status: "gap", reason: "invalid-slug" });
+    expect(requestedEndpoints.filter((endpoint) => endpoint === "page")).toHaveLength(1);
+    const pageFallback = deps.reader.mock.calls.map(([input]) => input as ReaderRequest)
+      .find((request) => request.endpoint === "page");
+    expect(pageFallback).toMatchObject({ pageId: 1 });
+    expect(pageFallback?.pageSlug).toBeUndefined();
+    expect(capture.coverage).toContainEqual({ endpoint: "page", courseId: COURSE_ID, status: "complete" });
     expect(capture.coverage).toContainEqual({ endpoint: "moduleItems", courseId: COURSE_ID, status: "gap", reason: "locked" });
     for (const endpoint of ["discussionEntries", "discussionReplies", "quiz"]) {
       expect(capture.coverage).toContainEqual({ endpoint, courseId: COURSE_ID, status: "gap", reason: "unpublished" });
     }
     expect(JSON.stringify(capture)).not.toContain("synthetic-private");
+  });
+
+  it.each([
+    ["NOT_FOUND", "not-found"],
+    ["REQUEST_FAILED", "request-failed"],
+  ])("preserves the %s reason when the safe page-ID fallback fails", async (errorCode, expectedReason) => {
+    const deps = testDependencies({ resultFor: (request) => {
+      if (request.endpoint === "pages" && request.courseId === COURSE_ID) {
+        return { status: "ok", identity: { userId: USER_ID }, pages: 1,
+          items: [{ page_id: 9, url: "../unsafe", published: true }] };
+      }
+      if (request.endpoint === "page" && request.pageId === 9) throw new Error(`page.evaluate: Error: ${errorCode}`);
+      return successfulResult(request);
+    } });
+    const capture = await collectCanvasBrowserCapture({ expectedUserId: USER_ID,
+      evaluate: deps.evaluate, reader: deps.reader, htmlReader: deps.htmlReader });
+
+    expect(capture.coverage).toContainEqual({ endpoint: "page", courseId: COURSE_ID,
+      status: "gap", reason: expectedReason });
+  });
+
+  it("uses a safe Canvas page slug for the detail request and preserves only its route identity", async () => {
+    const slug = "synthetic-page_slug-1";
+    const deps = testDependencies({ resultFor: (request) => request.endpoint === "pages"
+      ? { status: "ok", identity: { userId: USER_ID }, pages: 1,
+        items: [{ page_id: 9, url: slug, title: "Synthetic page", published: true }] }
+      : request.endpoint === "page"
+        ? { status: "ok", identity: { userId: USER_ID }, pages: 1,
+          items: [{ page_id: 9, url: slug, title: "Synthetic page", published: true }] }
+        : successfulResult(request) });
+    const capture = await collectCanvasBrowserCapture({ expectedUserId: USER_ID,
+      evaluate: deps.evaluate, reader: deps.reader, htmlReader: deps.htmlReader });
+    const pageRequest = deps.reader.mock.calls
+      .map(([input]) => input as ReaderRequest)
+      .find((request) => request.endpoint === "page" && request.courseId === COURSE_ID);
+    const pageList = capture.resources.find((resource) => resource.endpoint === "pages" && resource.courseId === COURSE_ID);
+    const pageDetail = capture.resources.find((resource) => resource.endpoint === "page" && resource.courseId === COURSE_ID);
+
+    expect(pageRequest?.pageSlug).toBe(slug);
+    expect(pageList?.items[0]).toMatchObject({ url: null, _canvasPageSlug: slug });
+    expect(pageDetail?.items[0]).toMatchObject({ url: null, _canvasPageSlug: slug });
+    expect(JSON.stringify(capture)).not.toContain("/pages/");
   });
 
   it("caps per-page detail enumeration and reports the unattempted remainder", async () => {
@@ -525,7 +570,11 @@ describe("synthetic Canvas metadata collector", () => {
             published: true,
           })),
         }
-        : successfulResult(request),
+        : request.endpoint === "page"
+          ? { status: "ok", identity: { userId: USER_ID }, pages: 1,
+            items: [{ page_id: Number(request.pageSlug?.slice("page-".length)), url: request.pageSlug,
+              title: "Synthetic page detail", published: true }] }
+          : successfulResult(request),
     });
     const capture = await collectCanvasBrowserCapture({
       expectedUserId: USER_ID,
@@ -611,6 +660,8 @@ describe("synthetic Canvas metadata collector", () => {
       evaluate: deps.evaluate, reader: deps.reader, htmlReader: deps.htmlReader });
     expect(capture.coverage).toContainEqual({ endpoint: "quizzes", courseId: COURSE_ID,
       status: "gap", reason: "not-found" });
+    expect(capture.coverage).toContainEqual({ endpoint: "quiz", courseId: COURSE_ID,
+      status: "gap", reason: "not-applicable" });
     expect(capture.resources.some((resource) => resource.endpoint === "quizzes" && resource.courseId === COURSE_ID)).toBe(false);
   });
 

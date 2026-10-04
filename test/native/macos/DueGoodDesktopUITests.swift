@@ -52,6 +52,13 @@ final class DueGoodDesktopUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Connect your Canvas calendar"].waitForExistence(timeout: 30))
         XCTAssertTrue(app.buttons["Connect calendar"].exists)
+        XCTAssertTrue(app.staticTexts["Add assignments and dates from your Canvas calendar."].exists)
+        XCTAssertTrue(app.buttons["Connect calendar"].isHittable)
+        XCTAssertTrue(app.buttons["About calendar import"].exists)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "They do not include grades")).firstMatch.exists)
+        app.buttons["About calendar import"].click()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "They do not include grades, messages, or progress saved in an older Due Good folder.")).firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "value BEGINSWITH %@", "~/Library/")).firstMatch.exists)
         XCTAssertFalse(app.buttons["Choose legacy folder…"].exists)
         XCTAssertFalse(app.buttons["Refresh"].exists)
         app.terminate()
@@ -81,8 +88,11 @@ final class DueGoodDesktopUITests: XCTestCase {
         // The runner separately verifies the helper's full canonical data-root report.
         XCTAssertTrue(expectedDisplayRoot.hasPrefix("~/Library/"))
         let displayedRoot = app.staticTexts.matching(NSPredicate(format: "value BEGINSWITH %@", "~/Library/")).firstMatch
+        XCTAssertTrue(app.buttons["About calendar import"].exists)
+        XCTAssertFalse(displayedRoot.exists)
+        app.buttons["About calendar import"].click()
         XCTAssertTrue(displayedRoot.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "separate from a Canvas API token")).firstMatch.exists)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "API token")).firstMatch.exists)
     }
 
     func testLiveRefreshAllPagesInPopulatedStore() throws {

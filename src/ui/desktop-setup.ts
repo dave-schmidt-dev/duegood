@@ -70,6 +70,10 @@ export interface DesktopSetupState {
   readonly recoveryBusy?: boolean;
   readonly recoveryMessage?: string;
   readonly recoveryFilesDone?: number;
+  /** Snapshot discovery is separate from export/restore work so an unresolved list is never shown as empty. */
+  readonly recoveryLoading?: boolean;
+  readonly recoveryError?: string;
+  readonly pendingRestoreSnapshotId?: string;
 }
 
 export interface DesktopSetupHandlers {
@@ -79,7 +83,19 @@ export interface DesktopSetupHandlers {
   readonly onImport: () => void;
   readonly onCancel?: () => void;
   readonly onRestoreSnapshot?: (id: string) => void;
+  readonly onConfirmRestoreSnapshot?: () => void;
+  readonly onCancelRestoreSnapshot?: () => void;
   readonly onExport?: () => void;
+  readonly onRetryRecoveryPoints?: () => void;
+}
+
+/** Status descriptor used while the desktop shell reads the fixed native store. */
+export function desktopStoreStatusPanel(state: { readonly loading?: boolean; readonly error?: string }, handlers: { readonly onRetry: () => void }): ElementDescriptor {
+  if (state.loading === true) return setupPanel("Desktop app", "Opening your coursework", [element("p", { role: "status", "aria-live": "polite", "aria-busy": "true" }, "Checking the local app store…")]);
+  return setupPanel("Desktop app", "Due Good could not reach its app store", [
+    element("p", { role: "alert" }, state.error ?? "The desktop app could not read its local store."),
+    { tag: "button", attrs: { type: "button", class: "more-action" }, text: "Retry", on: { click: handlers.onRetry } },
+  ]);
 }
 
 function byteSize(bytes: number): string {
@@ -114,9 +130,12 @@ export function renderDesktopSetup(state: DesktopSetupState, handlers: DesktopSe
   }
   if (state.recoveryMode === true) {
     return setupPanel("Recovery", "Recover or export coursework", [
-      desktopRecoveryPanel({ snapshots: state.snapshots ?? [], importedAt: status.importedAt, busy: state.recoveryBusy === true, message: state.recoveryMessage, filesDone: state.recoveryFilesDone }, {
+      desktopRecoveryPanel({ snapshots: state.snapshots ?? [], importedAt: status.importedAt, busy: state.recoveryBusy === true, message: state.recoveryMessage, filesDone: state.recoveryFilesDone, loading: state.recoveryLoading, error: state.recoveryError, pendingRestoreId: state.pendingRestoreSnapshotId }, {
         onRestore: (id) => handlers.onRestoreSnapshot?.(id),
+        onConfirmRestore: () => handlers.onConfirmRestoreSnapshot?.(),
+        onCancelRestore: () => handlers.onCancelRestoreSnapshot?.(),
         onExport: () => handlers.onExport?.(),
+        onRetry: () => handlers.onRetryRecoveryPoints?.(),
         ...(status.state === "preview" || status.state === "authoritative" ? { onBack: () => handlers.onCancel?.() } : {}),
       }),
       ...(state.error === undefined ? [] : [element("p", { role: "alert" }, state.error.message)]),
@@ -137,12 +156,15 @@ export function renderDesktopSetup(state: DesktopSetupState, handlers: DesktopSe
       : phase === "importing" ? "Adding calendar assignments…"
       : "";
     return setupPanel("First run", "Connect your Canvas calendar", [
-      element("p", {}, "Due Good will create a fresh local coursework list from your calendar feed. The feed credential is separate from a Canvas API token."),
-      element("p", {}, "Calendar events can supply assignments and dates. They do not include grades, messages, or progress saved in an older Due Good folder."),
-      dataFolder,
+      element("p", {}, "Add assignments and dates from your Canvas calendar."),
       { tag: "button", attrs: { type: "button", class: "more-action", ...(connecting ? { disabled: "" } : {}) }, text: connecting ? "Connecting…" : "Connect calendar", on: { click: () => handlers.onConnectCalendar?.() } },
       ...(connecting ? [element("p", { role: "status", "aria-live": "polite" }, progress)] : []),
       ...(state.error === undefined ? [] : [element("p", { role: "alert" }, state.error.message)]),
+      { tag: "details", children: [
+        element("summary", {}, "About calendar import"),
+        element("p", {}, "Calendar events can supply assignments and dates. They do not include grades, messages, or progress saved in an older Due Good folder."),
+        dataFolder,
+      ] },
     ]);
   }
   const busy = state.step === "choosing" || state.step === "checking" || state.step === "importing";

@@ -27,6 +27,7 @@ const DAILY_ACCOUNT_ENDPOINTS: [&str; 4] = [
 const DAILY_DETAIL_ENDPOINTS: [&str; 1] = ["conversation"];
 const DAILY_OMISSION_REASONS: [&str; 4] =
     ["locked", "unpublished", "not-applicable", "unsupported"];
+const MAX_ARCHIVED_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 pub(super) fn summarize_daily_scope(
     snapshot: &Value,
@@ -180,7 +181,7 @@ pub(super) fn summarize_daily_scope(
         }
     }
 
-    let mut file_receipts = std::collections::BTreeMap::<u64, (&str, Option<&str>)>::new();
+    let mut file_receipts = std::collections::BTreeMap::<u64, Option<&Value>>::new();
     for resource in resources
         .iter()
         .filter(|resource| resource.get("endpoint").and_then(Value::as_str) == Some("fileBodies"))
@@ -189,7 +190,14 @@ pub(super) fn summarize_daily_scope(
             if let Some(file_id) = positive_id(receipt.get("fileId")) {
                 let status = receipt.get("status").and_then(Value::as_str).unwrap_or("");
                 let reason = receipt.get("reason").and_then(Value::as_str);
-                file_receipts.entry(file_id).or_insert((status, reason));
+                match file_receipts.entry(file_id) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(Some(receipt));
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut entry) => {
+                        entry.insert(None);
+                    }
+                }
                 if active_file_ids.contains(&file_id)
                     && status == "gap"
                     && reason.is_some_and(|value| DAILY_OMISSION_REASONS.contains(&value))
@@ -218,9 +226,14 @@ pub(super) fn summarize_daily_scope(
                 required_gaps += 1;
                 continue;
             }
-            match file_receipts.get(&file_id) {
-                Some(("staged", _)) => {}
-                Some(("gap", Some(reason))) if DAILY_OMISSION_REASONS.contains(reason) => {}
+            match file_receipts.get(&file_id).copied().flatten() {
+                Some(receipt) if valid_archived_file_receipt(receipt, file_id) => {}
+                Some(receipt)
+                    if receipt.get("status").and_then(Value::as_str) == Some("gap")
+                        && receipt
+                            .get("reason")
+                            .and_then(Value::as_str)
+                            .is_some_and(|reason| DAILY_OMISSION_REASONS.contains(&reason)) => {}
                 _ => required_gaps += 1,
             }
         }
@@ -272,4 +285,40 @@ fn resource_items(resource: &Value) -> Result<&[Value], BrowserImportError> {
 
 fn positive_id(value: Option<&Value>) -> Option<u64> {
     value.and_then(Value::as_u64).filter(|id| *id > 0)
+}
+
+fn valid_archived_file_receipt(receipt: &Value, file_id: u64) -> bool {
+    if receipt.get("status").and_then(Value::as_str) != Some("archived")
+        || positive_id(receipt.get("fileId")) != Some(file_id)
+        || receipt
+            .get("byteCount")
+            .and_then(Value::as_u64)
+            .is_none_or(|bytes| bytes == 0 || bytes > MAX_ARCHIVED_FILE_BYTES)
+        || receipt.get("sourceAuthenticity").and_then(Value::as_str) != Some("unverified")
+    {
+        return false;
+    }
+    let Some(hash) = receipt.get("sha256").and_then(Value::as_str) else {
+        return false;
+    };
+    if hash.len() != 64
+        || !hash
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return false;
+    }
+    let Some(content_type) = receipt.get("contentType").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some((major, minor)) = content_type.split_once('/') else {
+        return false;
+    };
+    [major, minor].iter().all(|part| {
+        !part.is_empty()
+            && part.len() <= 64
+            && part.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-.+".contains(&byte)
+            })
+    })
 }

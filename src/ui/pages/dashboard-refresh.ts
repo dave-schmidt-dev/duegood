@@ -41,14 +41,6 @@ export function refreshNote(state: DashboardState, latest: DashboardRefresh | un
   return latest === undefined ? "Not yet refreshed" : `Updated ${formatted(latest.startedAt, true)}`;
 }
 
-export function refreshOutcome(state: DashboardState): ElementDescriptor[] {
-  const feedback = state.refreshDetail;
-  if (state.refreshState === "failed") return [{ tag: "p", text: feedback ?? "Refresh failed. Existing data was kept.", attrs: { class: "inline-error", role: "status", "aria-live": "polite" } }];
-  if (state.refreshState === "partial") return [{ tag: "p", text: feedback ?? "Refresh incomplete. Existing data was kept; this run may not include complete Canvas history.", attrs: { class: "refresh-status partial", role: "status", "aria-live": "polite" } }];
-  if (state.refreshState === "complete") return [{ tag: "p", text: feedback ?? "Refresh complete.", attrs: { class: "inline-success", role: "status", "aria-live": "polite" } }];
-  return [];
-}
-
 export function canvasRefreshSettingRow(desktop: DesktopStoreInfo, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   if (desktop.browserRefreshAvailable === true) return {
     tag: "div", attrs: { class: "settings-row" }, children: [

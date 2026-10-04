@@ -10,13 +10,15 @@ function sourceStatus(value: FullRefreshResult["browserStatus"] | FullRefreshRes
 }
 
 export function fullRefreshFeedback(result: FullRefreshResult): FullRefreshFeedback {
-  const complete = result.status === "complete" && result.browserStatus === "complete" && result.calendarStatus === "complete" && result.gapCount === 0;
+  const calendarStatus = result.calendarHeld > 0 && result.calendarStatus === "complete" ? "incomplete" : sourceStatus(result.calendarStatus);
+  const complete = result.status === "complete" && result.browserStatus === "complete" && calendarStatus === "complete" && result.gapCount === 0;
   const failed = result.browserStatus === "failed" && (result.calendarStatus === "failed" || result.calendarStatus === "unavailable");
   const state = complete ? "complete" : failed ? "failed" : "partial";
-  const gap = result.gapCount === 0 ? "no coverage gaps" : `${String(result.gapCount)} coverage gap${result.gapCount === 1 ? "" : "s"}`;
+  const gap = result.gapCount === 0 ? "no required Canvas capture gaps" : `${String(result.gapCount)} required Canvas capture gap${result.gapCount === 1 ? "" : "s"}`;
   const omissions = result.omissionCount === 0 ? "no optional capture omissions"
     : `${String(result.omissionCount)} optional capture omission${result.omissionCount === 1 ? "" : "s"} recorded`;
-  const detail = `Canvas ${sourceStatus(result.browserStatus)} (${gap}; ${omissions}); calendar ${sourceStatus(result.calendarStatus)} (${String(result.calendarAdded)} added, ${String(result.calendarUpdated)} updated, ${String(result.calendarHeld)} held).`;
+  const held = `${String(result.calendarHeld)} calendar item${result.calendarHeld === 1 ? "" : "s"} held`;
+  const detail = `Canvas ${sourceStatus(result.browserStatus)} (${gap}; ${omissions}); calendar ${calendarStatus} (${String(result.calendarAdded)} added, ${String(result.calendarUpdated)} updated, ${held}).`;
   const headline = complete ? "Current Canvas pages refreshed."
     : failed ? "Full refresh failed." : "Full refresh partial.";
   return { state, detail: `${headline} ${detail}` };

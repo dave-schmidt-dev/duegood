@@ -357,3 +357,76 @@ Confirmed `prepare_store_promotion()` opens the native backup-folder picker befo
 ## 2026-10-02: Owner-authorized all-task fixes
 
 Owner requested planning and fixing all eight remaining tasks. The frozen draft completed deep PlanRun review at `.logs/all-fixes-20261002/plan-conclusion.json`; separate corrected contracts are `docs/ALL-FIXES-FINAL-PLAN-20261002.md` and `docs/ALL-FIXES-FINAL-TASKS-20261002.md`. Implement compatible lock updates, shared anchored no-follow reads, truthful idempotent calendar confirmation, atomic snapshot publication, bounded cold installer launch proof, and approved responsive rail. Verify full staged checks, installed candidate, and private live pages; preserve owner acceptance, legacy retirement, and exact publication as separate gates. Native fallback is qualified by the current isolated Cargo baseline failure: writer never started, clone removed, lock released. Private store and rollback data remain intact.
+
+## 2026-10-03 live refresh failure repair
+
+Confirmed from current owner refresh: 125 required Canvas gaps, 9 optional omissions and 1 ambiguous calendar hold; full-refresh combines holds into the Canvas gap count. Persisted capture status drops reason codes and the original snapshot is unavailable. Changed: installed 0.3.0 synthetic gates passed, but live completeness remains unaccepted. Not verifiable: precise missing-capture reasons until source-backed diagnostics or a controlled capture are available. Not applicable: OAuth/cloud migration or lowering completeness safeguards.
+
+Continue the same dg-all-fixes-20261002 run, its confirmed native fallback latch, and consumed review ledger. Current owner instruction authorizes repair and local build/install, without a new publication.
+
+1. Diagnose 125 required gaps using bounded private reads/current same-generation records; retain only content-free diagnostics. Required capture failures must remain incomplete.
+2. RF1 reporting: keep Canvas gap count independent of calendar holds; preserve bounded allowlisted endpoint/reason counts durably, without course IDs, URLs, content or secrets. Backward-compatible older receipts remain unknown. Add synthetic Rust/UI/Playwright regressions and verify counts.
+3. Repair the confirmed capture/reconciliation boundary, test against a synthetic reproduction, then build/install using the existing installer and perform a controlled authenticated refresh if current host/session permits. Do not claim all pages current from synthetic tests.
+
+Internal self-review: fix observability and source acquisition rather than making warnings disappear; preserve personal records and partial-import deletion restrictions. New tests must join the runner manifest; existing consumed review budgets stay unchanged.
+
+## 2026-10-03 — Owner-requested complete CLEAR audit
+
+Continue captain run `dg-all-fixes-20261002` (manual, attended, checkpoint). Inventory every reachable macOS WebView screen, element, overlay and state; execute CLEAR 1.0.0 Pass A and Pass B against synthetic data using the registered Playwright harness and rendered inspection. Native dialogs, installed live flows and real relaunch remain separately verified or explicitly unverified. Preserve accepted navy/gold/blue tokens and existing page structure. Accessibility is deferred by CLEAR; existing project requirements remain. This is an explicit audit milestone `clear-owner-20261003`, not publication authority. Before any application repair, issue a bounded file/check/deadline contract with exact native fallback authorization under the already-confirmed Switchyard latch. Fix observed violations, rebind exact candidate bytes, and repeat both passes plus regressions. Proposed deviations require comparison mockups and owner acceptance; no silent exceptions. No Canvas writes, credential/provider changes, publication or destructive recovery are authorized. Existing consumed checkpoint review attempts remain preserved.
+
+The current rendered gate identified three bounded follow-up repairs: prevent transient redraw from replacing saved scroll with zero; keep short class-title words intact in constrained five-course lanes without changing the desktop rail; remove the third Timeline hero identification while retaining the two proposed card/rail identities. Refresh fixtures must retain the selected historical run and explicitly select a newly imported run to verify it. Repeat both audit passes and the registered suite after the accumulated source freezes.
+
+### CLEAR layout-09 bounded increment (2026-10-03)
+
+Browser-08 confirms that at 1280px with five synthetic courses, `Synthetic seminar` wraps each short word twice (`[2, 2]`) even though the desktop glance rail, its sticky behavior, lane alignment, and no-overflow checks remain required. The screenshot shows the rail retained beside five narrow lanes; this is a constrained desktop spacing defect, not a typography or navigation change. Extend the smallest accepted course-lane/event-card padding treatment through the existing 861–1400px desktop rail range, preserving font sizes, filters, rail placement, sticky lane alignment, event time placement, and all word/time assertions. Run focused source checks now; rebuild assets and rerun the registered browser test only after the captain freezes the repaired sources.
+
+### CLEAR detail-09 bounded increment (2026-10-03)
+
+Audit-08 captured the last 720px Timeline Details control revealing its controlled content while the audit then observed `aria-expanded="false"`. Keep the existing disclosure flow and controlled relationship, but bind the control state to the same visible-detail decision so expand and collapse present matching visibility and ARIA state. Add focused registered descriptor coverage for both states. This increment excludes app-level routing, browser assets, builds, publication, and review; the captain coordinates subsequent plan writes.
+
+### CLEAR grade-note-09 bounded increment (2026-10-03)
+
+Move the long explanation of local grade observations, Canvas facts, and progress coverage into a closed `About grade observations` disclosure using the established details/summary pattern. Keep `Graded points are not a final course grade.` visible adjacent to the disclosure, and retain every explanatory fact when it opens. Add descriptor and synthetic browser coverage for the closed and open states. This increment excludes CSS, dependencies, builds, publication, providers, and grade-data behavior changes.
+
+### CLEAR scroll-10 bounded increment (2026-10-03)
+
+Browser-09 confirms the Timeline redraw during a pending refresh resets `window.scrollY` to zero before any refresh result is available. Preserve the active page’s current position through each refresh redraw and restore it immediately, while retaining a deliberate stable scroll to top, mid-refresh navigation, completion, and reload behavior. Keep the existing pending-state browser assertion at its current point and add only focused coverage needed to prove the redraw path. This increment excludes CSS, builds, storage resets, publication, and provider changes.
+
+### CLEAR layout-10 bounded increment (2026-10-03)
+
+Browser-09 confirms that, at 1280px with three courses, the class-meeting title receives 136.03125px of 164.15625px card content width because the inline time consumes the remaining flex-row width and its gap. Preserve the rail, font sizes, readable time, word-integrity, and no-overflow contracts by placing the title group on the full first row and letting the existing time move to its own wrapped row. Add this only to the existing event-card geometry regression matrix; asset rebuild and browser validation wait for the captain’s freeze.
+
+### CLEAR header-11 bounded increment (2026-10-03)
+
+The scroll-11 probe confirms that the topbar Refresh control is physically off-screen during deep Timeline work, so browser actionability scrolls to it before its handler can preserve the prior position. Make the topbar sticky at the viewport top above Timeline course headers. Since its complete status can wrap, measure its rendered height after each dashboard draw with a lifecycle-owned `ResizeObserver`, clear that observer on disposal, and expose the height as a CSS variable. Offset sticky course headers by the measured toolbar height and the glance rail by that height plus its existing 16px gap; retain the full status, header/rail design, overflow behavior, and current scroll assertions. Registered geometry tests must compare the actual toolbar bottom with pinned headers and rail rather than an assumed zero header offset. No asset build or browser run occurs before freeze-11.
+
+### CLEAR scroll-13 bounded increment (2026-10-04)
+
+Browser-12 shows a deliberate stable Timeline scroll to top is replaced by the prior deep position. Trace the navigation restoration frame against that immediate user scroll. If the queued restoration is the cause, restore synchronously after the navigation draw so the later user scroll is authoritative; preserve refresh behavior, selected page state, reload restoration, and every existing browser assertion. This increment excludes CSS, storage resets, timing waits, builds, publication, and provider changes.
+
+### CLEAR scroll-14 bounded increment (2026-10-04)
+
+Browser-13 confirms that hashchange itself follows the navigation click and the test’s immediate intentional top scroll, so even synchronous restoration inside hashchange remains too late. For direct in-app navigation, capture the departing page, apply and render the destination, and restore its saved position inside the click transaction; treat the subsequent matching hashchange as acknowledgment only. Preserve ordinary back/forward and external hash changes through the existing capture, render, and restore path. Keep every browser assertion unchanged. This increment excludes timing waits, tolerance changes, storage resets, builds, and unrelated routing changes.
+
+### CLEAR controls-15 bounded increment (2026-10-04)
+
+The recovery panel’s main Restore, Retry, Export, and Back buttons lack the accepted action classes and fall back to browser-default gray controls. Apply only the existing `more-action` or `setup-secondary` classes, retaining all handlers, labels, disabled/busy behavior, confirmation `sync-button`/Cancel treatment, and focus flow. The same audit found `failed` refreshes using the default complete/sage class in both selected Activity details and history rows; add the failed class with the accepted clay status color while retaining complete sage and partial clay. Extend the registered UI and recovery Playwright specs with focused class and computed-style assertions. This increment excludes unrelated token/CSS changes, builds, publication, and behavior changes.
+
+Browser-15 exposed a test-fixture projection mismatch: Activity receipts accept raw `succeeded` only with `sourceComplete: true` for a displayed complete status, `incomplete` only with `sourceComplete: false` for partial, and `failed` for failed. Correct only the existing color-fixture mapping to those receipt fields, retaining all three displayed color/class assertions and their count. Run the focused registered test against the current assets without rebuilding them; application and CSS sources remain unchanged.
+
+### CLEAR final-scroll-17 bounded remediation
+
+The final cross-family review confirmed that numeric `window.scrollTo` inherits the smooth-scroll stylesheet during restoration. Use explicit instantaneous restoration for redraw and navigation/relaunch, with a registered normal-motion first-frame regression that cannot pass after an animation eventually settles. Preserve user-triggered smooth navigation and all capture/persistence logic. Candidate16 stays historical; freeze17 and repeat element/macro audits, browser checks and native bundle verification before acceptance. Reject the disclosure-marker styling preference after current rendered review: semantic native details/summary and its recognizable triangle follow CLEAR native-control guidance. No further external reviewer is budgeted.
+
+### CLEAR selector-18 test-only correction
+
+Browser17 passed 111/112; the new test passed refresh restoration before its navigation lookup failed on icon-prefixed text. Correct only that lookup to the existing semantic Timeline route href `#timeline`; retain normal-motion first-frame, exact 0.5px, deep-scroll and persisted-target assertions. App source/assets remain unchanged from17. Freeze18 and repeat both audit passes/current browser checks; preserve17 failure as test-harness evidence.
+
+### CLEAR action-wrap-19 rendered-layout repair
+
+Audit18 machine flows passed31/31 and Browser18 passed112/112, but captain full-size medium-1024 Timeline crops show Copy assignment and Details overflowing the narrow event card into the neighboring lane. Record R14 as Fail for that confirmed group; do not convert all qualitative groups to Pass. Wrap the existing action row and keep each control readable and bounded by its card across three/five-course and supported narrow/desktop widths; no clipping/hiding or label removal. Add registered Playwright geometry/overlap checks, preserve existing scroll first-frame regression. Repeat both full audit passes against19 before native acceptance. This is a defect repair within accepted visual tokens, not a new design exception.
+
+
+### CLEAR action regression fixture correction20 (2026-10-04)
+
+Browser19 passed112/113; the new action test assumed all event rows include Copy assignment, but the established class-meeting renderer deliberately shows Details only. Bounded contract `.logs/all-fixes-20261002/clear/task-CLEAR-ACTION-TEST-20.json` permits only correcting the expected labels by actual card kind in the registered spec, retaining every class/assignment row and all geometry/no-overlap/clipping/usable-bound assertions at all eight width/course configurations. App source and assets remain unchanged. Rebind20 and execute full browser/CLEAR checks; historical19 results remain nonfinal. Existing Switchyard failure latch authorizes the native worker fallback; no new route or publication authority.

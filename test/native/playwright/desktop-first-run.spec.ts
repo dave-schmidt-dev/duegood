@@ -332,7 +332,16 @@ for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "
     test("first run: calendar connection creates the native dashboard without a legacy folder", async ({ page }) => {
       const apiRequests = await openDesktop(page, scenario({ icalReady: true }));
       await expect(page.getByRole("heading", { level: 1, name: "Connect your Canvas calendar" })).toBeVisible();
-      await expect(page.getByText("The feed credential is separate from a Canvas API token.", { exact: false })).toBeVisible();
+      await expect(page.getByText("Add assignments and dates from your Canvas calendar.", { exact: true })).toBeVisible();
+      const importDetails = page.locator("details").filter({ has: page.getByText("About calendar import", { exact: true }) });
+      await expect(importDetails).toHaveCount(1);
+      await expect(importDetails).not.toHaveAttribute("open", "");
+      await expect(importDetails).toContainText("They do not include grades, messages, or progress saved in an older Due Good folder.");
+      await expect(importDetails.locator(".setup-path")).toHaveText(DATA_FOLDER);
+      await expect(page.getByText(/API token|credential/i)).toHaveCount(0);
+      await importDetails.getByText("About calendar import", { exact: true }).click();
+      await expect(importDetails).toHaveAttribute("open", "");
+      await expect(importDetails.getByText("Calendar events can supply assignments and dates. They do not include grades, messages, or progress saved in an older Due Good folder.", { exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Choose legacy folder…" })).toHaveCount(0);
       await expectNoHorizontalOverflow(page);
       expect(await automaticAccessibilityViolations(page)).toEqual([]);
@@ -574,6 +583,10 @@ for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "
       const recoveryPoints = page.getByRole("region", { name: "Recovery points" });
       await expect(recoveryPoints).toContainText("Daily snapshot");
       await recoveryPoints.getByRole("button", { name: "Restore snapshot" }).click();
+      const confirmation = page.getByRole("dialog", { name: "Confirm snapshot restore" });
+      await expect(confirmation).toContainText("archives the current app store before restoring this recovery point");
+      expect((await expectNoPathArguments(page)).filter((call) => call.command === "restore_snapshot")).toHaveLength(0);
+      await confirmation.getByRole("button", { name: "Restore selected snapshot" }).click();
       await expect(page.getByRole("heading", { level: 1, name: "More" })).toBeVisible();
 
       const calls = await expectNoPathArguments(page);

@@ -1,8 +1,10 @@
 import type { ElementDescriptor } from "../dom";
 import { dashboardNav, type DashboardPage } from "../routes";
 import type { BrowserFreshness } from "../../shared/browser-freshness";
-import { canvasRefreshSettingRow, refreshActionLabel, refreshNote, refreshOutcome } from "./dashboard-refresh";
+import { canvasRefreshSettingRow, refreshActionLabel, refreshNote } from "./dashboard-refresh";
+import { renderLibraryPage } from "./dashboard-library";
 import { renderTimelineEventCard, type TimelineEventCardRenderers } from "./timeline-event-card";
+import type { LibraryResourceActionFeedback } from "../library-resource-action";
 
 export interface DashboardGradeGroup { readonly id: string | null; readonly name: string | null; readonly weight: number | null }
 export interface DashboardCourse { readonly id: string; readonly courseCode: string; readonly title: string; readonly term?: string; readonly lastSuccessfulCheckAt?: number | null; readonly gradeGroups?: readonly DashboardGradeGroup[] }
@@ -64,7 +66,8 @@ export interface DashboardState {
   readonly pendingLinkSaving?: boolean;
   readonly pendingLinkNotice?: string;
   readonly desktop: DesktopStoreInfo;
-  readonly resourceNotice?: string;
+  /** Feedback is isolated by resource so one result cannot overwrite another row. */
+  readonly resourceActions?: Readonly<Record<string, LibraryResourceActionFeedback>>;
   /** Native cutover/rollback operation state. The proof is opaque and memory-only. */
   readonly storeTransition?: {
     readonly phase: "idle" | "preparing" | "ready" | "promoting" | "demoting" | "exporting";
@@ -135,7 +138,11 @@ function time(value: string | number | null | undefined): string { if (isDateOnl
 function dayKey(date: Date): string { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; }
 function startOfDay(timestamp: number): Date { const date = new Date(timestamp); date.setHours(0, 0, 0, 0); return date; }
 function dayNumber(date: Date): number { return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86_400_000; }
-function eventDate(event: DashboardEvent): Date { return asDate(event.startsAt)!; }
+function eventDate(event: DashboardEvent): Date {
+  const date = asDate(event.startsAt)!;
+  if (event.kind !== "class" && isDateOnly(event.startsAt)) date.setHours(23, 59, 0, 0);
+  return date;
+}
 function upcoming(value: string, now: number): boolean { const date = asDate(value); return date !== undefined && (isDateOnly(value) ? dayKey(date) >= dayKey(new Date(now)) : date.getTime() >= now); }
 function overdue(value: string, now: number): boolean { const date = asDate(value); return date !== undefined && (isDateOnly(value) ? dayKey(date) < dayKey(new Date(now)) : date.getTime() < now); }
 function eventTime(event: DashboardEvent): string { return isDateOnly(event.startsAt) ? (event.kind === "class" ? "Time not specified" : "11:59 PM") : `${time(event.startsAt)}${event.endsAt ? `–${time(event.endsAt)}` : ""}`; }
@@ -318,7 +325,6 @@ function timelinePage(state: DashboardState, handlers: DashboardHandlers): Eleme
   const events = state.data.events.filter((event) => !event.completed && (state.eventMode === "all" || event.kind !== "class") && (state.courseFilter === "all" || key(event.courseCode) === key(state.courseFilter)) && asDate(event.startsAt) !== undefined).sort((a, b) => eventDate(a).getTime() - eventDate(b).getTime());
   const dueItems = state.data.events.filter((event) => event.kind !== "class" && !event.completed && asDate(event.startsAt) !== undefined).sort((a, b) => eventDate(a).getTime() - eventDate(b).getTime());
   const unreadMessages = state.data.conversations.filter((message) => message.unread).sort((a, b) => new Date(b.receivedAt ?? 0).getTime() - new Date(a.receivedAt ?? 0).getTime());
-  const next = state.data.events.filter((event) => event.kind !== "class" && !event.completed && upcoming(event.startsAt, state.now)).sort((a, b) => eventDate(a).getTime() - eventDate(b).getTime())[0];
   const start = startOfDay(state.now);
   const minimumEnd = new Date(start); minimumEnd.setDate(minimumEnd.getDate() + 6);
   const latest = events.reduce((maximum, event) => Math.max(maximum, eventDate(event).getTime()), start.getTime());
@@ -328,7 +334,7 @@ function timelinePage(state: DashboardState, handlers: DashboardHandlers): Eleme
   const lanes = Math.max(1, courses.length);
   const cardRenderers = timelineEventCardRenderers(state, handlers);
   return el("section", undefined, { class: "page", "data-page-panel": "timeline" }, [
-    el("section", undefined, { class: "hero" }, [el("div", undefined, undefined, [el("p", `${formatted(start.getTime())} – ${formatted(end.getTime())}`, { class: "eyebrow" }), el("h1", "Timeline"), el("p", "Each row is one full day. Empty rows are time you can use.", { class: "hero-copy" })]), el("div", undefined, { class: "next-deadline", "aria-live": "polite" }, [el("span", "Next deadline"), el("strong", next === undefined ? "All clear" : countdownText(state.now, next.startsAt)), el("small", next?.title ?? "No unfinished deadline was supplied")])]),
+    el("section", undefined, { class: "hero" }, [el("div", undefined, undefined, [el("p", `${formatted(start.getTime())} – ${formatted(end.getTime())}`, { class: "eyebrow" }), el("h1", "Timeline"), el("p", "Each row is one full day. Empty rows are time you can use.", { class: "hero-copy" })])]),
     el("section", undefined, { class: "controls", "aria-label": "Timeline controls" }, [el("div", undefined, { class: "segmented", "aria-label": "Event types" }, (["all", "deadlines"] as const).map((mode) => ({ tag: "button", attrs: { type: "button", class: state.eventMode === mode ? "active" : "" }, text: mode === "all" ? "All events" : "Deadlines only", on: { click: () => handlers.onEventMode(mode) } }))), el("div", undefined, { class: "filters", "aria-label": "Course filters" }, [{ tag: "button", attrs: { type: "button", class: `filter ${state.courseFilter === "all" ? "active" : ""}` }, text: "All courses", on: { click: () => handlers.onCourseFilter("all") } }, ...courses.map((course) => ({ tag: "button", attrs: { type: "button", class: `filter ${state.courseFilter === course.courseCode ? "active" : ""}`, style: `--course-color:${color(courses, course.courseCode)}` }, text: code(course.courseCode), on: { click: () => handlers.onCourseFilter(course.courseCode) } }))])]),
     ...(courses.length === 0 ? [empty("No courses have been synced yet.")] : [el("div", undefined, { class: "timeline-layout" }, [el("section", undefined, { class: "timeline-shell" }, [
       el("header", undefined, { class: "lane-header", style: `--lane-count:${String(lanes)}` }, [el("div", undefined, { class: "lane-summary" }, [el("span", `${days.length} days`, { class: "range" }), el("span", `${events.length} matching events`, { class: "range-note" })]), el("div", undefined, { class: "lane-marker", "aria-hidden": "true" }), ...courses.map((course) => el("div", undefined, { class: "lane-label", style: `--lane-color:${color(courses, course.courseCode)}` }, [el("b", laneHeading(course))]))]),
@@ -518,7 +524,13 @@ function gradebookPage(state: DashboardState, handlers: DashboardHandlers): Elem
   ]);
   return el("section", undefined, { class: "page", "data-page-panel": "grades" }, [
     heading("Coursework grade records", "Grades", "Canvas facts stay visible beside local observations. No official weighted or final course grade is inferred."),
-    el("div", undefined, { class: "grade-honesty", role: "note" }, [el("strong", "Graded points are not a final course grade."), el("span", "A local observation is the selected value until you change or remove it; Canvas score and grade remain visible alongside it. Progress indicators use Canvas points only, and coverage and unknown group data stay visible.")]),
+    el("div", undefined, { class: "grade-honesty", role: "note" }, [
+      el("strong", "Graded points are not a final course grade."),
+      el("details", undefined, { class: "grade-honesty__details" }, [
+        el("summary", "About grade observations"),
+        el("p", "A local observation is the selected value until you change or remove it; Canvas score and grade remain visible alongside it. Progress indicators use Canvas points only, and coverage and unknown group data stay visible."),
+      ]),
+    ]),
     el("section", undefined, { class: "grade-summary-grid", "aria-label": "Course grade summaries" }, summary.length === 0 ? [empty("No courses have been synced yet.")] : summary),
     el("section", undefined, { class: "controls grade-controls", "aria-label": "Gradebook controls" }, [
       el("div", undefined, { class: "segmented", "aria-label": "Grade filters" }, (["all", "graded"] as const).map((mode) => ({ tag: "button", attrs: { type: "button", class: state.gradeMode === mode ? "active" : "", "aria-pressed": String(state.gradeMode === mode) }, text: mode === "all" ? "All records" : "Graded only", on: { click: () => handlers.onGradeMode(mode) } }))),
@@ -530,31 +542,7 @@ function gradebookPage(state: DashboardState, handlers: DashboardHandlers): Elem
 
 function coursesPage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   const courses = orderedCourses(state.data.courses);
-  return el("section", undefined, { class: "page" }, [heading(courses[0]?.term ?? "Current term", "Courses", "Each course keeps the same lane and color everywhere.", `${courses.length} active`), courses.length === 0 ? empty("No courses have been synced yet.") : el("div", undefined, { class: "course-grid" }, courses.map((course, index) => { const events = state.data.events.filter((event) => event.courseId === course.id || key(event.courseCode) === key(course.courseCode)); const deadlines = events.filter((event) => event.kind !== "class" && !event.completed && upcoming(event.startsAt, state.now)).sort((a, b) => eventDate(a).getTime() - eventDate(b).getTime()); const classes = events.filter((event) => event.kind === "class" && upcoming(event.startsAt, state.now)).sort((a, b) => eventDate(a).getTime() - eventDate(b).getTime()); return el("article", undefined, { class: "course-card", style: `--course-color:${color(courses, course.courseCode)}` }, [el("div", undefined, { class: "course-card__head" }, [el("div", code(course.courseCode), { class: "course-card__code" }), el("h2", course.title), el("span", index === 0 ? "Left lane" : index === 1 ? "Center lane" : index === 2 ? "Right lane" : `Lane ${index + 1}`, { class: "lane-position" })]), el("dl", undefined, { class: "course-facts" }, [el("div", undefined, { class: "course-fact" }, [el("dt", "Next deadline"), el("dd", deadlines[0]?.title ?? "Nothing upcoming")]), el("div", undefined, { class: "course-fact" }, [el("dt", "Next class"), el("dd", classes[0] === undefined ? "Not scheduled" : formatted(classes[0].startsAt, true))]), el("div", undefined, { class: "course-fact" }, [el("dt", "Completed"), el("dd", `${events.filter((event) => event.completed).length} items`)])]), el("div", undefined, { class: "course-card__footer" }, [{ tag: "button", attrs: { type: "button", class: "course-action" }, text: "View timeline", on: { click: () => { handlers.onCourseFilter(course.courseCode); handlers.onNavigate("timeline"); } } }])]); }))]);
-}
-
-function libraryPage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
-  const types = ["all", "File", "Page", "Link", "Module", "Announcement"];
-  const resources = state.data.resources.filter((item) => state.resourceFilter === "all" || item.type.toLowerCase() === state.resourceFilter.toLowerCase());
-  const toolbar = el("div", undefined, { class: "resource-toolbar" }, [
-    el("div", undefined, { class: "resource-types", "aria-label": "Canvas item types" }, types.map((type) => ({
-      tag: "button", attrs: { type: "button", class: state.resourceFilter === type ? "active" : "" }, text: type === "all" ? "All" : `${type}s`, on: { click: () => handlers.onResourceFilter(type) },
-    }))),
-  ]);
-  const list = resources.length === 0
-    ? empty(state.data.resources.length === 0 ? "Canvas library items have not been synced yet." : "No Canvas items match this filter.")
-    : el("div", undefined, { class: "resource-list" }, resources.map((resource) => {
-      const href = safeLocalHref(resource.localUrl);
-      return el("article", undefined, { class: "resource-row", style: `--course-color:${color(state.data.courses, resource.courseCode)}` }, [
-        el("span", resource.type, { class: "resource-type" }),
-        el("div", undefined, undefined, [el("h2", resource.title, { class: "resource-title" }), el("p", `${code(resource.courseCode)}${resource.context ? ` · ${resource.context}` : ""}`, { class: "resource-meta" })]),
-        el("time", formatted(resource.updatedAt, true), { class: "resource-updated" }),
-        ...(resource.savedLocally === true && handlers.onOpenResource !== undefined
-          ? [{ tag: "button", attrs: { type: "button", class: "more-action" }, text: "Open or save", on: { click: () => handlers.onOpenResource?.(resource.id) } }]
-          : href !== undefined ? [el("a", "Open", { class: "more-action", href })] : resource.savedLocally === true ? [el("span", "Saved locally", { class: "resource-saved" })] : [el("span", "No local copy", { class: "resource-unavailable" })]),
-      ]);
-    }));
-  return el("section", undefined, { class: "page" }, [heading("Imported from Canvas", "Library", "Files, pages, links, modules, and announcements from your courses.", `${resources.length} items`), toolbar, ...(state.resourceNotice === undefined ? [] : [el("p", state.resourceNotice, { role: "status", "aria-live": "polite" })]), list]);
+  return el("section", undefined, { class: "page" }, [heading("Course overview", "Courses", "Each course keeps the same lane and color everywhere."), courses.length === 0 ? empty("No courses have been synced yet.") : el("div", undefined, { class: "course-grid" }, courses.map((course, index) => { const events = state.data.events.filter((event) => event.courseId === course.id || key(event.courseCode) === key(course.courseCode)); const deadlines = events.filter((event) => event.kind !== "class" && !event.completed && upcoming(event.startsAt, state.now)).sort((a, b) => eventDate(a).getTime() - eventDate(b).getTime()); const classes = events.filter((event) => event.kind === "class" && upcoming(event.startsAt, state.now)).sort((a, b) => eventDate(a).getTime() - eventDate(b).getTime()); return el("article", undefined, { class: "course-card", style: `--course-color:${color(courses, course.courseCode)}` }, [el("div", undefined, { class: "course-card__head" }, [el("div", code(course.courseCode), { class: "course-card__code" }), el("h2", course.title), el("span", index === 0 ? "Left lane" : index === 1 ? "Center lane" : index === 2 ? "Right lane" : `Lane ${index + 1}`, { class: "lane-position" })]), el("dl", undefined, { class: "course-facts" }, [el("div", undefined, { class: "course-fact" }, [el("dt", "Next deadline"), el("dd", deadlines[0]?.title ?? "Nothing upcoming")]), el("div", undefined, { class: "course-fact" }, [el("dt", "Next class"), el("dd", classes[0] === undefined ? "Not scheduled" : formatted(classes[0].startsAt, true))]), el("div", undefined, { class: "course-fact" }, [el("dt", "Completed"), el("dd", `${events.filter((event) => event.completed).length} items`)])]), el("div", undefined, { class: "course-card__footer" }, [{ tag: "button", attrs: { type: "button", class: "course-action" }, text: "View timeline", on: { click: () => { handlers.onCourseFilter(course.courseCode); handlers.onNavigate("timeline"); } } }])]); }))]);
 }
 
 function inboxPage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
@@ -573,22 +561,19 @@ function inboxPage(state: DashboardState, handlers: DashboardHandlers): ElementD
 
 function activityPage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   const refreshes = state.data.refreshes; const selected = refreshes.find((refresh) => refresh.id === state.selectedRefreshId) ?? refreshes[0];
-  const refreshing = state.refreshState === "running";
-  const refreshButton: ElementDescriptor = { tag: "button", attrs: { type: "button", class: `more-action refresh-button${refreshing ? " refreshing" : ""}`, "aria-busy": String(refreshing), ...(refreshing ? { disabled: "" } : {}) }, text: refreshActionLabel(state, refreshing, "activity"), on: { click: handlers.onRefresh } };
   const content = selected === undefined ? empty("No refresh history is available yet.") : el("div", undefined, { class: "refresh-layout" }, [
     el("section", undefined, { class: "change-panel" }, [
-      el("div", undefined, { class: "panel-head" }, [el("h2", `${selected.source === "calendar" ? "Calendar refresh" : selected.source === "inbox" ? "Inbox update" : "Canvas refresh"} · ${formatted(selected.startedAt, true)}`), el("p", `${selected.status.toUpperCase()} · ${selected.summary}`, { class: selected.status === "partial" ? "refresh-status partial" : "refresh-status" }), ...(selected.source === "calendar" ? [el("p", "Calendar refresh updates deadlines only. Grades, Inbox, and library items keep the prior Canvas capture.", { class: "source-scope-note", role: "note" })] : [])]),
+      el("div", undefined, { class: "panel-head" }, [el("h2", `${selected.source === "calendar" ? "Calendar refresh" : selected.source === "inbox" ? "Inbox update" : "Canvas refresh"} · ${formatted(selected.startedAt, true)}`), el("p", `${selected.status.toUpperCase()} · ${selected.summary}`, { class: selected.status === "partial" ? "refresh-status partial" : selected.status === "failed" ? "refresh-status failed" : "refresh-status" }), ...(selected.source === "calendar" ? [el("p", "Calendar refresh updates deadlines only. Grades, Inbox, and library items keep the prior Canvas capture.", { class: "source-scope-note", role: "note" })] : [])]),
       el("div", undefined, { class: "change-counts" }, [[selected.added, "Added"], [selected.changed, "Changed"], [selected.removed, "Removed"], ...(selected.held === undefined ? [] : [[selected.held, "Held"] as const])].map(([count, label]) => el("div", undefined, { class: "change-count" }, [el("strong", String(count)), el("span", String(label))]))),
       selected.changes.length === 0 ? empty("This refresh recorded no item-level changes.") : el("ul", undefined, { class: "change-list" }, selected.changes.map((change) => el("li", undefined, { class: "change-item" }, [el("span", change.kind, { class: `change-kind ${change.kind}` }), el("div", undefined, undefined, [el("strong", change.title), el("p", change.detail)])]))),
     ]),
     el("aside", undefined, { class: "history-panel" }, [
       el("div", undefined, { class: "panel-head" }, [el("h2", "Refresh history"), el("p", "Select a run to inspect its exact changes.")]),
-      el("div", undefined, { class: "history-list" }, refreshes.map((refresh) => ({ tag: "button", attrs: { type: "button", class: `history-row ${refresh.id === selected.id ? "active" : ""}` }, on: { click: () => handlers.onSelectRefresh(refresh.id) }, children: [el("strong", undefined, undefined, [el("span", formatted(refresh.startedAt, true)), el("span", refresh.status, { class: refresh.status === "partial" ? "refresh-status partial" : "refresh-status" })]), el("small", `+${refresh.added} added · ${refresh.changed} changed · ${refresh.removed} removed`)] }))),
+      el("div", undefined, { class: "history-list" }, refreshes.map((refresh) => ({ tag: "button", attrs: { type: "button", class: `history-row ${refresh.id === selected.id ? "active" : ""}` }, on: { click: () => handlers.onSelectRefresh(refresh.id) }, children: [el("strong", undefined, undefined, [el("span", formatted(refresh.startedAt, true)), el("span", refresh.status, { class: refresh.status === "partial" ? "refresh-status partial" : refresh.status === "failed" ? "refresh-status failed" : "refresh-status" })]), el("small", `+${refresh.added} added · ${refresh.changed} changed · ${refresh.removed} removed`)] }))),
     ]),
   ]);
   return el("section", undefined, { class: "page" }, [
-    el("header", undefined, { class: "subpage-heading" }, [el("div", undefined, undefined, [el("p", "Refresh evidence", { class: "eyebrow" }), el("h1", "Activity"), el("p", "What changed in each refresh, including partial imports that preserved existing data.")]), ...(state.data.refreshAvailable ? [refreshButton] : [])]),
-    ...refreshOutcome(state),
+    el("header", undefined, { class: "subpage-heading" }, [el("div", undefined, undefined, [el("p", "Refresh evidence", { class: "eyebrow" }), el("h1", "Activity"), el("p", "What changed in each refresh, including partial imports that preserved existing data.")])]),
     content,
   ]);
 }
@@ -719,6 +704,7 @@ function pendingLinkReview(state: DashboardState, handlers: DashboardHandlers): 
 
 function morePage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   const pendingReview = pendingLinkReview(state, handlers);
+  const courses = orderedCourses(state.data.courses);
   return el("section", undefined, { class: "page" }, [
     heading("Due Good", "More", "Source status, refresh controls, and local app information."),
     ...(state.pendingLinkNotice === undefined ? [] : [el("p", state.pendingLinkNotice, { class: "status", role: "status", "aria-live": "polite" })]),
@@ -730,6 +716,7 @@ function morePage(state: DashboardState, handlers: DashboardHandlers): ElementDe
         el("p", "Incomplete refreshes never remove existing coursework."),
         el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Canvas items"), el("span", "Assignments, class meetings, files, pages, links, modules, announcements, and read-only inbox")])]),
         el("div", undefined, { class: "settings-row" }, [el("div", undefined, undefined, [el("strong", "Privacy"), el("span", "Local app · no public coursework data")])]),
+        el("details", undefined, { "data-course-colors": "true" }, [el("summary", "Course colors"), ...courses.map((course) => el("div", undefined, { class: "settings-row" }, [el("span", undefined, { class: "legend-dot", style: `--dot:${color(courses, course.courseCode)}` }), el("span", `${code(course.courseCode)} · ${course.title}`)]))]),
       ]),
     ]),
   ]);
@@ -746,7 +733,7 @@ function page(state: DashboardState, handlers: DashboardHandlers): ElementDescri
     case "inbox": return pagePanel("inbox", inboxPage(state, handlers));
     case "completed": return pagePanel("completed", completedPage(state, handlers));
     case "courses": return pagePanel("courses", coursesPage(state, handlers));
-    case "library": return pagePanel("library", libraryPage(state, handlers));
+    case "library": return pagePanel("library", renderLibraryPage(state, handlers, { el, heading, empty, safeLocalHref, formatted, code, color }));
     case "activity": return pagePanel("activity", activityPage(state, handlers));
     case "more": return pagePanel("more", morePage(state, handlers));
   }
@@ -772,7 +759,7 @@ export function renderDashboard(state: DashboardState, handlers: DashboardHandle
   const refreshScope = state.desktop?.browserRefreshAvailable === true ? "Canvas coursework, grades, Inbox, library, and calendar deadlines" : state.desktop?.refreshAvailable === true ? "Canvas coursework, grades, Inbox, and library" : state.desktop?.icalRefreshAvailable === true ? "Calendar deadlines only; grades, Inbox, and library keep the prior Canvas capture" : "Refresh unavailable";
   const refreshButton: ElementDescriptor = { tag: "button", attrs: { type: "button", class: `sync-button refresh-button${refreshing ? " refreshing" : ""}`, "aria-busy": String(refreshing), title: refreshScope, ...(refreshing ? { disabled: "" } : {}) }, text: refreshActionLabel(state, refreshing, "topbar"), on: { click: handlers.onRefresh } };
   const sourceNotice = freshnessNotice(state.data.sourceStatus);
-  return el("div", undefined, { class: "app" }, [el("aside", undefined, { class: "sidebar" }, [el("div", undefined, { class: "brand" }, [brandMark, el("div", undefined, undefined, [el("div", "Due Good", { class: "brand-name" }), el("span", courses[0]?.term ?? "Marymount", { class: "brand-note" })])]), dashboardNav(state.page, handlers.onNavigate), el("section", undefined, { class: "course-legend", "aria-label": "Course colors" }, [el("h2", "Course colors"), ...courses.map((course) => el("div", undefined, { class: "legend-row" }, [el("span", undefined, { class: "legend-dot", style: `--dot:${color(courses, course.courseCode)}` }), el("span", `${code(course.courseCode)} · ${course.title}`)]))])]), el("div", undefined, { class: "workspace" }, [el("header", undefined, { class: "topbar" }, [el("div", undefined, { class: "term-label" }, [el("strong", courses[0]?.term ?? "Current term"), el("span", ` · ${courses.length} course${courses.length === 1 ? "" : "s"}`)]), el("div", undefined, { class: "top-actions" }, [...(state.desktop?.storeState === "preview" ? [el("span", "Preview copy", { class: "preview-badge", title: "Imported from the legacy folder. It never refreshes." })] : []), el("span", refreshNote(state, latest), { class: "sync-note", role: "status", "aria-live": "polite" }), ...(state.data.refreshAvailable ? [refreshButton] : [])])]), el("main", undefined, { id: "main", tabindex: "-1" }, [...(state.loading ? [empty("Loading coursework…")] : []), ...(state.desktop?.snapshotInProgress ? [el("div", snapshotStatus, { class: "status", role: "status", "aria-live": "polite" })] : []), ...(state.error === undefined ? [] : [el("div", state.error, { class: "load-error", role: "alert" })]), ...(state.desktop?.warning ? [el("div", state.desktop.warning, { class: "load-error", role: "alert" })] : []), ...(!state.loading && state.error === undefined ? [...(sourceNotice === undefined ? [] : [sourceNotice]), page(state, handlers)] : [])])])]);
+  return el("div", undefined, { class: "app" }, [el("aside", undefined, { class: "sidebar" }, [el("div", undefined, { class: "brand" }, [brandMark, el("div", undefined, undefined, [el("div", "Due Good", { class: "brand-name" }), el("span", courses[0]?.term ?? "Marymount", { class: "brand-note" })])]), dashboardNav(state.page, handlers.onNavigate)]), el("div", undefined, { class: "workspace" }, [el("header", undefined, { class: "topbar" }, [el("div", undefined, { class: "term-label" }, [el("strong", courses[0]?.term ?? "Current term"), el("span", ` · ${courses.length} course${courses.length === 1 ? "" : "s"}`)]), el("div", undefined, { class: "top-actions" }, [...(state.desktop?.storeState === "preview" ? [el("span", "Preview copy", { class: "preview-badge", title: "Imported from the legacy folder. It never refreshes." })] : []), el("span", refreshNote(state, latest), { class: "sync-note", role: "status", "aria-live": "polite" }), ...(state.data.refreshAvailable ? [refreshButton] : [])])]), el("main", undefined, { id: "main", tabindex: "-1" }, [...(state.loading ? [empty("Loading coursework…")] : []), ...(state.desktop?.snapshotInProgress ? [el("div", snapshotStatus, { class: "status", role: "status", "aria-live": "polite" })] : []), ...(state.error === undefined ? [] : [el("div", state.error, { class: "load-error", role: "alert" })]), ...(state.desktop?.warning ? [el("div", state.desktop.warning, { class: "load-error", role: "alert" })] : []), ...(!state.loading && state.error === undefined ? [...(sourceNotice === undefined ? [] : [sourceNotice]), page(state, handlers)] : [])])])]);
 }
 
 function freshnessNotice(source: DashboardSourceStatus): ElementDescriptor | undefined {

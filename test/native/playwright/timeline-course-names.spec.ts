@@ -34,6 +34,7 @@ function courseworkDocument(courses: readonly SyntheticCourse[]): string {
         done: false,
       })),
       { id: "synthetic-date-only-deadline", course: "4103", kind: "assignment", title: "Synthetic date-only deadline", at: DATE_ONLY_DEADLINE, submissionStatus: "unsubmitted", done: false },
+      { id: "synthetic-same-day-earlier", course: "4103", kind: "assignment", title: "Synthetic same-day earlier timestamp", at: `${DATE_ONLY_DEADLINE}T20:00:00Z`, submissionStatus: "unsubmitted", done: false },
       { id: "synthetic-date-only-class", course: "4101", kind: "class", title: "Synthetic date-only class", at: DATE_ONLY_CLASS_DATE },
       { id: "synthetic-timed-class", course: "4102", kind: "class", title: "Synthetic timed class", at: TIMED_CLASS_START },
     ],
@@ -119,9 +120,22 @@ test("keeps the upcoming rail beside aligned wrapped three and five course lanes
       });
       expect(thirdTitleWrapped, `third course title wraps at ${width}px with ${courses.length} courses`).toBe(true);
 
-      const railDates = await page.locator(".rail-due-row .rail-date").evaluateAll((dates) => dates.map((date) => (date as HTMLTimeElement).dateTime));
-      expect(railDates.length).toBeGreaterThan(0);
-      expect(railDates).toEqual([...railDates].sort((left, right) => Date.parse(left) - Date.parse(right)));
+      const railRows = await page.locator(".rail-due-row").evaluateAll((rows) => rows.map((row) => {
+        const date = row.querySelector(".rail-date");
+        return { id: (row as HTMLElement).dataset.dueItem, dateTime: (date as HTMLTimeElement | null)?.dateTime ?? "" };
+      }));
+      const sortTime = async (value: string): Promise<number> => {
+        const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+        if (dateOnly === null) return Date.parse(value);
+        return page.evaluate(([year, month, day]) => new Date(Number(year), Number(month) - 1, Number(day), 23, 59).getTime(), dateOnly.slice(1));
+      };
+      expect(railRows.length).toBeGreaterThan(0);
+      const railTimes = await Promise.all(railRows.map(async (row) => ({ ...row, time: await sortTime(row.dateTime) })));
+      expect(railRows.map((row) => row.id)).toEqual([...railTimes].sort((left, right) => left.time - right.time).map((row) => row.id));
+      const earlierTimestampIndex = railRows.findIndex((row) => row.id === "synthetic-same-day-earlier");
+      const dateOnlyDeadlineIndex = railRows.findIndex((row) => row.id === "synthetic-date-only-deadline");
+      expect(earlierTimestampIndex).toBeGreaterThanOrEqual(0);
+      expect(dateOnlyDeadlineIndex).toBeGreaterThan(earlierTimestampIndex);
       await expect(page.locator(".rail-due-row .rail-date strong").first()).toBeVisible();
       await expect(page.locator(".rail-due-row .rail-course").first()).toHaveText("4101");
     }
@@ -250,10 +264,19 @@ test("keeps named header date, marker, and course columns aligned before and dur
       if (header !== null) window.scrollTo({ top: window.scrollY + header.getBoundingClientRect().top + 120, behavior: "instant" });
     });
     const afterScroll = await gridDeltas(page);
-    const stickyTop = await page.locator(".lane-header").evaluate((header) => header.getBoundingClientRect().top);
+    const stickyGeometry = await page.evaluate(() => {
+      const header = document.querySelector<HTMLElement>(".lane-header");
+      const toolbar = document.querySelector<HTMLElement>(".topbar");
+      if (header === null || toolbar === null) return null;
+      const headerBounds = header.getBoundingClientRect();
+      const toolbarBounds = toolbar.getBoundingClientRect();
+      return { headerTop: headerBounds.top, headerBottom: headerBounds.bottom, toolbarBottom: toolbarBounds.bottom };
+    });
     expect(afterScroll).not.toBeNull();
     expect(afterScroll?.every((delta) => delta <= 0.5)).toBe(true);
-    expect(Math.abs(stickyTop)).toBeLessThanOrEqual(0.5);
+    expect(stickyGeometry).not.toBeNull();
+    expect(Math.abs((stickyGeometry?.headerTop ?? Number.NaN) - (stickyGeometry?.toolbarBottom ?? 0))).toBeLessThanOrEqual(0.5);
+    expect(stickyGeometry?.headerTop ?? Number.NEGATIVE_INFINITY).toBeGreaterThanOrEqual((stickyGeometry?.toolbarBottom ?? Number.POSITIVE_INFINITY) - 0.5);
     const paintAfter = await paintedDividerEvidence(page);
     expect(paintAfter.summaryRightWidth).toBe("0px");
     expect(paintAfter.markerRightWidth).toBe("0px");

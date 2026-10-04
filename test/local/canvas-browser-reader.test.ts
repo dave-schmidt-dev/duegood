@@ -69,9 +69,45 @@ describe("guarded Canvas browser API reader", () => {
     const fetcher = vi.fn(async () => profile());
     await expect(readCanvasBrowserApi({ mode: "read", endpoint: "page", courseId: 88, pageSlug: "../front-page", expectedUserId: 41 }, fetcher))
       .rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    await expect(readCanvasBrowserApi({ mode: "read", endpoint: "page", courseId: 88, pageId: 0, expectedUserId: 41 }, fetcher))
+      .rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    await expect(readCanvasBrowserApi({ mode: "read", endpoint: "page", courseId: 88, pageId: 607, pageSlug: "week-one", expectedUserId: 41 }, fetcher))
+      .rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    await expect(readCanvasBrowserApi({ mode: "read", endpoint: "course", courseId: 88, pageId: 607, expectedUserId: 41 }, fetcher))
+      .rejects.toMatchObject({ code: "INVALID_REQUEST" });
     await expect(readCanvasBrowserApi({ mode: "read", endpoint: "discussionView", courseId: 88, topicId: 19, expectedUserId: 41 }, fetcher))
       .rejects.toMatchObject({ code: "INVALID_REQUEST" });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("uses Canvas's fixed page_id route and validates the returned page identity", async () => {
+    const calls: URL[] = [];
+    const fetcher = vi.fn(async (value: RequestInfo | URL) => {
+      const url = new URL(String(value));
+      calls.push(url);
+      if (url.pathname.endsWith("/profile")) return profile();
+      return json({ page_id: 607, course_id: 88, url: null, body: "<p>synthetic</p>" });
+    });
+
+    await expect(readCanvasBrowserApi({
+      mode: "read", endpoint: "page", courseId: 88, pageId: 607, expectedUserId: 41,
+    }, fetcher)).resolves.toMatchObject({ status: "ok", items: [{ page_id: 607 }] });
+    expect(calls.map((url) => url.pathname)).toEqual([
+      "/api/v1/users/self/profile", "/api/v1/courses/88/pages/page_id:607",
+    ]);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a page-ID fallback response for a different page", async () => {
+    const fetcher = vi.fn(async (value: RequestInfo | URL) => {
+      const url = new URL(String(value));
+      if (url.pathname.endsWith("/profile")) return profile();
+      return json({ page_id: 608, course_id: 88, url: "synthetic", body: "<p>synthetic</p>" });
+    });
+    await expect(readCanvasBrowserApi({
+      mode: "read", endpoint: "page", courseId: 88, pageId: 607, expectedUserId: 41,
+    }, fetcher)).rejects.toMatchObject({ code: "IDENTITY_MISMATCH" });
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it("enforces fixed announcement query data across safe pagination and rejects host, path, and query changes", async () => {

@@ -238,6 +238,21 @@ fn authoritative_import_preserves_latest_personal_state_and_assigns_stable_folde
         .unwrap()
         .iter()
         .any(|row| row["endpoint"] == "quizzes" && row["status"] == "gap"));
+    let diagnostics = &status["diagnostics"];
+    assert!(diagnostics["requiredGapCount"].as_u64().unwrap() > 0);
+    assert_eq!(diagnostics["optionalOmissionCount"], 0);
+    assert!(diagnostics["coverageReasonCounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| {
+            row["endpoint"] == "quizzes"
+                && row["reason"] == "not-attempted"
+                && row["status"] == "gap"
+                && row["count"] == 1
+        }));
+    assert_eq!(diagnostics["fileReceipts"]["activeFilesListed"], 1);
+    assert_eq!(diagnostics["fileReceipts"]["missingReceipts"], 1);
     let history = read_history(&store);
     let events = history["events"].as_array().unwrap();
     assert_eq!(events.len(), 1);
@@ -660,6 +675,20 @@ fn status_coverage_coalesces_duplicate_endpoint_rows_to_gap() {
         .to_path_buf();
     let bundle = validate_current_bundle_with_progress(&app_root, &expected, |_| {}).unwrap();
     let mut bundle = bundle;
+    bundle.snapshot["resources"]
+        .as_array_mut()
+        .unwrap()
+        .extend([
+            json!({"endpoint":"courseFiles","courseId":COURSE_ID,"items":[{"id":502},{"id":503}]}),
+            json!({
+                "endpoint":"fileBodies", "courseId":null,
+                "items":[
+                    {"fileId":501,"status":"archived"},
+                    {"fileId":502,"status":"gap","reason":"HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH"},
+                    {"fileId":503,"status":"gap","reason":"secret-private-download-error"}
+                ]
+            }),
+        ]);
     bundle
         .coverage
         .push(crate::browser_bundle::CaptureCoverage {
@@ -695,6 +724,14 @@ fn status_coverage_coalesces_duplicate_endpoint_rows_to_gap() {
             status: "complete".into(),
             reason: None,
         },
+        crate::browser_bundle::CaptureCoverage {
+            endpoint: "secretpayload".into(),
+            course_id: None,
+            group_id: None,
+            context_code: None,
+            status: "gap".into(),
+            reason: Some("private-course-token-991".into()),
+        },
     ]);
     let status = state::import_status(
         &bundle,
@@ -718,4 +755,30 @@ fn status_coverage_coalesces_duplicate_endpoint_rows_to_gap() {
         .iter()
         .any(|row| row["endpoint"] == "calendarEvents"));
     assert!(!sections.iter().any(|row| row["endpoint"] == "groups"));
+    let diagnostics = &status["diagnostics"];
+    assert!(diagnostics["coverageReasonCounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| {
+            row["endpoint"] == "other" && row["reason"] == "other" && row["count"] == 1
+        }));
+    assert_eq!(diagnostics["fileReceipts"]["archivedReceipts"], 1);
+    assert_eq!(diagnostics["fileReceipts"]["missingReceipts"], 0);
+    assert!(diagnostics["fileReceipts"]["reasonCounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| {
+            row["reason"] == "HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH" && row["count"] == 1
+        }));
+    assert!(diagnostics["fileReceipts"]["reasonCounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["reason"] == "other" && row["count"] == 1));
+    let encoded = serde_json::to_string(&status).unwrap();
+    assert!(!encoded.contains("secretpayload"));
+    assert!(!encoded.contains("private-course-token-991"));
+    assert!(!encoded.contains("secret-private-download-error"));
 }

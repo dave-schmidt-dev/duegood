@@ -305,6 +305,11 @@ export async function collectCanvasBrowserCapture({
         evaluatePage,
         htmlReader,
       }));
+      if ((endpoint === "pages" || endpoint === "page") && isSafePageSlug(result.items[index].url)) {
+        // `url` is scrubbed as a URL by the sanitizer. Keep only the route-safe identity
+        // needed to explain and audit the bounded `/pages/{slug}` detail request.
+        safeItems[index]._canvasPageSlug = result.items[index].url;
+      }
     }
     resources.push({ endpoint, courseId,
       ...(groupId === undefined ? {} : { groupId }),
@@ -398,18 +403,24 @@ export async function collectCanvasBrowserCapture({
       if (pagesRead) {
         for (const pageItem of pagesRead.items) {
           const slug = pageItem.url;
+          const safeSlug = isSafePageSlug(slug);
+          const pageId = pageItem.page_id;
           if (pageItem.published !== true || pageItem.locked_for_user === true || pageItem.locked === true
-              || !isSafePageSlug(slug)) {
+              || !positiveId(pageId)) {
             const reason = pageItem.locked_for_user === true || pageItem.locked === true ? "locked"
               : pageItem.published === false ? "unpublished"
-                : isSafePageSlug(slug) ? "request-failed" : "invalid-slug";
+                : "invalid-slug";
             addNotAttemptedGap("page", courseId, undefined, reason);
             continue;
           }
           if (!reserveDetailRequest("page", courseId)) continue;
-          const { result, gap } = await readEndpoint("page", { courseId, pageSlug: slug });
+          const { result, gap } = await readEndpoint("page", {
+            courseId,
+            ...(safeSlug ? { pageSlug: slug } : { pageId }),
+          });
           if (gap) continue;
-          if (result.items.length !== 1 || result.items[0].url !== slug) throw captureError("PAGE_IDENTITY_MISMATCH");
+          if (result.items.length !== 1 || result.items[0].page_id !== pageId
+              || safeSlug && result.items[0].url !== slug) throw captureError("PAGE_IDENTITY_MISMATCH");
           await addResource("page", courseId, result);
         }
       } else {
@@ -518,7 +529,10 @@ export async function collectCanvasBrowserCapture({
           await addResource("quiz", courseId, result);
         }
       } else {
-        addNotAttemptedGap("quiz", courseId, undefined, "parent-unavailable");
+        const parentReason = coverage.find((row) => row.endpoint === "quizzes"
+          && row.courseId === courseId && row.status === "gap")?.reason;
+        addNotAttemptedGap("quiz", courseId, undefined,
+          parentReason === "not-found" ? "not-applicable" : "parent-unavailable");
       }
     }
 

@@ -202,7 +202,7 @@ fn combine_outcomes(browser: BrowserOutcome, calendar: CalendarOutcome) -> FullR
         status,
         browser_status,
         calendar_status,
-        gap_count: browser_gaps.saturating_add(held),
+        gap_count: browser_gaps,
         omission_count: omissions,
         calendar_added: added,
         calendar_updated: updated,

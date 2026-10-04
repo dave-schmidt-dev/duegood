@@ -29,7 +29,7 @@ h1, h2, h3 { color: var(--navy); font-family: var(--display); }
 .legend-row { display: flex; gap: 9px; align-items: center; margin: 9px 0; color: #dce6ec; font-size: 12px; }
 .legend-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--dot); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dot) 20%, transparent); }
 .workspace { min-width: 0; }
-.topbar { min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 0 clamp(24px, 4.5vw, 68px); border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--paper) 88%, transparent); backdrop-filter: blur(12px); }
+.topbar { position: sticky; z-index: 10; top: 0; min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 0 clamp(24px, 4.5vw, 68px); border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--paper) 88%, transparent); backdrop-filter: blur(12px); }
 .term-label { color: var(--muted); font-size: 13px; }
 .term-label strong { color: var(--ink); }
 .top-actions { display: flex; align-items: center; gap: 10px; }

@@ -28,12 +28,13 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
   const positiveId = (value) => Number.isSafeInteger(value) && value > 0;
   const allowedInputKeys = new Set([
     "mode", "endpoint", "courseId", "fileId", "conversationId", "expectedUserId", "perPage",
-    "assignmentId", "pageSlug", "moduleId", "topicId", "entryId", "quizId",
+    "assignmentId", "pageSlug", "pageId", "moduleId", "topicId", "entryId", "quizId",
     "calendarStart", "calendarEnd", "allEvents", "groupId", "folderId", "accountId", "calendarContextCode",
     "maxPages", "maxItems", "maxBytes", "timeoutMs",
   ]);
   if (input === null || typeof input !== "object" || Array.isArray(input)
       || Object.keys(input).some((key) => !allowedInputKeys.has(key))) fail(codes.invalid);
+  if (input.pageId !== undefined && input.endpoint !== "page") fail(codes.invalid);
   if (input.mode !== "probe" && input.mode !== "read") fail(codes.invalid);
   if ((input.mode === "read" && !positiveId(input.expectedUserId))
       || (input.expectedUserId !== undefined && !positiveId(input.expectedUserId))) fail(codes.invalid);
@@ -129,9 +130,23 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
         };
       }
       case "pages": return courseRoute(values, "/pages", true, true);
-      case "page":
-        if (!positiveId(values.courseId) || !pageSlug(values.pageSlug)) fail(codes.invalid);
+      case "page": {
+        if (!positiveId(values.courseId)) fail(codes.invalid);
+        if (values.pageId !== undefined) {
+          if (!positiveId(values.pageId) || values.pageSlug !== undefined) fail(codes.invalid);
+          return {
+            path: `/api/v1/courses/${values.courseId}/pages/page_id:${values.pageId}`,
+            list: false,
+            courseId: values.courseId,
+            expectedContextCode: `course_${values.courseId}`,
+            expectedPageId: values.pageId,
+            optionalDenied: true,
+            fixed: {},
+          };
+        }
+        if (!pageSlug(values.pageSlug)) fail(codes.invalid);
         return { path: `/api/v1/courses/${values.courseId}/pages/${values.pageSlug}`, list: false, courseId: values.courseId, expectedContextCode: `course_${values.courseId}`, optionalDenied: true, fixed: {} };
+      }
       case "groupPages": return groupRoute(values, "/pages");
       case "groupPage":
         if (!pageSlug(values.pageSlug)) fail(codes.invalid);
@@ -331,6 +346,7 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
       if (route.expectedOwnerContextId !== undefined && item.context_id !== route.expectedOwnerContextId) fail(codes.identity);
     }
     if (route.expectedId && data.id !== route.expectedId) fail(codes.identity);
+    if (route.expectedPageId && items.some((item) => item.page_id !== route.expectedPageId)) fail(codes.identity);
     if (route.expectedAssignmentId && data.assignment_id !== route.expectedAssignmentId) fail(codes.identity);
     if (route.expectedUserId && items.some((item) => item.user_id !== route.expectedUserId)) fail(codes.identity);
     return items;

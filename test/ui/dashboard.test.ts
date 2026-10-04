@@ -1,53 +1,9 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { dashboardEventKind, parseDashboard, renderDesktopSetup, resolveNativeMutationConflict, type DesktopSetupHandlers, type DesktopSetupState } from "../../src/ui/app";
-import type { ElementDescriptor } from "../../src/ui/dom";
-import { countdownText, formatAssignmentCopyText, gradeProgress, renderDashboard, type DashboardData, type DashboardEvent, type DashboardHandlers, type DashboardState } from "../../src/ui/pages/dashboard";
+import { describe, expect, it, vi } from "vitest";
+import { dashboardEventKind, parseDashboard } from "../../src/ui/app";
+import { countdownText, formatAssignmentCopyText, gradeProgress, renderDashboard, type DashboardEvent, type DashboardHandlers, type DashboardState } from "../../src/ui/pages/dashboard";
 import { DASHBOARD_ROUTES } from "../../src/ui/routes";
-import { projectDashboardDocuments } from "../../src/shared/dashboard-projection";
-import { createNativeTransport, DesktopCommandError, nativeProjectionOptions, parseDocumentBundle, type CanvasRefreshProgress, type DesktopStoreStatus, type DryRunReport, type ImportProgress } from "../../src/ui/transport";
-import { desktopRecoveryPanel } from "../../src/ui/components/recovery-panel";
-
-function findAll(descriptor: ElementDescriptor, predicate: (item: ElementDescriptor) => boolean): ElementDescriptor[] {
-  return [...(predicate(descriptor) ? [descriptor] : []), ...(descriptor.children ?? []).flatMap((child) => findAll(child, predicate))];
-}
-function words(descriptor: ElementDescriptor): string { return [descriptor.text ?? "", ...(descriptor.children ?? []).map(words)].join(" "); }
-
-const NOW = Date.parse("2026-09-20T12:00:00-04:00");
-const DATA: DashboardData = {
-  version: "a".repeat(64),
-  courses: [
-    { id: "570", courseCode: "IT570", title: "Policy", gradeGroups: [{ id: "570-projects", name: "Projects", weight: 70 }, { id: "570-exams", name: "Exams", weight: 30 }] },
-    { id: "530", courseCode: "IT 530", title: "Security", gradeGroups: [{ id: "530-projects", name: "Projects", weight: 60 }, { id: "530-exams", name: "Exams", weight: 40 }] },
-    { id: "540", courseCode: "IT540", title: "Data" },
-  ],
-  events: [
-    { id: "a", sourceItemId: "a", courseId: "530", courseCode: "IT530", kind: "deadline", title: "Lab report", startsAt: "2026-09-20T20:00:00-04:00", completed: false, source: "canvas", points: 20, score: 18, grade: "90%", gradedAt: "2026-09-19T18:00:00-04:00", assignmentGroupId: "530-projects", assignmentGroupName: "Projects", assignmentGroupWeight: 60 },
-    { id: "b", sourceItemId: "b", courseId: "530", courseCode: "IT530", kind: "deadline", title: "Reading", startsAt: "2026-09-20T23:59:00-04:00", completed: false, points: 10, score: null, grade: null, gradedAt: null, assignmentGroupId: "530-projects", assignmentGroupName: "Projects", assignmentGroupWeight: 60 },
-    { id: "c", courseId: "540", courseCode: "IT540", kind: "class", title: "Workshop", startsAt: "2026-09-23T18:00:00-04:00", completed: false },
-    { id: "discussion", sourceItemId: "discussion", courseId: "570", courseCode: "IT570", kind: "discussion", title: "Discussion board", startsAt: "2026-09-25T18:00:00-04:00", completed: false, discussionPostDone: true, discussionRepliesDone: false },
-    { id: "d", sourceItemId: "d", courseId: "570", courseCode: "IT570", kind: "deadline", title: "Memo", startsAt: "2026-09-26T12:00:00-04:00", completed: true, completedAt: NOW },
-  ],
-  pendingSourceLinks: [],
-  resources: [
-    { id: "safe", courseId: "530", courseCode: "IT530", type: "File", title: "Guide", localUrl: "/api/local/resources/safe" },
-    { id: "unsafe", courseId: "540", courseCode: "IT540", type: "Link", title: "Remote", localUrl: "https://example.invalid/" },
-  ],
-  conversations: [{ id: "message", courseCode: "IT570", sender: "Instructor", subject: "Update", body: "Read-only body", unread: true, messages: [{ id: "m1", author: "Instructor", createdAt: NOW, body: "Full thread body", attachments: [{ name: "guide.pdf" }] }], historyComplete: true }],
-  refreshes: [{ id: "refresh", startedAt: NOW, status: "partial", summary: "Existing items were kept.", added: 0, changed: 0, removed: 0, changes: [{ kind: "notice", title: "IT 570 unavailable", detail: "No existing data was removed." }] }],
-  profile: null,
-  refreshAvailable: true,
-  sourceStatus: { state: "ready", label: "Local source", detail: "Available", lastRefreshAt: NOW },
-};
-
-const handlers: DashboardHandlers = {
-  onNavigate: vi.fn(), onEventMode: vi.fn(), onCourseFilter: vi.fn(), onGradeCourseFilter: vi.fn(), onGradeMode: vi.fn(), onResourceFilter: vi.fn(), onToggleEvent: vi.fn(), onToggleCompletion: vi.fn(), onToggleDiscussion: vi.fn(), onEditManualGrade: vi.fn(), onManualGradeDraft: vi.fn(), onSaveManualGrade: vi.fn(), onCancelManualGrade: vi.fn(), onSelectConversation: vi.fn(), onSelectRefresh: vi.fn(), onRefresh: vi.fn(), onCopyAssignment: vi.fn(),
-};
-function state(page: DashboardState["page"]): DashboardState {
-  return { page, loading: false, data: DATA, now: NOW, eventMode: "all", courseFilter: "all", gradeCourseFilter: "all", gradeMode: "all", resourceFilter: "all", expandedEventIds: new Set(), pendingCompletionIds: new Set(), failedCompletionIds: new Set(), pendingDiscussionIds: new Set(), failedDiscussionIds: new Set(), pendingManualGradeIds: new Set(), failedManualGradeIds: new Set(), selectedConversationId: "message", selectedRefreshId: "refresh", refreshState: "idle", desktop: { storeState: "preview", dataFolder: "~/Library/Application Support/com.zerodelta.duegood", importedAt: null } };
-}
-
+import { DATA, DATA_FOLDER, handlers, NOW, state } from "./desktop-test-fixtures";
+import { findAll, words } from "./descriptor-test-helpers";
 describe("dashboard production UI contract", () => {
   it("parses a local profile fail-closed and renders avatar fallback initials", () => {
     const parsed = parseDashboard({ profile: { displayName: "Alex Student", avatarPath: "/api/local/profile/avatar" } });
@@ -196,6 +152,16 @@ describe("dashboard production UI contract", () => {
     expect(handlers.onNavigate).toHaveBeenCalledWith("inbox");
   });
 
+  it("keeps the next assignment identity in the timeline rail instead of repeating it in the hero", () => {
+    const dashboard = renderDashboard(state("timeline"), handlers);
+    const hero = findAll(dashboard, (item) => item.attrs?.class === "hero")[0];
+    const rail = findAll(dashboard, (item) => item.attrs?.class === "timeline-rail")[0];
+    expect(findAll(hero!, (item) => item.attrs?.class === "next-deadline")).toHaveLength(0);
+    expect(words(hero!)).not.toContain("Next deadline");
+    expect(words(rail!)).toContain("At a glance");
+    expect(findAll(rail!, (item) => item.attrs?.["data-due-item"] !== undefined).map((item) => item.attrs?.["data-due-item"])).toContain("a");
+  });
+
   it("keeps multiple same-day assignments in their course lane", () => {
     const dashboard = renderDashboard(state("timeline"), handlers);
     const firstDay = findAll(dashboard, (item) => item.attrs?.["data-day"] === "2026-09-20")[0];
@@ -239,6 +205,26 @@ describe("dashboard production UI contract", () => {
     expect(words(findAll(dashboard, (item) => item.attrs?.["data-due-item"] === "sunday")[0]!)).toContain("Due in 2 days");
   });
 
+  it("sorts date-only deadlines at 11:59 PM without inventing a class time", () => {
+    const dateOnlyDeadline: DashboardEvent = { id: "date-only-deadline", courseId: "530", courseCode: "IT530", kind: "deadline", title: "Date-only deadline", startsAt: "2026-09-27", completed: false };
+    const timedDeadline: DashboardEvent = { id: "timed-deadline", courseId: "530", courseCode: "IT530", kind: "deadline", title: "Timed deadline", startsAt: "2026-09-27T20:00:00-04:00", completed: false };
+    const dateOnlyClass: DashboardEvent = { id: "date-only-class", courseId: "540", courseCode: "IT540", kind: "class", title: "Date-only class", startsAt: "2026-09-27", completed: false };
+    const dashboard = renderDashboard({
+      ...state("timeline"),
+      now: Date.parse("2026-09-27T12:00:00-04:00"),
+      data: { ...DATA, events: [dateOnlyDeadline, dateOnlyClass, timedDeadline] },
+    }, handlers);
+
+    const rail = findAll(dashboard, (item) => item.attrs?.class === "timeline-rail")[0]!;
+    expect(findAll(rail, (item) => item.attrs?.["data-due-item"] !== undefined).map((item) => item.attrs?.["data-due-item"]))
+      .toEqual(["timed-deadline", "date-only-deadline"]);
+    const deadlineCard = findAll(dashboard, (item) => item.attrs?.class?.includes("event-card") === true && words(item).includes("Date-only deadline"))[0]!;
+    expect(words(deadlineCard)).toContain("11:59 PM");
+    const classCard = findAll(dashboard, (item) => item.attrs?.class?.includes("event-card") === true && words(item).includes("Date-only class"))[0]!;
+    expect(words(classCard)).toContain("Time not specified");
+    expect(words(classCard)).not.toContain("11:59 PM");
+  });
+
   it("shows a real duration to the next deadline", () => {
     expect(countdownText(NOW, "2026-09-21T23:59:00-04:00")).toBe("1d 11h");
     expect(words(renderDashboard(state("timeline"), handlers))).toContain("8h 0m");
@@ -254,6 +240,12 @@ describe("dashboard production UI contract", () => {
   it("renders honest grade summaries and graded-only filtering", () => {
     const dashboard = renderDashboard(state("grades"), handlers);
     expect(words(dashboard)).toContain("Graded points are not a final course grade.");
+    const observations = findAll(dashboard, (item) => item.attrs?.class === "grade-honesty__details");
+    expect(observations).toHaveLength(1);
+    expect(observations[0]?.tag).toBe("details");
+    expect(observations[0]?.attrs?.open).toBeUndefined();
+    expect(words(observations[0]!)).toContain("About grade observations");
+    expect(words(observations[0]!)).toContain("A local observation is the selected value until you change or remove it; Canvas score and grade remain visible alongside it. Progress indicators use Canvas points only, and coverage and unknown group data stay visible.");
     expect(words(dashboard)).toContain("18 / 20");
     expect(words(dashboard)).toContain("Canvas grade");
     expect(words(dashboard)).toContain("1 of 2 listed items graded · 1 awaiting");
@@ -319,6 +311,27 @@ describe("dashboard production UI contract", () => {
     expect(words(renderDashboard(state("inbox"), handlers))).toContain("Full thread body");
   });
 
+  it("keeps Timeline details visibility and disclosure state together when expanded and collapsed", () => {
+    vi.clearAllMocks();
+    const collapsed = renderDashboard(state("timeline"), handlers);
+    const collapsedControl = findAll(collapsed, (item) => item.attrs?.class === "event-expand")[0]!;
+    const detailsId = collapsedControl.attrs?.["aria-controls"];
+    const collapsedDetails = findAll(collapsed, (item) => item.attrs?.id === detailsId)[0]!;
+    expect(collapsedControl.attrs?.["aria-expanded"]).toBe("false");
+    expect(collapsedDetails.attrs?.hidden).toBe("");
+    collapsedControl.on?.click?.(new Event("click"));
+    expect(handlers.onToggleEvent).toHaveBeenCalledWith("a");
+
+    const expanded = renderDashboard({ ...state("timeline"), expandedEventIds: new Set(["a"]) }, handlers);
+    const expandedControl = findAll(expanded, (item) => item.attrs?.class === "event-expand")[0]!;
+    const expandedDetails = findAll(expanded, (item) => item.attrs?.id === expandedControl.attrs?.["aria-controls"])[0]!;
+    expect(expandedControl.attrs?.["aria-expanded"]).toBe("true");
+    expect(expandedControl.text).toBe("Hide details");
+    expect(expandedDetails.attrs?.hidden).toBeUndefined();
+    expandedControl.on?.click?.(new Event("click"));
+    expect(handlers.onToggleEvent).toHaveBeenLastCalledWith("a");
+  });
+
   it("surfaces a specific local save recovery message", () => {
     const dashboard = renderDashboard({ ...state("timeline"), failedDiscussionIds: new Set(["discussion"]), mutationError: { id: "discussion", message: "This discussion changed elsewhere. Latest state reloaded; try again." } }, handlers);
     expect(words(dashboard)).toContain("This discussion changed elsewhere. Latest state reloaded; try again.");
@@ -337,6 +350,40 @@ describe("dashboard production UI contract", () => {
     expect(words(dashboard)).toContain("No existing data was removed.");
   });
 
+  it("classes complete, partial, and failed Activity statuses distinctly", () => {
+    const refreshes = ["complete", "partial", "failed"] as const;
+    const dashboard = renderDashboard({
+      ...state("activity"),
+      data: {
+        ...DATA,
+        refreshes: refreshes.map((status) => ({ id: `${status}-run`, startedAt: NOW, status, summary: `${status} synthetic run`, added: 0, changed: 0, removed: 0, changes: [] })),
+      },
+    }, handlers);
+    const statuses = findAll(dashboard, (item) => item.attrs?.class?.startsWith("refresh-status") === true);
+    expect(statuses.filter((item) => item.text === "complete").every((item) => item.attrs?.class === "refresh-status")).toBe(true);
+    expect(statuses.filter((item) => item.text === "partial").every((item) => item.attrs?.class === "refresh-status partial")).toBe(true);
+    expect(statuses.filter((item) => item.text === "failed").every((item) => item.attrs?.class === "refresh-status failed")).toBe(true);
+  });
+
+  it("keeps refresh feedback global and course colors secondary", () => {
+    const activity = renderDashboard({ ...state("activity"), refreshState: "partial", refreshDetail: "Refresh incomplete. Existing data was kept." }, handlers);
+    expect(findAll(activity, (item) => item.attrs?.class?.includes("refresh-button") === true)).toHaveLength(1);
+    expect(findAll(activity, (item) => item.attrs?.class === "sync-note")).toHaveLength(1);
+    expect(words(activity)).toContain("Refresh incomplete. Existing data was kept.");
+
+    const courses = renderDashboard(state("courses"), handlers);
+    expect(words(courses)).toContain("Course overview");
+    expect(words(courses)).not.toContain("3 active");
+    expect(words(courses)).toContain("3 courses");
+    expect(findAll(courses, (item) => item.attrs?.["data-course-colors"] === "true")).toHaveLength(0);
+
+    const more = renderDashboard(state("more"), handlers);
+    const colors = findAll(more, (item) => item.attrs?.["data-course-colors"] === "true")[0];
+    expect(colors?.tag).toBe("details");
+    expect(colors?.attrs?.open).toBeUndefined();
+    expect(words(colors!)).toContain("IT 530 · Security");
+  });
+
   it("labels calendar activity by its deadline-only scope and preserves held counts", () => {
     const calendar = parseDashboard({ ...DATA, refreshes: [{ id: "calendar-run", source: "calendar", startedAt: NOW, finishedAt: NOW, status: "partial", summary: "Calendar deadlines only · 0 added · 0 updated · 2 held", added: 0, changed: 0, removed: 0, held: 2, changes: [{ kind: "notice", title: "Calendar items held", detail: "2 changes were held for review." }] }] });
     const calendarActivity = { ...state("activity"), desktop: { ...state("activity").desktop!, refreshAvailable: false, icalRefreshAvailable: true }, data: calendar };
@@ -345,10 +392,7 @@ describe("dashboard production UI contract", () => {
     expect(words(dashboard)).toContain("Calendar refresh updates deadlines only. Grades, Inbox, and library items keep the prior Canvas capture.");
     expect(words(dashboard)).toContain("2 Held");
     expect(words(dashboard)).not.toContain("this run may not include complete Canvas history");
-    const activityButton = findAll(dashboard, (item) => Boolean(item.attrs?.class?.includes("more-action refresh-button")))[0];
-    expect(activityButton?.text).toBe("Refresh calendar");
-    const runningActivity = renderDashboard({ ...calendarActivity, refreshState: "running" }, handlers);
-    expect(findAll(runningActivity, (item) => Boolean(item.attrs?.class?.includes("more-action refresh-button")))[0]?.text).toBe("Refreshing calendar…");
+    expect(findAll(dashboard, (item) => Boolean(item.attrs?.class?.includes("refresh-button")))).toHaveLength(1);
 
     const reopened = renderDashboard({ ...state("timeline"), desktop: { ...state("timeline").desktop!, refreshAvailable: false, icalRefreshAvailable: true }, data: calendar }, handlers);
     expect(findAll(reopened, (item) => item.attrs?.class === "sync-note")[0]?.text).toContain("Calendar deadlines only");
@@ -357,7 +401,8 @@ describe("dashboard production UI contract", () => {
     const canvas = renderDashboard({ ...state("timeline"), desktop: { ...state("timeline").desktop!, refreshAvailable: true, icalRefreshAvailable: false }, data: { ...DATA, refreshAvailable: true } }, handlers);
     expect(findAll(canvas, (item) => Boolean(item.attrs?.class?.includes("refresh-button")))[0]?.text).toBe("Refresh");
     const canvasActivity = renderDashboard({ ...state("activity"), desktop: { ...state("activity").desktop!, refreshAvailable: true, icalRefreshAvailable: false }, data: { ...DATA, refreshAvailable: true } }, handlers);
-    expect(findAll(canvasActivity, (item) => Boolean(item.attrs?.class?.includes("more-action refresh-button")))[0]?.text).toBe("Refresh now");
+    expect(findAll(canvasActivity, (item) => Boolean(item.attrs?.class?.includes("refresh-button")))).toHaveLength(1);
+    expect(findAll(canvasActivity, (item) => Boolean(item.attrs?.class?.includes("refresh-button")))[0]?.text).toBe("Refresh");
     const failed = parseDashboard({ refreshes: [{ id: "failed-calendar", startedAt: NOW, source: "calendar", status: "failed" }, { id: "failed-inbox", startedAt: NOW, source: "inbox", status: "failed" }] });
     expect(failed.refreshes.map((refresh) => refresh.summary)).toEqual([
       "Calendar refresh failed; prior deadlines were kept.",
@@ -392,7 +437,8 @@ describe("dashboard production UI contract", () => {
 
     const partial = renderDashboard({ ...state("timeline"), refreshState: "partial" }, handlers);
     expect(findAll(partial, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Refresh incomplete. Existing data was kept.");
-    expect(words(renderDashboard({ ...state("activity"), refreshState: "partial" }, handlers))).toContain("Refresh incomplete. Existing data was kept; this run may not include complete Canvas history.");
+    const activityPartial = renderDashboard({ ...state("activity"), refreshState: "partial" }, handlers);
+    expect(findAll(activityPartial, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Refresh incomplete. Existing data was kept.");
 
     const failed = renderDashboard({ ...state("grades"), refreshState: "failed" }, handlers);
     expect(findAll(failed, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Refresh failed. Existing data was kept.");
@@ -507,536 +553,5 @@ describe("dashboard production UI contract", () => {
 
     const saving = renderDashboard({ ...state("timeline"), desktop: { storeState: "preview", dataFolder: DATA_FOLDER, importedAt: null, snapshotInProgress: true, snapshotProgress: { filesDone: 3, bytesDone: 2400 } } }, handlers);
     expect(findAll(saving, (item) => item.attrs?.role === "status").map(words)).toContain("Saving today’s private recovery snapshot… 3 files · 2400 bytes copied.");
-  });
-});
-
-// --- Desktop (Tauri) mode ---------------------------------------------------------------------
-
-interface MockInternals { runCallback(id: number, data: unknown): void }
-const DATA_FOLDER = "~/Library/Application Support/com.zerodelta.duegood";
-const DIGEST = "a".repeat(64);
-
-function withMockWindow(): MockInternals {
-  // `@tauri-apps/api` reads `window.__TAURI_INTERNALS__`; the UI suite runs in plain Node.
-  (globalThis as { window?: unknown }).window = globalThis;
-  return new Proxy({} as MockInternals, { get: (_target, key) => (globalThis as unknown as { __TAURI_INTERNALS__: Record<string | symbol, unknown> }).__TAURI_INTERNALS__[key] });
-}
-
-function nativeTransport() {
-  return createNativeTransport((command, args) => invoke(command, args), (onMessage) => new Channel<unknown>(onMessage));
-}
-
-function storeStatus(overrides: Partial<DesktopStoreStatus> = {}): DesktopStoreStatus {
-  return { availability: "ready", state: "empty", dataFolder: DATA_FOLDER, legacyRootSelected: false, importedAt: null, files: null, bytes: null, refreshAvailable: false, icalRefreshAvailable: false, canvasRefreshEnabled: false, snapshotInProgress: false, snapshotProgress: null, problem: null, ...overrides };
-}
-
-function dryRun(overrides: Partial<DryRunReport> = {}): DryRunReport {
-  return { caps: { totalBytes: 1024 }, inventory: { courseworkDocuments: 1, courseFolders: 2, materialFiles: 3, files: 9, directories: 4, bytes: 4096 }, refusals: {}, unsupportedTypes: {}, legacyLockPresent: false, wouldImport: true, ...overrides };
-}
-
-function nativeBundle(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    storeState: "preview",
-    coursework: {
-      text: JSON.stringify({ generated: "2026-09-20T12:00:00Z", courses: [{ key: "syn-101", code: "SYN 101", title: "Synthetic Studies", color: "#3a6ea5", folder: "syn-101" }], items: [{ id: "syn-101-essay-1", course: "syn-101", kind: "assignment", title: "Essay draft", at: "2026-09-25T23:59" }] }),
-      version: DIGEST,
-    },
-    refreshHistory: null,
-    conversations: null,
-    profile: JSON.stringify({ name: "Synthetic Learner", avatar: { path: "canvas-avatar.png", contentType: "image/png" } }),
-    avatar: { sizeBytes: 69, head: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] },
-    courseExports: {
-      "syn-101": {
-        files: JSON.stringify([{ id: 1, display_name: "Syllabus", updated_at: "2026-09-01T00:00:00Z" }, { id: 2, display_name: "Handout", updated_at: "2026-09-02T00:00:00Z" }]),
-        pages: null, modules: null, announcements: null,
-        downloadManifest: JSON.stringify([{ id: 1, status: "downloaded", filename: "syllabus.pdf" }]),
-      },
-    },
-    ...overrides,
-  };
-}
-
-const setupHandlers = (): DesktopSetupHandlers => ({ onChoose: vi.fn(), onRecheck: vi.fn(), onImport: vi.fn(), onCancel: vi.fn() });
-function setup(overrides: Partial<DesktopSetupState> = {}): DesktopSetupState {
-  return { status: storeStatus({ state: "preview" }), replacePreview: false, step: "idle", ...overrides };
-}
-function buttons(descriptor: ElementDescriptor): ElementDescriptor[] { return findAll(descriptor, (item) => item.tag === "button"); }
-function button(descriptor: ElementDescriptor, label: string): ElementDescriptor | undefined { return buttons(descriptor).find((item) => item.text === label); }
-
-describe("desktop transport and first-run screen", () => {
-  afterEach(() => {
-    const scope = globalThis as { window?: unknown; __TAURI_INTERNALS__?: unknown; __TAURI_EVENT_PLUGIN_INTERNALS__?: unknown };
-    if (scope.window === undefined) return;
-    clearMocks();
-    delete scope.__TAURI_INTERNALS__;
-    delete scope.__TAURI_EVENT_PLUGIN_INTERNALS__;
-    delete scope.window;
-  });
-
-  it("keeps DashboardData.version a string for both the digest and older numeric bodies", () => {
-    expect(parseDashboard({ version: DIGEST }).version).toBe(DIGEST);
-    expect(parseDashboard({ version: 7 }).version).toBe("7");
-    expect(parseDashboard({ version: Number.NaN }).version).toBe("");
-    expect(parseDashboard({}).version).toBe("");
-  });
-
-  it("calls only the fixed read commands through mocked Tauri IPC and never sends a path", async () => {
-    withMockWindow();
-    const calls: [string, unknown][] = [];
-    mockIPC((command, args) => {
-      calls.push([command, args]);
-      if (command === "store_status") return storeStatus({ state: "preview", legacyRootSelected: true, importedAt: "2026-09-22T12:00:00Z", files: 9, bytes: 4096 });
-      if (command === "choose_legacy_root") return { selected: true };
-      if (command === "dry_run_import") return dryRun();
-      if (command === "read_dashboard_documents") return nativeBundle();
-      throw new Error(`unexpected command ${command}`);
-    });
-    const transport = nativeTransport();
-    await expect(transport.storeStatus()).resolves.toMatchObject({ availability: "ready", state: "preview", dataFolder: DATA_FOLDER, refreshAvailable: false });
-    await expect(transport.chooseLegacyRoot()).resolves.toBe(true);
-    await expect(transport.dryRunImport()).resolves.toEqual(dryRun());
-    const body = await transport.loadDashboardBody(false);
-    expect(calls.map(([command]) => command)).toEqual(["store_status", "choose_legacy_root", "dry_run_import", "read_dashboard_documents"]);
-    for (const [, args] of calls) expect(args).toEqual({});
-
-    expect(body.version).toBe(DIGEST);
-    expect(body.refreshAvailable).toBe(false);
-    expect(body.sourceStatus.label).toBe("Desktop preview copy");
-    expect(body.profile).toEqual({ displayName: "Synthetic Learner" });
-    expect(body.resources.map((item) => [item.title, item.openPath, item.savedLocally])).toEqual([["Handout", null, undefined], ["Syllabus", null, true]]);
-    const parsed = parseDashboard(body);
-    expect(parsed.version).toBe(DIGEST);
-    expect(parsed.resources.find((item) => item.title === "Syllabus")).toMatchObject({ savedLocally: true });
-    expect(parsed.resources.every((item) => item.localUrl === undefined)).toBe(true);
-    const library = renderDashboard({ ...state("library"), data: parsed, desktop: { storeState: "preview", dataFolder: DATA_FOLDER, importedAt: null } }, handlers);
-    expect(words(library)).toContain("Saved locally");
-    expect(findAll(library, (item) => item.tag === "a" && item.attrs?.class === "more-action")).toHaveLength(0);
-  });
-
-  it("validates native Canvas refresh status, owner setting, progress, and result over narrow IPC", async () => {
-    const calls: [string, Record<string, unknown> | undefined][] = [];
-    let receiveProgress: ((message: unknown) => void) | undefined;
-    const channel = { channel: "synthetic" };
-    const progress: CanvasRefreshProgress[] = [];
-    const transport = createNativeTransport(async (command, args) => {
-      calls.push([command, args]);
-      if (command === "store_status") return storeStatus({ state: "authoritative", canvasRefreshEnabled: true, refreshAvailable: true });
-      if (command === "set_canvas_refresh_enabled") return { canvasRefreshEnabled: args?.enabled === true, refreshAvailable: args?.enabled === true };
-      if (command === "start_canvas_refresh") {
-        receiveProgress?.({ phase: "fetch", completed: 2, total: null, bytesDone: 4096 });
-        receiveProgress?.({ phase: "<private course name>", completed: 99, total: 100, bytesDone: 2 });
-        return { status: "incomplete", updatedAt: "2026-09-23T12:00:00Z" };
-      }
-      throw new Error(`unexpected command ${command}`);
-    }, (onMessage) => { receiveProgress = onMessage; return channel; });
-
-    await expect(transport.storeStatus()).resolves.toMatchObject({ canvasRefreshEnabled: true, refreshAvailable: true });
-    await expect(transport.setCanvasRefreshEnabled(false)).resolves.toEqual({ canvasRefreshEnabled: false, refreshAvailable: false });
-    await expect(transport.startCanvasRefresh((event) => progress.push(event))).resolves.toEqual({ status: "incomplete", updatedAt: "2026-09-23T12:00:00Z" });
-    expect(progress).toEqual([{ phase: "fetch", completed: 2, total: null, bytesDone: 4096 }]);
-    expect(calls).toEqual([
-      ["store_status", undefined],
-      ["set_canvas_refresh_enabled", { enabled: false }],
-      ["start_canvas_refresh", { onProgress: channel }],
-    ]);
-  });
-
-  it("validates the native calendar refresh result and keeps calendar progress content-free", async () => {
-    const calls: [string, Record<string, unknown> | undefined][] = [];
-    let receiveProgress: ((message: unknown) => void) | undefined;
-    const phases: string[] = [];
-    const transport = createNativeTransport(async (command, args) => {
-      calls.push([command, args]);
-      if (command === "start_ical_refresh") {
-        receiveProgress?.({ phase: "waiting-for-calendar" });
-        receiveProgress?.({ phase: "private coursework title" });
-        return { status: "complete", updatedAt: "2026-09-25T12:00:00Z", added: 2, updated: 1, held: 3, removed: 0 };
-      }
-      if (command === "start_full_refresh") {
-        receiveProgress?.({ phase: "browser-capture" });
-        receiveProgress?.({ phase: "private course title" });
-        return { status: "incomplete", browserStatus: "incomplete", calendarStatus: "complete", gapCount: 2, omissionCount: 0, calendarAdded: 1, calendarUpdated: 0, calendarHeld: 3, updatedAt: null, errorCode: "coverage-gap" };
-      }
-      throw new Error(`unexpected ${command}`);
-    }, (onMessage) => { receiveProgress = onMessage; return { channel: "calendar" }; });
-    await expect(transport.startIcalRefresh((progress) => phases.push(progress.phase))).resolves.toMatchObject({ added: 2, updated: 1, held: 3, removed: 0 });
-    const fullPhases: string[] = [];
-    await expect(transport.startFullRefresh((progress) => fullPhases.push(progress.phase))).resolves.toMatchObject({ status: "incomplete", browserStatus: "incomplete", calendarStatus: "complete", gapCount: 2, omissionCount: 0, calendarHeld: 3, errorCode: "coverage-gap" });
-    expect(phases).toEqual(["waiting-for-calendar"]);
-    expect(fullPhases).toEqual(["browser-capture"]);
-    expect(calls).toEqual([
-      ["start_ical_refresh", { onProgress: { channel: "calendar" } }],
-      ["start_full_refresh", { onProgress: { channel: "calendar" } }],
-    ]);
-  });
-
-  it("validates native promotion, demotion, and frozen-export commands without accepting paths or confirmation shortcuts", async () => {
-    const calls: [string, Record<string, unknown> | undefined][] = [];
-    const channel = { channel: "transition-progress" };
-    const progress: { filesDone: number; bytesDone: number }[] = [];
-    const transport = createNativeTransport(async (command, args) => {
-      calls.push([command, args]);
-      if (typeof args?.onProgress === "function") (args.onProgress as (event: unknown) => void)({ filesDone: 2, bytesDone: 4096 });
-      if (command === "prepare_store_promotion") return { proofId: "proof-opaque", files: 4, bytes: 8192 };
-      if (command === "confirm_store_promotion") return { state: "authoritative", files: 4, bytes: 8192 };
-      if (command === "demote_store_for_rollback") return { state: "preview", recoveryFiles: 5, recoveryBytes: 9000 };
-      if (command === "export_frozen_for_rollback") return { files: 7, bytes: 16_384, equal: true };
-      throw new Error(`unexpected command ${command}`);
-    }, (receive) => {
-      // The injected channel is represented as a callable in this focused transport test.
-      return Object.assign((event: unknown) => receive(event), channel);
-    });
-
-    const onProgress = (event: { filesDone: number; bytesDone: number }): void => { progress.push(event); };
-    await expect(transport.prepareStorePromotion(onProgress)).resolves.toEqual({ proofId: "proof-opaque", files: 4, bytes: 8192 });
-    await expect(transport.confirmStorePromotion("proof-opaque", onProgress)).resolves.toEqual({ state: "authoritative", files: 4, bytes: 8192 });
-    await expect(transport.demoteStoreForRollback(onProgress)).resolves.toEqual({ state: "preview", recoveryFiles: 5, recoveryBytes: 9000 });
-    await expect(transport.exportFrozenForRollback(onProgress)).resolves.toEqual({ files: 7, bytes: 16_384, equal: true });
-    expect(calls).toEqual([
-      ["prepare_store_promotion", { onProgress: expect.any(Function) }],
-      ["confirm_store_promotion", { proofId: "proof-opaque", onProgress: expect.any(Function) }],
-      ["demote_store_for_rollback", { onProgress: expect.any(Function) }],
-      ["export_frozen_for_rollback", { onProgress: expect.any(Function) }],
-    ]);
-    expect(progress).toEqual(Array.from({ length: 4 }, () => ({ filesDone: 2, bytesDone: 4096 })));
-    expect(calls.every(([, args]) => !Object.hasOwn(args ?? {}, "confirmed"))).toBe(true);
-
-    const malformed = createNativeTransport(async (command) => command === "prepare_store_promotion"
-      ? { proofId: "/private/legacy", files: 4, bytes: 8192 }
-      : undefined, (receive) => Object.assign((event: unknown) => receive(event), channel));
-    await expect(malformed.prepareStorePromotion(() => undefined)).rejects.toMatchObject({ code: "malformed-response" });
-  });
-
-  it("never claims the imported desktop copy is synced", () => {
-    const inbox = (complete: boolean): string => JSON.stringify({ complete, generatedAt: "2026-09-20T12:05:00Z", conversations: [] });
-    const project = (conversations: string | null, options = nativeProjectionOptions("preview")) => projectDashboardDocuments(parseDocumentBundle(nativeBundle({ conversations })), options);
-
-    const imported = project(inbox(true));
-    expect(imported.sourceStatus.detail).toContain("Inbox imported");
-    expect(project(inbox(false)).sourceStatus.detail).toContain("Inbox partial");
-    expect(project(null).sourceStatus.detail).toContain("Inbox not captured");
-    for (const status of [imported, project(inbox(false)), project(null), project(inbox(true), nativeProjectionOptions("authoritative"))].map((body) => body.sourceStatus)) {
-      expect(status.label).not.toMatch(/synced/i);
-      expect(status.detail).not.toMatch(/synced/i);
-    }
-    const more = renderDashboard({ ...state("more"), data: parseDashboard(imported), desktop: { storeState: "preview", dataFolder: DATA_FOLDER, importedAt: null } }, handlers);
-    expect(words(more)).toContain("Inbox imported");
-    expect(words(more)).not.toMatch(/synced/i);
-  });
-
-  it("streams validated, content-free import progress through a mocked Tauri channel", async () => {
-    const internals = withMockWindow();
-    const calls: [string, unknown][] = [];
-    mockIPC((command, args) => {
-      calls.push([command, args]);
-      if (command !== "import_legacy_root") throw new Error(`unexpected command ${command}`);
-      const channel = (args as { onProgress: Channel<unknown> }).onProgress;
-      const send = (index: number, message: unknown): void => internals.runCallback(channel.id, { index, message });
-      // Out of order on purpose: the channel restores order by index.
-      send(1, { phase: "copying", filesDone: 1, filesTotal: 3, bytesDone: 10, bytesTotal: 30 });
-      send(0, { phase: "scanning", filesDone: 0, filesTotal: 3, bytesDone: 0, bytesTotal: 30 });
-      send(2, { phase: "copying", filesDone: 3, filesTotal: 3, bytesDone: 30, bytesTotal: 30, name: "never-surfaced.json" });
-      send(3, { phase: "exploding", filesDone: 0, filesTotal: 0, bytesDone: 0, bytesTotal: 0 });
-      send(4, { phase: "validating", filesDone: -1, filesTotal: 3, bytesDone: 30, bytesTotal: 30 });
-      send(5, { phase: "complete", filesDone: 3, filesTotal: 3, bytesDone: 30, bytesTotal: 30 });
-      internals.runCallback(channel.id, { index: 6, end: true });
-      return { state: "preview", files: 3, bytes: 30, replacedPreview: true };
-    });
-    const events: ImportProgress[] = [];
-    await expect(nativeTransport().importLegacyRoot(true, (event) => events.push(event))).resolves.toEqual({ state: "preview", files: 3, bytes: 30, replacedPreview: true });
-    expect(events.map((event) => [event.phase, event.filesDone, event.bytesDone])).toEqual([["scanning", 0, 0], ["copying", 1, 10], ["copying", 3, 30], ["complete", 3, 30]]);
-    for (const event of events) expect(Object.keys(event).sort()).toEqual(["bytesDone", "bytesTotal", "filesDone", "filesTotal", "phase"]);
-    expect(JSON.stringify(events)).not.toContain("never-surfaced");
-    expect(calls).toHaveLength(1);
-    expect(JSON.stringify(calls[0]?.[1])).toMatch(/^\{"replacePreview":true,"onProgress":"__CHANNEL__:\d+"\}$/);
-  });
-
-  it("maps structured command errors, including named refusal counts, and rejects malformed results", async () => {
-    withMockWindow();
-    let bundle: Record<string, unknown> = nativeBundle();
-    let status: unknown = storeStatus();
-    mockIPC((command) => {
-      if (command === "import_legacy_root") throw { code: "refused", message: "The legacy folder cannot be imported as it is.", refusals: { escapingMaterialSymlinks: 1, malformedJson: 2 }, unsupportedTypes: { script: 1 } };
-      if (command === "dry_run_import") throw "no legacy folder";
-      if (command === "store_status") return status;
-      if (command === "read_dashboard_documents") return bundle;
-      if (command === "choose_legacy_root") return { selected: "yes" };
-      throw new Error(`unexpected command ${command}`);
-    });
-    const transport = nativeTransport();
-    const refused = await transport.importLegacyRoot(false, () => undefined).catch((error: unknown) => error);
-    expect(refused).toBeInstanceOf(DesktopCommandError);
-    expect(refused).toMatchObject({ code: "refused", refusals: { escapingMaterialSymlinks: 1, malformedJson: 2 }, unsupportedTypes: { script: 1 } });
-    await expect(transport.dryRunImport()).rejects.toMatchObject({ code: "ipc", message: "no legacy folder" });
-    await expect(transport.chooseLegacyRoot()).rejects.toMatchObject({ code: "malformed-response" });
-
-    status = { ...storeStatus(), canvasRefreshEnabled: "yes" };
-    await expect(transport.storeStatus()).rejects.toMatchObject({ code: "malformed-response" });
-    status = { ...storeStatus(), state: "syncing" };
-    await expect(transport.storeStatus()).rejects.toMatchObject({ code: "malformed-response" });
-
-    bundle = nativeBundle({ coursework: { text: "{}", version: "not-a-digest" } });
-    await expect(transport.loadDashboardBody(false)).rejects.toMatchObject({ code: "malformed-response" });
-    bundle = nativeBundle({ courseExports: { "../escape": { files: null, pages: null, modules: null, announcements: null, downloadManifest: null } } });
-    await expect(transport.loadDashboardBody(false)).rejects.toMatchObject({ code: "malformed-response" });
-    bundle = nativeBundle({ avatar: { sizeBytes: 69, head: new Array(17).fill(0) } });
-    await expect(transport.loadDashboardBody(false)).rejects.toMatchObject({ code: "malformed-response" });
-    bundle = nativeBundle({ coursework: { text: "{\"courses\": [", version: DIGEST } });
-    await expect(transport.loadDashboardBody(false)).rejects.toMatchObject({ code: "invalid-coursework" });
-  });
-
-  it("renders the first-run screen with the fixed app-data folder, a legacy-folder picker, and the preview-copy label", () => {
-    const actions = setupHandlers();
-    const screen = renderDesktopSetup(setup(), actions);
-    const text = words(screen);
-    expect(text).toContain("Import existing coursework");
-    expect(text).toContain(DATA_FOLDER);
-    expect(text).toContain("It cannot be changed.");
-    expect(text).toContain("Preview copy");
-    expect(text).toContain("It does not follow later changes in the legacy local source. Personal progress edits stay in this copy.");
-    expect(text).not.toMatch(/change storage location/i);
-    expect(findAll(screen, (item) => item.attrs?.class === "preview-badge")).toHaveLength(1);
-    const choose = button(screen, "Choose legacy folder…");
-    expect(choose?.attrs?.disabled).toBeUndefined();
-    choose?.on?.click?.(new Event("click"));
-    expect(actions.onChoose).toHaveBeenCalledOnce();
-    expect(button(screen, "Import as preview copy")?.attrs?.disabled).toBe("");
-    expect(button(screen, "Check again")).toBeUndefined();
-    expect(button(screen, "Keep current preview copy")).toBeUndefined();
-  });
-
-  it("shows dry-run counts and enables import only for an importable folder", () => {
-    const actions = setupHandlers();
-    const ready = renderDesktopSetup(setup({ status: storeStatus({ state: "preview", legacyRootSelected: true }), step: "ready", report: dryRun() }), actions);
-    expect(words(ready)).toContain("Counts only; nothing was copied.");
-    expect(words(ready)).toContain("Material files");
-    const importButton = button(ready, "Import as preview copy");
-    expect(importButton?.attrs?.disabled).toBeUndefined();
-    importButton?.on?.click?.(new Event("click"));
-    expect(actions.onImport).toHaveBeenCalledOnce();
-    button(ready, "Check again")?.on?.click?.(new Event("click"));
-    expect(actions.onRecheck).toHaveBeenCalledOnce();
-
-    const refused = renderDesktopSetup(setup({ status: storeStatus({ state: "preview", legacyRootSelected: true }), step: "ready", report: dryRun({ wouldImport: false, legacyLockPresent: true, refusals: { escapingMaterialSymlinks: 2 }, unsupportedTypes: { script: 1 } }) }), actions);
-    expect(button(refused, "Import as preview copy")?.attrs?.disabled).toBe("");
-    const refusalRows = findAll(refused, (item) => item.attrs?.class === "setup-counts setup-refusals")[0];
-    expect(words(refusalRows!).replace(/\s+/g, " ").trim()).toBe("Material links that leave the materials folder 2");
-    expect(words(refused)).toContain("Nothing is dropped silently");
-    expect(words(refused)).toContain("The legacy local source is being written right now. The import waits for that write to finish.");
-    expect(words(refused)).toContain("script");
-  });
-
-  it("shows streamed import progress, errors with refusals, and the replace-preview variant", () => {
-    const actions = setupHandlers();
-    const importing = renderDesktopSetup(setup({ status: storeStatus({ state: "preview", legacyRootSelected: true }), step: "importing", report: dryRun(), progress: { phase: "copying", filesDone: 4, filesTotal: 9, bytesDone: 2048, bytesTotal: 4096 } }), actions);
-    const bar = findAll(importing, (item) => item.tag === "progress")[0];
-    expect(bar?.attrs).toMatchObject({ max: "9", value: "4" });
-    expect(words(importing)).toContain("Copying files");
-    expect(words(importing)).toContain("4 of 9 files · 2.0 KB of 4.0 KB");
-    expect(buttons(importing).every((item) => item.attrs?.disabled === "")).toBe(true);
-
-    const failed = renderDesktopSetup(setup({ status: storeStatus({ state: "preview", legacyRootSelected: true }), error: { message: "The legacy folder changed during the copy. Nothing was changed.", refusals: { malformedJson: 1 }, unsupportedTypes: {} } }), actions);
-    const alert = findAll(failed, (item) => item.attrs?.role === "alert")[0];
-    expect(words(alert!)).toContain("The legacy folder changed during the copy.");
-    expect(words(alert!)).toContain("Malformed JSON documents");
-
-    const replace = renderDesktopSetup(setup({ status: storeStatus({ state: "preview", legacyRootSelected: true }), replacePreview: true, step: "ready", report: dryRun() }), actions);
-    expect(words(replace)).toContain("Replace the preview copy");
-    expect(words(replace)).toContain("timestamped backup that is never deleted");
-    expect(button(replace, "Archive and replace preview copy")?.attrs?.disabled).toBeUndefined();
-    button(replace, "Keep current preview copy")?.on?.click?.(new Event("click"));
-    expect(actions.onCancel).toHaveBeenCalledOnce();
-  });
-
-  it("renders the another-instance, unavailable, and recovery screens without any import control", () => {
-    const actions = setupHandlers();
-    const other = renderDesktopSetup(setup({ status: storeStatus({ availability: "another-instance", state: "unknown" }) }), actions);
-    expect(words(other)).toContain("Due Good is already open");
-    const unavailable = renderDesktopSetup(setup({ status: storeStatus({ availability: "unavailable", state: "unknown", problem: "The app data folder could not be created." }) }), actions);
-    expect(words(unavailable)).toContain("The app data folder could not be created.");
-    const damaged = renderDesktopSetup(setup({ status: storeStatus({ state: "damaged", problem: "The store manifest is invalid." }) }), actions);
-    expect(words(damaged)).toContain("The app store needs recovery");
-    expect(words(damaged)).toContain("nothing will be imported over it");
-    for (const screen of [other, unavailable, damaged]) {
-      expect(buttons(screen)).toHaveLength(0);
-      expect(words(screen)).toContain(DATA_FOLDER);
-    }
-  });
-
-  it("renders a writable preview dashboard with a truthful store card and a replace action", () => {
-    const onReplacePreview = vi.fn();
-    const desktop = { storeState: "preview" as const, dataFolder: DATA_FOLDER, importedAt: "2026-09-22T12:00:00Z" };
-    const timeline = renderDashboard({ ...state("timeline"), desktop }, { ...handlers, onReplacePreview });
-    const inputs = findAll(timeline, (item) => item.tag === "input" && item.attrs?.type === "checkbox");
-    expect(inputs.length).toBeGreaterThan(0);
-    expect(inputs.some((item) => item.attrs?.disabled === undefined)).toBe(true);
-    expect(findAll(timeline, (item) => item.attrs?.class === "complete-button").some((item) => item.attrs?.disabled === undefined)).toBe(true);
-    expect(words(findAll(timeline, (item) => item.attrs?.class === "top-actions")[0]!)).toContain("Preview copy");
-    expect(findAll(timeline, (item) => item.attrs?.class === "sync-note")[0]?.text).toMatch(/^Imported /);
-
-    const more = renderDashboard({ ...state("more"), desktop }, { ...handlers, onReplacePreview });
-    const card = findAll(more, (item) => item.attrs?.["data-desktop-store"] === "preview")[0];
-    expect(words(card!)).toContain("It does not follow later source changes.");
-    expect(words(card!)).toContain(DATA_FOLDER);
-    expect(words(more)).not.toContain("remains the authoritative writable source");
-    button(card!, "Replace preview copy…")?.on?.click?.(new Event("click"));
-    expect(onReplacePreview).toHaveBeenCalledOnce();
-
-    const authoritative = renderDashboard({ ...state("more"), desktop: { ...desktop, storeState: "authoritative" } }, handlers);
-    expect(words(authoritative)).toContain("Import never replaces it.");
-    expect(button(authoritative, "Replace preview copy…")).toBeUndefined();
-    expect(words(findAll(renderDashboard({ ...state("timeline"), desktop: { ...desktop, storeState: "authoritative" } }, handlers), (item) => item.attrs?.class === "top-actions")[0]!)).not.toContain("Preview copy");
-
-    const native = renderDashboard(state("timeline"), handlers);
-    expect(findAll(native, (item) => item.tag === "input" && item.attrs?.type === "checkbox").some((item) => item.attrs?.disabled === undefined)).toBe(true);
-  });
-
-  it("shows the preview promotion review counts without exposing the opaque proof and separates both confirmations", () => {
-    const onPreparePromotion = vi.fn();
-    const onConfirmPromotion = vi.fn();
-    const onCancelPromotion = vi.fn();
-    const desktop = { storeState: "preview" as const, dataFolder: DATA_FOLDER, importedAt: "2026-09-22T12:00:00Z" };
-    const idle = renderDashboard({ ...state("more"), desktop }, { ...handlers, onPreparePromotion, onConfirmPromotion, onCancelPromotion });
-    const idleCard = findAll(idle, (item) => item.attrs?.["data-desktop-store"] === "preview")[0]!;
-    button(idleCard, "Choose and compare backup…")?.on?.click?.(new Event("click"));
-    expect(onPreparePromotion).toHaveBeenCalledOnce();
-
-    const reviewed = renderDashboard({
-      ...state("more"), desktop,
-      storeTransition: { phase: "ready", proof: { proofId: "proof-opaque-test-only", files: 12, bytes: 4096 } },
-    }, { ...handlers, onPreparePromotion, onConfirmPromotion, onCancelPromotion });
-    const reviewCard = findAll(reviewed, (item) => item.attrs?.["data-desktop-store"] === "preview")[0]!;
-    expect(words(reviewCard)).toContain("Exact comparison passed: 12 files · 4.0 KB");
-    expect(words(reviewCard)).toContain("native dialog");
-    expect(words(reviewCard)).not.toContain("proof-opaque-test-only");
-    button(reviewCard, "Promote to authoritative store")?.on?.click?.(new Event("click"));
-    expect(onConfirmPromotion).toHaveBeenCalledWith("proof-opaque-test-only");
-    button(reviewCard, "Discard comparison")?.on?.click?.(new Event("click"));
-    expect(onCancelPromotion).toHaveBeenCalledOnce();
-  });
-
-  it("offers native-confirmed demotion on authoritative stores and frozen rollback export in preview", () => {
-    const onDemoteStore = vi.fn();
-    const onExportFrozenRollback = vi.fn();
-    const desktop = { storeState: "authoritative" as const, dataFolder: DATA_FOLDER, importedAt: null };
-    const more = renderDashboard({ ...state("more"), desktop }, { ...handlers, onDemoteStore, onExportFrozenRollback });
-    const card = findAll(more, (item) => item.attrs?.["data-desktop-store"] === "authoritative")[0]!;
-    button(card, "Return app store to preview…")?.on?.click?.(new Event("click"));
-    expect(onDemoteStore).toHaveBeenCalledOnce();
-    expect(button(card, "Promote to authoritative store")).toBeUndefined();
-    expect(button(card, "Export frozen rollback copy…")).toBeUndefined();
-    const preview = renderDashboard({ ...state("more"), desktop: { ...desktop, storeState: "preview" } }, { ...handlers, onDemoteStore, onExportFrozenRollback });
-    const previewCard = findAll(preview, (item) => item.attrs?.["data-desktop-store"] === "preview")[0]!;
-    button(previewCard, "Export frozen rollback copy…")?.on?.click?.(new Event("click"));
-    expect(onExportFrozenRollback).toHaveBeenCalledOnce();
-    const busy = renderDashboard({ ...state("more"), desktop, storeTransition: { phase: "demoting" } }, { ...handlers, onDemoteStore, onExportFrozenRollback });
-    const busyCard = findAll(busy, (item) => item.attrs?.["data-desktop-store"] === "authoritative")[0]!;
-    expect(button(busyCard, "Returning to preview…")?.attrs?.disabled).toBe("");
-    const progressing = renderDashboard({
-      ...state("more"), desktop: { ...desktop, storeState: "preview" },
-      storeTransition: { phase: "exporting", progress: { filesDone: 3, bytesDone: 2048 } },
-    }, { ...handlers, onDemoteStore, onExportFrozenRollback });
-    expect(findAll(progressing, (item) => item.attrs?.role === "status").map(words)).toContain("3 files · 2048 bytes processed.");
-  });
-
-  it("shows the native owner toggle separately from availability and renders native progress", () => {
-    const onToggleCanvasRefresh = vi.fn();
-    const desktop = { storeState: "authoritative" as const, dataFolder: DATA_FOLDER, importedAt: null, canvasRefreshEnabled: true, refreshAvailable: false };
-    const unavailable = renderDashboard({ ...state("more"), desktop, data: { ...DATA, refreshAvailable: false } }, { ...handlers, onToggleCanvasRefresh });
-    const toggle = findAll(unavailable, (item) => item.tag === "input" && item.attrs?.["aria-label"] === "Enable Canvas refresh")[0];
-    expect(toggle?.attrs).toMatchObject({ checked: "" });
-    expect(words(unavailable)).toContain("Canvas refresh is unavailable on this computer.");
-    expect(findAll(unavailable, (item) => item.tag === "button" && item.attrs?.class?.includes("refresh-button") === true)).toHaveLength(0);
-    toggle?.on?.change?.({ currentTarget: { checked: false } } as unknown as Event);
-    expect(onToggleCanvasRefresh).toHaveBeenCalledWith(false);
-
-    const running = renderDashboard({
-      ...state("timeline"), desktop: { ...desktop, refreshAvailable: true }, data: { ...DATA, refreshAvailable: true }, refreshState: "running",
-      refreshProgress: { phase: "fetch", completed: 2, total: 4, bytesDone: 4096 },
-    }, handlers);
-    expect(findAll(running, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Canvas refresh · Reading Canvas data · 2 of 4 completed · 4096 bytes received");
-    expect(findAll(running, (item) => item.tag === "button" && item.attrs?.class?.includes("refresh-button") === true)[0]?.attrs).toMatchObject({ disabled: "", "aria-busy": "true" });
-    const calendar = renderDashboard({ ...state("timeline"), desktop: { ...desktop, icalRefreshAvailable: true }, data: { ...DATA, refreshAvailable: true }, refreshState: "running", refreshProgress: { phase: "waiting-for-calendar", completed: 0, total: null, bytesDone: null } }, handlers);
-    expect(findAll(calendar, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Calendar refresh · Waiting for calendar");
-    const fullDesktop = { ...desktop, browserRefreshAvailable: true, refreshAvailable: false, icalRefreshAvailable: true };
-    const fullMore = renderDashboard({ ...state("more"), desktop: fullDesktop, data: { ...DATA, refreshAvailable: true } }, handlers);
-    expect(words(fullMore)).toContain("Full refresh is available. It reads Canvas through the bundled browser and then updates calendar deadlines; Canvas may ask you to sign in.");
-    expect(findAll(fullMore, (item) => item.tag === "input" && item.attrs?.["aria-label"] === "Enable Canvas refresh")).toHaveLength(0);
-    const fullRunning = renderDashboard({ ...state("timeline"), desktop: fullDesktop, data: { ...DATA, refreshAvailable: true }, refreshState: "running", refreshProgress: { phase: "browser-import", completed: 0, total: null, bytesDone: null } }, handlers);
-    expect(findAll(fullRunning, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Canvas and calendar refresh · Importing Canvas coursework");
-    expect(findAll(fullRunning, (item) => item.tag === "button" && item.attrs?.class?.includes("refresh-button") === true)[0]?.attrs?.title).toContain("calendar deadlines");
-    const fullActivity = renderDashboard({ ...state("activity"), desktop: fullDesktop, data: { ...DATA, refreshAvailable: true }, refreshState: "partial", refreshDetail: "Full refresh partial. Canvas incomplete (2 coverage gaps); calendar complete (1 added, 0 updated, 3 held)." }, handlers);
-    expect(words(fullActivity)).toContain("Full refresh partial. Canvas incomplete (2 coverage gaps); calendar complete (1 added, 0 updated, 3 held).");
-  });
-
-  it("routes native mutations, avatar bytes, resource IDs, clipboard, and snapshots through narrow commands", async () => {
-    const calls: [string, Record<string, unknown> | undefined][] = [];
-    const transport = createNativeTransport(async (command, args) => {
-      calls.push([command, args]);
-      if (command === "set_item_completion") return { completed: true, completedAt: NOW, discussionPostDone: false, discussionRepliesDone: false, version: DIGEST };
-      if (command === "set_discussion_field") throw { code: "item-conflict", message: "Changed elsewhere", currentValue: true };
-      if (command === "resolve_pending_source_link") return { version: DIGEST };
-      if (command === "set_manual_grade") return { manualGrade: "A-", manualGradeVersion: 1, version: DIGEST };
-      if (command === "read_avatar_bytes") return { contentType: "image/png", bytes: [137, 80, 78, 71] };
-      if (command === "open_library_resource") return args?.id === "syn:file:2" ? "downloaded" : "opened";
-      if (command === "copy_assignment_text" || command === "restore_snapshot") return null;
-      if (command === "list_snapshots") return [{ id: "daily-20260923T120000Z-1234abcd", createdAt: "2026-09-23T12:00:00Z", kind: "daily" }];
-      throw new Error(`unexpected ${command}`);
-    }, () => ({}));
-    await expect(transport.setCompletion("item-1", false, true)).resolves.toMatchObject({ completed: true });
-    await expect(transport.setDiscussionField("item-1", "post", false, true)).rejects.toMatchObject({ code: "item-conflict", currentValue: true });
-    await expect(transport.resolvePendingSourceLink("pending-1", "item-1", "confirm", DIGEST)).resolves.toEqual({ version: DIGEST });
-    await expect(transport.setManualGrade("item-1", "A-", DIGEST)).resolves.toEqual({ manualGrade: "A-", manualGradeVersion: 1, version: DIGEST });
-    await expect(transport.readAvatar()).resolves.toEqual({ contentType: "image/png", bytes: Uint8Array.from([137, 80, 78, 71]) });
-    await expect(transport.openResource("syn:file:1")).resolves.toBe("opened");
-    await expect(transport.openResource("syn:file:2")).resolves.toBe("downloaded");
-    await transport.copyText("Synthetic assignment");
-    await expect(transport.listSnapshots()).resolves.toHaveLength(1);
-    await transport.restoreSnapshot("daily-20260923T120000Z-1234abcd");
-    expect(calls).toEqual([
-      ["set_item_completion", { itemId: "item-1", expected: false, value: true }],
-      ["set_discussion_field", { itemId: "item-1", field: "post", expected: false, value: true }],
-      ["resolve_pending_source_link", { pendingId: "pending-1", localItemId: "item-1", decision: "confirm", expectedVersion: DIGEST }],
-      ["set_manual_grade", { itemId: "item-1", value: "A-", expectedVersion: DIGEST }],
-      ["read_avatar_bytes", undefined],
-      ["open_library_resource", { id: "syn:file:1" }],
-      ["open_library_resource", { id: "syn:file:2" }],
-      ["copy_assignment_text", { text: "Synthetic assignment" }],
-      ["list_snapshots", undefined],
-      ["restore_snapshot", { id: "daily-20260923T120000Z-1234abcd" }],
-    ]);
-  });
-
-  it("reloads native documents before showing a per-item conflict notice", async () => {
-    const reload = vi.fn(async () => true);
-    await expect(resolveNativeMutationConflict(new DesktopCommandError("item-conflict", "Changed", {}, {}, true), reload, "item")).resolves.toEqual({ reloaded: true, message: "This item changed elsewhere. Latest state reloaded; try again." });
-    expect(reload).toHaveBeenCalledOnce();
-    await expect(resolveNativeMutationConflict(new DesktopCommandError("item-conflict", "Changed"), async () => false, "discussion")).resolves.toEqual({ reloaded: false, message: "This discussion changed elsewhere. Reload the page and try again." });
-  });
-
-  it("offers snapshots before the age-labeled legacy import and renders native resource actions", () => {
-    const now = Date.parse("2026-09-23T12:00:00Z");
-    const onRestore = vi.fn();
-    const recovery = desktopRecoveryPanel({ snapshots: [{ id: "new", kind: "daily", createdAt: "2026-09-23T11:00:00Z" }, { id: "older", kind: "pre-refresh", createdAt: "2026-09-21T11:00:00Z" }], importedAt: "2026-09-20T11:00:00Z", busy: false }, { onRestore, onExport: vi.fn() }, now);
-    const labels = findAll(recovery, (item) => item.tag === "li").map(words);
-    expect(labels[0]).toContain("Daily snapshot · today");
-    expect(labels[1]).toContain("Before refresh · 2 days ago");
-    expect(labels[2]).toContain("Legacy import · 3 days ago");
-    button(recovery, "Restore snapshot")?.on?.click?.(new Event("click"));
-    expect(onRestore).toHaveBeenCalledWith("new");
-    const onOpenResource = vi.fn();
-    const data = { ...DATA, resources: [{ id: "syn:file:1", courseId: "530", courseCode: "IT530", type: "File", title: "Synthetic PDF", savedLocally: true }] };
-    const library = renderDashboard({ ...state("library"), data, desktop: { storeState: "preview", dataFolder: DATA_FOLDER, importedAt: null } }, { ...handlers, onOpenResource });
-    button(library, "Open or save")?.on?.click?.(new Event("click"));
-    expect(onOpenResource).toHaveBeenCalledWith("syn:file:1");
-    const avatar = renderDashboard({ ...state("timeline"), data: { ...DATA, profile: { displayName: "Synthetic Learner", avatarPath: "blob:synthetic" } } }, handlers);
-    expect(findAll(avatar, (item) => item.tag === "img")[0]?.attrs?.src).toBe("blob:synthetic");
-  });
-
-  it("keeps a preview dashboard visible when a daily snapshot fails and shows the warning", () => {
-    const warning = "A daily snapshot could not be saved. Coursework remains available; check storage before relying on recovery.";
-    const screen = renderDashboard({ ...state("timeline"), desktop: { storeState: "preview", dataFolder: DATA_FOLDER, importedAt: null, warning } }, handlers);
-    expect(findAll(screen, (item) => item.attrs?.role === "alert").map(words)).toContain(warning);
-    expect(findAll(screen, (item) => item.tag === "input" && item.attrs?.type === "checkbox").length).toBeGreaterThan(0);
   });
 });

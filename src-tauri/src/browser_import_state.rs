@@ -16,6 +16,9 @@ use crate::store::{
 
 use super::{BrowserImportError, MAX_JSON_BYTES, STATUS_FILE, STATUS_FORMAT, STATUS_VERSION};
 
+#[path = "browser_import_diagnostics.rs"]
+mod diagnostics;
+
 pub(super) struct NativeView {
     pub coursework: Value,
     pub course_map: Value,
@@ -204,10 +207,18 @@ pub(super) fn import_status(
             .or_insert(status);
     }
     let sections = rows.into_iter().map(|((course_id, endpoint), status)| json!({ "courseId": course_id, "endpoint": endpoint, "status": status })).collect::<Vec<_>>();
+    let (required_gap_count, optional_omission_count) = super::daily_scope::summarize_daily_scope(
+        &bundle.snapshot,
+        &bundle.active_courses,
+        &bundle.coverage,
+    )?;
+    let diagnostics =
+        diagnostics::import_diagnostics(bundle, required_gap_count, optional_omission_count);
     Ok(json!({
         "format": STATUS_FORMAT, "version": STATUS_VERSION,
         "runId": bundle.run_id, "generationId": bundle.generation_id, "userId": bundle.user_id,
         "observedAt": bundle.captured_at, "sections": sections,
+        "diagnostics": diagnostics,
         "files": { "available": promoted.promoted_blobs + promoted.reused_blobs > 0,
             "promotionVerified": true, "promotedBlobs": promoted.promoted_blobs,
             "reusedBlobs": promoted.reused_blobs, "bytesVerified": promoted.bytes_verified }

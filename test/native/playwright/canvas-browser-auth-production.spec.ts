@@ -117,7 +117,14 @@ async function productionFixture(
   };
   try {
     staging = await privateTempDirectory();
-    server = await listen(handler);
+    server = await listen((request, response) => {
+      if (request.url === "/favicon.ico") {
+        response.writeHead(204);
+        response.end();
+        return;
+      }
+      handler(request, response);
+    });
     context = await loopbackCookieContext(browser, server.origin);
     const page = await context.newPage();
     await page.goto(`${server.origin}/`, { waitUntil: "domcontentloaded" });
@@ -145,9 +152,14 @@ test("production helper captures a manual redirect in memory without contacting 
       response.end("must not be contacted");
       return;
     }
-    fileRequests += 1;
-    cookieSeen = (request.headers.cookie ?? "").includes(SESSION_COOKIE);
-    response.writeHead(302, { location: `${fixtureOrigin}/followed` });
+    if (request.url === "/files/812/download?download_frd=1") {
+      fileRequests += 1;
+      cookieSeen = (request.headers.cookie ?? "").includes(SESSION_COOKIE);
+      response.writeHead(302, { location: `${fixtureOrigin}/followed` });
+      response.end();
+      return;
+    }
+    response.writeHead(404);
     response.end();
   });
   fixtureOrigin = fixture.server.origin;

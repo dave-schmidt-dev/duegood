@@ -42,7 +42,10 @@ function courseworkDocument(courses: readonly SyntheticCourse[]): string {
   return JSON.stringify({
     generated: new Date().toISOString(),
     courses: courses.map((course) => ({ key: course.key, code: course.key, ...(course.title === "" ? {} : { title: course.title }), color: "#3a6ea5", folder: course.key })),
-    items: ITEMS.filter((item) => courseCodes.has(item.course)).map((item, index) => ({ id: `syn-item-${index}`, course: item.course, kind: "assignment", title: `Synthetic assignment ${String(index + 1)}`, at: assignmentAt(item.day + 0.5), submissionStatus: "unsubmitted", done: false })),
+    items: [
+      ...ITEMS.filter((item) => courseCodes.has(item.course)).map((item, index) => ({ id: `syn-item-${index}`, course: item.course, kind: "assignment", title: `Synthetic assignment ${String(index + 1)}`, at: assignmentAt(item.day + 0.5), submissionStatus: "unsubmitted", done: false })),
+      ...(courseCodes.has("2048") ? [{ id: "syn-class-meeting", course: "2048", kind: "class", title: "Synthetic seminar", at: assignmentAt(0.375), done: false }] : []),
+    ],
   });
 }
 
@@ -156,7 +159,102 @@ test("keeps header columns aligned in wrapped three and five course lanes", asyn
   }
 });
 
-for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "mobile", width: 390, height: 844 }] as const) {
+test("keeps class meeting title words and time clear across timeline widths", async ({ page }) => {
+  for (const width of [720, 860, 1024, 1280]) {
+    for (const courses of [COURSES.slice(0, 3), COURSES]) {
+      await page.setViewportSize({ width, height: 900 });
+      await openTimeline(page, courses);
+      const geometry = await page.locator(".event-card.class-meeting").evaluate((card) => {
+      const title = card.querySelector<HTMLElement>(".event-title");
+      const time = card.querySelector<HTMLElement>(".event-time");
+      if (title === null || time === null || title.firstChild === null) return null;
+
+      const rect = (element: Element) => {
+        const { left, right, top, bottom, width } = element.getBoundingClientRect();
+        return { left, right, top, bottom, width };
+      };
+      const titleWords = title.textContent?.split(" ") ?? [];
+      let offset = 0;
+      const wordLineCounts = titleWords.map((word) => {
+        const range = document.createRange();
+        range.setStart(title.firstChild as Text, offset);
+        range.setEnd(title.firstChild as Text, offset + word.length);
+        offset += word.length + 1;
+        return range.getClientRects().length;
+      });
+      const style = getComputedStyle(card);
+      const cardRect = rect(card);
+      const titleRect = rect(title);
+      const timeRect = rect(time);
+      const contentWidth = cardRect.width - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight) - Number.parseFloat(style.borderLeftWidth) - Number.parseFloat(style.borderRightWidth);
+      const overlaps = titleRect.left < timeRect.right && titleRect.right > timeRect.left && titleRect.top < timeRect.bottom && titleRect.bottom > timeRect.top;
+      return { cardRect, titleRect, timeRect, contentWidth, wordLineCounts, overlaps };
+    });
+
+      expect(geometry, `${width}px with ${courses.length} courses class meeting geometry`).not.toBeNull();
+      expect(geometry?.wordLineCounts, `${width}px with ${courses.length} courses keeps short words intact`).toEqual([1, 1]);
+      expect(geometry?.titleRect.width ?? 0, `${width}px with ${courses.length} courses lets the title use the card width`).toBeGreaterThanOrEqual((geometry?.contentWidth ?? 0) - 0.5);
+      expect(geometry?.titleRect.left ?? -1, `${width}px with ${courses.length} courses title stays in its card`).toBeGreaterThanOrEqual((geometry?.cardRect.left ?? 0) - 0.5);
+      expect(geometry?.titleRect.right ?? Number.POSITIVE_INFINITY, `${width}px with ${courses.length} courses title stays in its card`).toBeLessThanOrEqual((geometry?.cardRect.right ?? 0) + 0.5);
+      expect(geometry?.timeRect.left ?? -1, `${width}px with ${courses.length} courses time stays in its card`).toBeGreaterThanOrEqual((geometry?.cardRect.left ?? 0) - 0.5);
+      expect(geometry?.timeRect.right ?? Number.POSITIVE_INFINITY, `${width}px with ${courses.length} courses time stays in its card`).toBeLessThanOrEqual((geometry?.cardRect.right ?? 0) + 0.5);
+      expect(geometry?.overlaps, `${width}px with ${courses.length} courses title and time do not overlap`).toBe(false);
+      await expectNoHorizontalOverflow(page);
+    }
+  }
+});
+
+test("keeps Copy assignment and Details controls contained and separate in narrow course cards", async ({ page }) => {
+  for (const width of [860, 1024, 1280, 1400]) {
+    for (const courses of [COURSES.slice(0, 3), COURSES]) {
+      await page.setViewportSize({ width, height: 900 });
+      await openTimeline(page, courses);
+      const geometry = await page.locator(".event-actions").evaluateAll((actions) => actions.map((actions) => {
+        const card = actions.closest<HTMLElement>(".event-card");
+        if (card === null) return null;
+        const bounds = (element: Element) => {
+          const { left, right, top, bottom, width, height } = element.getBoundingClientRect();
+          return { left, right, top, bottom, width, height };
+        };
+        const buttons = [...actions.querySelectorAll<HTMLButtonElement>("button")].map((button) => ({
+          label: button.textContent?.trim() ?? "",
+          rect: bounds(button),
+          scrollWidth: button.scrollWidth,
+          clientWidth: button.clientWidth,
+        }));
+        const mutuallySeparate = buttons.every((button, index) => buttons.slice(index + 1).every((other) => button.rect.left >= other.rect.right || button.rect.right <= other.rect.left || button.rect.top >= other.rect.bottom || button.rect.bottom <= other.rect.top));
+        return { card: bounds(card), buttons, isClassMeeting: card.classList.contains("class-meeting"), mutuallySeparate };
+      }));
+
+      expect(geometry, `${width}px with ${courses.length} courses action geometry`).not.toHaveLength(0);
+      expect(geometry.some((actions) => actions?.isClassMeeting === true), `${width}px with ${courses.length} courses includes a class-meeting action row`).toBe(true);
+      expect(geometry.some((actions) => actions?.isClassMeeting === false), `${width}px with ${courses.length} courses includes an assignment action row`).toBe(true);
+      for (const actions of geometry) {
+        expect(actions, `${width}px with ${courses.length} courses action row`).not.toBeNull();
+        expect(actions?.buttons.map((button) => button.label)).toEqual(actions?.isClassMeeting === true ? ["Details"] : ["Copy assignment", "Details"]);
+        expect(actions?.mutuallySeparate).toBe(true);
+        expect(actions?.buttons.every((button) => button.rect.width > 0 && button.rect.height >= 28 && button.rect.left >= (actions?.card.left ?? 0) - 0.5 && button.rect.right <= (actions?.card.right ?? 0) + 0.5 && button.scrollWidth <= button.clientWidth + 0.5)).toBe(true);
+      }
+      await expectNoHorizontalOverflow(page);
+    }
+  }
+});
+
+test("keeps the next assignment identity only in the glance rail", async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await openTimeline(page);
+  await expect(page.locator(".hero .next-deadline")).toHaveCount(0);
+  await expect(page.locator(".hero")).not.toContainText("Next deadline");
+  await expect(page.locator(".timeline-rail")).toContainText("At a glance");
+  await expect(page.locator(".timeline-rail [data-due-item]").first()).toBeVisible();
+});
+
+for (const viewport of [
+  { name: "720px", width: 720, height: 844 },
+  { name: "860px", width: 860, height: 844 },
+  { name: "1024px", width: 1024, height: 800 },
+  { name: "1280px", width: 1280, height: 800 },
+] as const) {
   test.describe(`timeline lane headers at ${viewport.name} width`, () => {
     test.use({ viewport: { width: viewport.width, height: viewport.height } });
 
@@ -173,16 +271,31 @@ for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "
       await expectNoHorizontalOverflow(page);
     });
 
-    test("sticks the opaque lane header to the document viewport top above the cards", async ({ page }) => {
+    test("sticks the opaque lane header below the measured toolbar above the cards", async ({ page }) => {
       await openTimeline(page);
       const styles = await page.evaluate(() => {
         const header = document.querySelector(".lane-header");
         const shell = document.querySelector(".timeline-shell");
-        if (header === null || shell === null) return null;
+        const topbar = document.querySelector<HTMLElement>(".topbar");
+        const rail = document.querySelector(".timeline-rail");
+        if (header === null || shell === null || topbar === null || rail === null) return null;
         const headerStyle = getComputedStyle(header);
-        return { position: headerStyle.position, top: headerStyle.top, background: headerStyle.backgroundColor, shellOverflow: getComputedStyle(shell).overflow };
+        return {
+          position: headerStyle.position,
+          top: Number.parseFloat(headerStyle.top),
+          background: headerStyle.backgroundColor,
+          shellOverflow: getComputedStyle(shell).overflow,
+          toolbarHeight: topbar.getBoundingClientRect().height,
+          railPosition: getComputedStyle(rail).position,
+          railTop: Number.parseFloat(getComputedStyle(rail).top),
+        };
       });
-      expect(styles).toEqual({ position: "sticky", top: "0px", background: "rgb(17, 27, 36)", shellOverflow: "clip" });
+      expect(styles).not.toBeNull();
+      expect(styles?.position).toBe("sticky");
+      expect(styles?.background).toBe("rgb(17, 27, 36)");
+      expect(styles?.shellOverflow).toBe("clip");
+      expect(styles?.top).toBeCloseTo(styles?.toolbarHeight ?? Number.NaN, 1);
+      if (styles?.railPosition === "sticky") expect(styles.railTop).toBeCloseTo((styles.toolbarHeight ?? Number.NaN) + 16, 1);
       await page.evaluate(() => {
         const shell = document.querySelector<HTMLElement>(".timeline-shell");
         if (shell === null) return;
@@ -190,16 +303,39 @@ for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "
       });
       const pinned = await page.evaluate(() => {
         const header = document.querySelector<HTMLElement>(".lane-header");
-        if (header === null) return null;
+        const topbar = document.querySelector<HTMLElement>(".topbar");
+        const rail = document.querySelector<HTMLElement>(".timeline-rail");
+        if (header === null || topbar === null || rail === null) return null;
         const lane = header.querySelector<HTMLElement>(".lane-label");
         if (lane === null) return null;
         const rect = lane.getBoundingClientRect();
-        const hit = document.elementFromPoint(rect.left + rect.width / 2, 10);
-        return { top: header.getBoundingClientRect().top, aboveCards: hit !== null && hit.closest(".lane-header") === header };
+        const toolbar = topbar.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, toolbar.bottom + 10);
+        return {
+          top: header.getBoundingClientRect().top,
+          toolbarBottom: toolbar.bottom,
+          railPosition: getComputedStyle(rail).position,
+          railTop: rail.getBoundingClientRect().top,
+          aboveCards: hit !== null && hit.closest(".lane-header") === header,
+        };
       });
       expect(pinned).not.toBeNull();
-      expect(Math.abs(pinned?.top ?? Number.NaN)).toBeLessThanOrEqual(0.5);
+      expect(Math.abs((pinned?.top ?? Number.NaN) - (pinned?.toolbarBottom ?? Number.NaN))).toBeLessThanOrEqual(0.5);
+      if (pinned?.railPosition === "sticky") expect(Math.abs((pinned.railTop ?? Number.NaN) - (pinned.toolbarBottom ?? Number.NaN) - 16)).toBeLessThanOrEqual(0.5);
       expect(pinned?.aboveCards).toBe(true);
+
+      await page.locator(".topbar").evaluate((topbar) => { topbar.style.minHeight = "96px"; });
+      await expect.poll(() => page.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--topbar-height")))).toBeGreaterThanOrEqual(96);
+      const resized = await page.evaluate(() => {
+        const topbar = document.querySelector<HTMLElement>(".topbar");
+        const header = document.querySelector<HTMLElement>(".lane-header");
+        const rail = document.querySelector<HTMLElement>(".timeline-rail");
+        if (topbar === null || header === null || rail === null) return null;
+        return { toolbarBottom: topbar.getBoundingClientRect().bottom, headerTop: header.getBoundingClientRect().top, railPosition: getComputedStyle(rail).position, railTop: rail.getBoundingClientRect().top };
+      });
+      expect(resized).not.toBeNull();
+      expect(Math.abs((resized?.headerTop ?? Number.NaN) - (resized?.toolbarBottom ?? Number.NaN))).toBeLessThanOrEqual(0.5);
+      if (resized?.railPosition === "sticky") expect(Math.abs((resized.railTop ?? Number.NaN) - (resized.toolbarBottom ?? Number.NaN) - 16)).toBeLessThanOrEqual(0.5);
     });
 
     test("keeps the header lanes aligned and releases the header at the timeline end", async ({ page }) => {

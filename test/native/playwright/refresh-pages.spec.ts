@@ -8,6 +8,8 @@ interface Setup {
   readonly refreshError?: boolean;
   readonly fullRefreshError?: boolean;
   readonly fullGap?: boolean;
+  readonly fullGapCount?: number;
+  readonly fullCalendarHeld?: number;
   readonly fullOmissionCount?: number;
   readonly holdFullRefresh?: boolean;
   readonly failReload?: boolean;
@@ -15,6 +17,7 @@ interface Setup {
   readonly staleCapture?: boolean;
   readonly dateOnlyActivity?: boolean;
   readonly malformedCalendarConfirmation?: boolean;
+  readonly initialHistoryStatuses?: readonly { readonly status: "succeeded" | "incomplete" | "failed"; readonly sourceComplete: boolean }[];
 }
 
 function initialDocuments(): Record<string, unknown> {
@@ -167,6 +170,8 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
         return { status: "complete", updatedAt: new Date(Date.now() + 2_000).toISOString(), added: 0, updated: setup.noCalendarChange === true ? 0 : 1, held: 0, removed: 0 };
       }
       if (command === "start_full_refresh") {
+        const gapCount = setup.fullGapCount ?? (setup.fullGap === true ? 2 : 0);
+        const heldCount = setup.fullCalendarHeld ?? (setup.fullGap === true ? 1 : 0);
         const serialized = JSON.parse(JSON.stringify(args.onProgress)) as unknown;
         const channel = typeof serialized === "string" ? serialized.match(/^__CHANNEL__:(\d+)$/) : null;
         if (channel === null) throw { code: "invalid-channel", message: "The synthetic full-refresh channel is invalid." };
@@ -178,7 +183,7 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
         const coursework = documents.coursework as { generated: string; courses: Record<string, unknown>[]; items: Record<string, unknown>[] };
         const calendarItem = coursework.items.find((item) => item.id === "calendar-deadline");
         if (calendarItem !== undefined) calendarItem.at = futureDate(20);
-        if (setup.fullGap !== true) {
+        if (gapCount === 0) {
           coursework.courses = coursework.courses.filter((course) => course.key !== "102");
           coursework.items = coursework.items.filter((item) => item.course !== "102");
           const deadline = coursework.items.find((item) => item.id === "canvas-deadline");
@@ -194,14 +199,14 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
         } else fullCaptureStale = true;
         documents.history = [{
           id: "full-run-after", source: "canvas", sourceLabel: "canvas", status: "incomplete", sourceComplete: false,
-          dailyScopeStatus: setup.fullGap === true ? "incomplete" : "complete",
-          dailyGapCount: setup.fullGap === true ? 2 : 0,
+          dailyScopeStatus: gapCount > 0 ? "incomplete" : "complete",
+          dailyGapCount: gapCount,
           dailyOmissionCount: setup.fullOmissionCount ?? 0,
           startedAt: new Date(Date.now() + 2_000).toISOString(), finishedAt: new Date(Date.now() + 3_000).toISOString(),
           summary: { added: 1, updated: 2, removed: 0 }, changes: [
             { kind: "changed", title: "Synthetic Canvas changes", detail: "Full refresh completed its available sections." },
-            ...(setup.fullGap === true
-              ? [{ kind: "notice", title: "Daily Canvas pages incomplete", detail: "2 required daily sections were incomplete; existing data was preserved." }]
+            ...(gapCount > 0
+              ? [{ kind: "notice", title: "Daily Canvas pages incomplete", detail: `${String(gapCount)} required daily sections were incomplete; existing data was preserved.` }]
               : [{ kind: "notice", title: "Daily Canvas pages refreshed", detail: `${setup.fullOmissionCount ?? 0} optional capture omissions recorded. Existing data was preserved.` }]),
           ],
         }, ...(documents.history as Record<string, unknown>[])];
@@ -210,10 +215,12 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
         if (setup.failReload === true) failNextRead = true;
         if (setup.fullRefreshError === true) throw { code: "full-refresh-failed", message: "Synthetic full refresh failed after writing calendar state." };
         return {
-          status: setup.fullGap === true ? "incomplete" : "complete", browserStatus: setup.fullGap === true ? "incomplete" : "complete",
-          calendarStatus: "complete", gapCount: setup.fullGap === true ? 2 : 0, omissionCount: setup.fullOmissionCount ?? 0,
-          calendarAdded: 1, calendarUpdated: 1, calendarHeld: setup.fullGap === true ? 1 : 0,
-          updatedAt: new Date(Date.now() + 3_000).toISOString(), ...(setup.fullGap === true ? { errorCode: "coverage-gap" } : {}),
+          status: gapCount > 0 || heldCount > 0 ? "incomplete" : "complete",
+          browserStatus: gapCount > 0 ? "incomplete" : "complete",
+          calendarStatus: heldCount > 0 ? "incomplete" : "complete",
+          gapCount, omissionCount: setup.fullOmissionCount ?? 0,
+          calendarAdded: 1, calendarUpdated: 1, calendarHeld: heldCount,
+          updatedAt: new Date(Date.now() + 3_000).toISOString(), ...(gapCount > 0 ? { errorCode: "coverage-gap" } : {}),
         };
       }
       throw { code: "unexpected-command", message: "Unexpected synthetic IPC command: " + command };
@@ -223,6 +230,13 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
 
 async function openDashboard(page: Page, setup: Setup = {}): Promise<void> {
   const initial = initialDocuments();
+  if (setup.initialHistoryStatuses !== undefined) {
+    initial.history = setup.initialHistoryStatuses.map((receipt, index) => ({
+      id: `${receipt.status}-run-${String(index)}`, source: "canvas", sourceLabel: "canvas", status: receipt.status, sourceComplete: receipt.sourceComplete,
+      startedAt: `2026-10-0${String(index + 1)}T12:00:00Z`, finishedAt: `2026-10-0${String(index + 1)}T12:01:00Z`,
+      summary: { added: 0, updated: 0, removed: 0 }, changes: [],
+    }));
+  }
   if (setup.malformedCalendarConfirmation === true) {
     (initial.coursework as Record<string, unknown>)._calendarConfirmation = {
       schema: 1,
@@ -236,8 +250,21 @@ async function openDashboard(page: Page, setup: Setup = {}): Promise<void> {
 }
 
 async function visit(page: Page, label: string): Promise<void> {
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: label, exact: true }).click();
-  await expect(page.locator("[data-page-panel]")).toBeVisible();
+  const link = page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: label, exact: true });
+  const target = await link.getAttribute("href");
+  if (target === null || !target.startsWith("#")) throw new Error(`Expected a page hash for ${label}`);
+  await link.click();
+  await expect(page.locator(`[data-page-panel="${target.slice(1)}"]`)).toBeVisible();
+}
+
+async function selectNewestRefresh(page: Page): Promise<void> {
+  const history = page.locator(".history-row");
+  await expect(history).toHaveCount(2);
+  // Reload preserves the selected prior run when it remains available.
+  await expect(history.first()).not.toHaveClass(/active/);
+  await expect(history.nth(1)).toHaveClass(/active/);
+  await history.first().click();
+  await expect(history.first()).toHaveClass(/active/);
 }
 
 test("page panels have an accessible name while primary navigation remains available", async ({ page }) => {
@@ -303,6 +330,7 @@ test("Canvas refresh reloads every page from current synthetic store documents",
   await expect(page.getByRole("heading", { name: "New Canvas file.pdf" })).toBeVisible();
   await expect(page.getByRole("button", { name: "All", exact: true })).toHaveClass(/active/);
   await visit(page, "Activity");
+  await selectNewestRefresh(page);
   await expect(page.getByRole("heading", { name: /Canvas refresh ·/ })).toBeVisible();
   await expect(page.getByText("After Canvas deadline", { exact: true })).toBeVisible();
   await visit(page, "More");
@@ -360,6 +388,7 @@ test("full refresh uses the bundled browser command and updates every page witho
   await page.getByRole("button", { name: "Pages", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Full refresh Canvas page" })).toBeVisible();
   await visit(page, "Activity");
+  await selectNewestRefresh(page);
   await expect(page.locator("#main").getByText(/Daily Canvas pages refreshed; 2 optional capture omissions recorded\. Existing data was preserved\./)).toBeVisible();
   await expect(page.locator("#main").getByText("Daily Canvas pages refreshed", { exact: true })).toBeVisible();
   await visit(page, "More");
@@ -376,11 +405,13 @@ test("full refresh uses the bundled browser command and updates every page witho
 test("full refresh reports coverage gaps, reloads freshness, and rereads after command failure", async ({ page, context }) => {
   await openDashboard(page, { mode: "full", fullGap: true });
   await page.locator(".top-actions").getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(page.locator(".sync-note")).toContainText("Full refresh partial. Canvas incomplete (2 coverage gaps; no optional capture omissions); calendar complete");
+  await expect(page.locator(".sync-note")).toContainText("Full refresh partial. Canvas incomplete (2 required Canvas capture gaps; no optional capture omissions); calendar incomplete");
+  await expect(page.locator(".sync-note")).toContainText("1 calendar item held");
   await expect(page.locator("[data-source-freshness=stale]")).toContainText("Capture status: capture unverified.");
   await expect(page.getByRole("heading", { name: "Before Canvas deadline" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Synthetic calendar deadline" })).toBeVisible();
   await visit(page, "Activity");
+  await selectNewestRefresh(page);
   await expect(page.locator("#main").getByText("partial", { exact: true }).first()).toBeVisible();
   await expect(page.locator("#main").getByText("Daily Canvas pages incomplete", { exact: true })).toBeVisible();
   let commands = await page.evaluate(() => (window as unknown as { __refreshCalls: { command: string }[] }).__refreshCalls.map((call) => call.command));
@@ -399,6 +430,29 @@ test("full refresh reports coverage gaps, reloads freshness, and rereads after c
   expect(commands.filter((command) => command === "start_full_refresh")).toHaveLength(1);
 });
 
+test("full refresh banner keeps 125 Canvas gaps separate from a held calendar item", async ({ page }) => {
+  await openDashboard(page, { mode: "full", fullGap: true, fullGapCount: 125, fullCalendarHeld: 1, fullOmissionCount: 9 });
+  await page.locator(".top-actions").getByRole("button", { name: "Refresh", exact: true }).click();
+
+  const note = page.locator(".sync-note");
+  await expect(note).toContainText("125 required Canvas capture gaps");
+  await expect(note).toContainText("9 optional capture omissions recorded");
+  await expect(note).toContainText("calendar incomplete");
+  await expect(note).toContainText("1 calendar item held");
+  await expect(note).not.toContainText("126");
+});
+
+test("full refresh banner stays partial when Canvas completes but calendar holds an item", async ({ page }) => {
+  await openDashboard(page, { mode: "full", fullCalendarHeld: 1 });
+  await page.locator(".top-actions").getByRole("button", { name: "Refresh", exact: true }).click();
+
+  const note = page.locator(".sync-note");
+  await expect(note).toContainText("Full refresh partial.");
+  await expect(note).toContainText("Canvas complete (no required Canvas capture gaps");
+  await expect(note).toContainText("calendar incomplete");
+  await expect(note).toContainText("1 calendar item held");
+});
+
 test("calendar refresh changes only deadlines and labels its scope in Activity and after reload", async ({ page }) => {
   await openDashboard(page, { mode: "calendar" });
   await expect(page.locator(".top-actions button.refresh-button")).toHaveAttribute("title", /Calendar deadlines only/);
@@ -411,7 +465,8 @@ test("calendar refresh changes only deadlines and labels its scope in Activity a
   await visit(page, "Library");
   await expect(page.getByRole("heading", { name: "Old Canvas file.pdf" })).toBeVisible();
   await visit(page, "Activity");
-  await expect(page.locator(".more-action.refresh-button")).toHaveAccessibleName("Refresh calendar");
+  await expect(page.locator("button.refresh-button")).toHaveCount(1);
+  await expect(page.locator(".sync-note")).toHaveCount(1);
 
   await page.locator(".top-actions").getByRole("button", { name: "Refresh calendar", exact: true }).click();
   await expect(page.locator(".sync-note")).toContainText("Calendar refresh complete · 0 added · 1 updated · 0 held");
@@ -424,6 +479,7 @@ test("calendar refresh changes only deadlines and labels its scope in Activity a
   await visit(page, "Library");
   await expect(page.getByRole("heading", { name: "Old Canvas file.pdf" })).toBeVisible();
   await visit(page, "Activity");
+  await selectNewestRefresh(page);
   await expect(page.getByRole("heading", { name: /Calendar refresh ·/ })).toBeVisible();
   await expect(page.getByText("Calendar refresh updates deadlines only. Grades, Inbox, and library items keep the prior Canvas capture.")).toBeVisible();
   await expect(page.locator(".change-count").filter({ hasText: "Changed" })).toContainText("1");
@@ -433,6 +489,24 @@ test("calendar refresh changes only deadlines and labels its scope in Activity a
   await expect(page.locator(".sync-note")).toContainText("Calendar deadlines only");
   await visit(page, "Activity");
   await expect(page.getByText("Calendar refresh updates deadlines only.", { exact: false })).toBeVisible();
+});
+
+test("keeps the course count global and course colors closed in More", async ({ page }) => {
+  await openDashboard(page, { mode: "canvas" });
+  await visit(page, "Courses");
+  await expect(page.locator(".topbar")).toContainText("3 courses");
+  await expect(page.getByText("Course overview", { exact: true })).toBeVisible();
+  await expect(page.locator("[data-page-panel=courses]").getByText("3 active", { exact: true })).toHaveCount(0);
+  await expect(page.locator("[data-course-colors]")).toHaveCount(0);
+
+  await visit(page, "More");
+  const colors = page.locator("[data-course-colors]");
+  await expect(colors).toHaveCount(1);
+  await expect(colors).not.toHaveAttribute("open", "");
+  await expect(colors.getByText("SYN101 · Synthetic One", { exact: true })).not.toBeVisible();
+  await colors.locator("summary").click();
+  await expect(colors).toHaveAttribute("open", "");
+  await expect(colors.getByText("SYN101 · Synthetic One", { exact: true })).toBeVisible();
 });
 
 test("Timeline explains retained calendar items and hides the label for Canvas-backed facts", async ({ page }) => {
@@ -453,6 +527,7 @@ test("a no-change calendar run stays complete and identifies deadline-only scope
   await page.locator(".top-actions").getByRole("button", { name: "Refresh calendar", exact: true }).click();
   await expect(page.locator(".sync-note")).toContainText("Calendar refresh complete · 0 added · 0 updated · 0 held");
   await visit(page, "Activity");
+  await selectNewestRefresh(page);
   await expect(page.getByText("Calendar refresh updates deadlines only. Grades, Inbox, and library items keep the prior Canvas capture.")).toBeVisible();
   await expect(page.getByText("This refresh recorded no item-level changes.", { exact: true })).toBeVisible();
 });
@@ -468,6 +543,33 @@ test("failed refreshes and failed reloads retain the prior view and warn", async
   await second.locator(".top-actions").getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(second.locator(".sync-note")).toHaveText("Refresh finished, but updated data could not be reloaded. The prior view is still shown.");
   await expect(second.getByRole("heading", { name: "Before Canvas deadline" })).toBeVisible();
+});
+
+test("Activity gives complete, partial, and failed refreshes their accepted status colors", async ({ page }) => {
+  await openDashboard(page, { initialHistoryStatuses: [
+    { status: "succeeded", sourceComplete: true },
+    { status: "incomplete", sourceComplete: false },
+    { status: "failed", sourceComplete: false },
+  ] });
+  await visit(page, "Activity");
+  const statusStyles = await page.locator(".refresh-status").evaluateAll((statuses) => {
+    const resolve = (variable: string) => {
+      const probe = document.createElement("span");
+      probe.style.color = `var(${variable})`;
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    return {
+      sage: resolve("--sage"), clay: resolve("--clay"),
+      statuses: statuses.map((status) => ({ text: status.textContent, className: status.className, color: getComputedStyle(status).color })),
+    };
+  });
+  const status = (text: string) => statusStyles.statuses.find((item) => item.text === text);
+  expect(status("complete")).toMatchObject({ className: "refresh-status", color: statusStyles.sage });
+  expect(status("partial")).toMatchObject({ className: "refresh-status partial", color: statusStyles.clay });
+  expect(status("failed")).toMatchObject({ className: "refresh-status failed", color: statusStyles.clay });
 });
 
 test("stale browser freshness masks Canvas facts and explains the gap on each page", async ({ page }) => {
@@ -490,6 +592,7 @@ test.describe("Activity date-only timezone regression", () => {
     await expect(page.locator(".sync-note")).toHaveText("Refresh complete.");
 
     await visit(page, "Activity");
+    await selectNewestRefresh(page);
     await expect(page.getByRole("heading", { name: /Canvas refresh ·/ })).toBeVisible();
     await expect(page.getByText("Synthetic Sunday assignment", { exact: true })).toBeVisible();
 

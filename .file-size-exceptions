@@ -5,4 +5,3 @@ src-tauri/src/capture.rs | Existing bounded Canvas capture pipeline is kept inta
 src-tauri/src/import.rs | Existing legacy import scan, validation, and atomic adoption share a staged state machine; splitting during a live migration would add unverified risk.
 src-tauri/src/refresh.rs | Existing Canvas refresh transaction and crash recovery are preserved while iCal is added; a split needs dedicated transaction tests.
 src-tauri/src/reconcile.rs | Existing Canvas reconciliation owns identity, progress preservation, and archive semantics; a separate refactor is needed to preserve that contract.
-test/ui/dashboard.test.ts | Existing broad dashboard behavior suite is untouched in this cutover; separating fixtures and cases requires a dedicated runner-membership update.

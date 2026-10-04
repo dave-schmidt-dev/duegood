@@ -36,7 +36,10 @@ function completeSnapshot(): SyntheticSnapshot {
       endpoint, courseId: null, items: endpoint === "inboxAll" ? [{ id: 91 }] : [],
     })),
     { endpoint: "conversation", courseId: null, items: [{ id: 91 }] },
-    { endpoint: "fileBodies", courseId: null, items: [{ fileId: 61, status: "staged" }] },
+    { endpoint: "fileBodies", courseId: null, items: [{
+      fileId: 61, status: "archived", byteCount: 12, sha256: "a".repeat(64),
+      contentType: "application/pdf", sourceAuthenticity: "unverified",
+    }] },
   ];
   const coverage: SyntheticCoverage[] = [
     ...COURSE_LISTS.map((endpoint) => ({ endpoint, courseId: COURSE_ID, status: "complete" })),
@@ -48,6 +51,24 @@ function completeSnapshot(): SyntheticSnapshot {
 }
 
 describe("Canvas daily refresh scope", () => {
+  it("accepts structurally valid archived file receipts and rejects missing, damaged, or failed receipts", () => {
+    expect(summarizeCanvasRefreshScope(completeSnapshot())).toEqual({ requiredGapCount: 0, omissionCount: 0 });
+
+    const missing = completeSnapshot();
+    missing.resources.find((row) => row.endpoint === "fileBodies")!.items = [];
+    expect(summarizeCanvasRefreshScope(missing)).toEqual({ requiredGapCount: 1, omissionCount: 0 });
+
+    const damaged = completeSnapshot();
+    damaged.resources.find((row) => row.endpoint === "fileBodies")!.items[0]!.sha256 = "damaged";
+    expect(summarizeCanvasRefreshScope(damaged)).toEqual({ requiredGapCount: 1, omissionCount: 0 });
+
+    const failed = completeSnapshot();
+    failed.resources.find((row) => row.endpoint === "fileBodies")!.items[0] = {
+      fileId: 61, status: "gap", reason: "HELPER_DOWNLOAD_REQUEST_FAILED",
+    };
+    expect(summarizeCanvasRefreshScope(failed)).toEqual({ requiredGapCount: 1, omissionCount: 0 });
+  });
+
   it("separates the immutable partial archive marker from complete daily coverage", () => {
     const snapshot = completeSnapshot();
     snapshot.coverage.push({ endpoint: "calendar", courseId: COURSE_ID, status: "gap", reason: "unsupported" });
@@ -76,14 +97,6 @@ describe("Canvas daily refresh scope", () => {
     unavailableList.coverage.find((row) => row.endpoint === "pages")!.reason = "forbidden-optional";
     unavailableList.resources = unavailableList.resources.filter((row) => row.endpoint !== "pages");
     expect(summarizeCanvasRefreshScope(unavailableList)).toEqual({ requiredGapCount: 1, omissionCount: 0 });
-  });
-
-  it("keeps a failed course-file download incomplete and disclosed", () => {
-    const snapshot = completeSnapshot();
-    snapshot.resources.find((row) => row.endpoint === "fileBodies")!.items[0] = {
-      fileId: 61, status: "gap", reason: "HELPER_DOWNLOAD_REQUEST_FAILED",
-    };
-    expect(summarizeCanvasRefreshScope(snapshot)).toEqual({ requiredGapCount: 1, omissionCount: 0 });
   });
 
   it("counts locked file receipts only when they belong to an active course file", () => {

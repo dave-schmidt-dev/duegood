@@ -234,6 +234,55 @@ fn browser_partial_or_failed_outcomes_still_attempt_calendar_and_keep_calendar_c
 }
 
 #[test]
+fn calendar_holds_are_not_counted_as_canvas_capture_gaps() {
+    let result = combine_outcomes(
+        BrowserOutcome::Incomplete {
+            gaps: 125,
+            omissions: 9,
+        },
+        CalendarOutcome::Incomplete(IcalRefreshResult {
+            status: "incomplete",
+            updated_at: "2026-10-03T14:51:00Z".into(),
+            added: 0,
+            updated: 58,
+            held: 1,
+            removed: 0,
+        }),
+    );
+
+    assert_eq!(result.status, "incomplete");
+    assert_eq!(result.browser_status, "incomplete");
+    assert_eq!(result.calendar_status, "incomplete");
+    assert_eq!(result.gap_count, 125);
+    assert_eq!(result.omission_count, 9);
+    assert_eq!(result.calendar_held, 1);
+}
+
+#[test]
+fn held_calendar_item_makes_refresh_partial_when_canvas_is_complete() {
+    let result = combine_outcomes(
+        BrowserOutcome::Complete {
+            gaps: 0,
+            omissions: 0,
+        },
+        CalendarOutcome::Incomplete(IcalRefreshResult {
+            status: "incomplete",
+            updated_at: "2026-10-03T14:51:00Z".into(),
+            added: 0,
+            updated: 58,
+            held: 1,
+            removed: 0,
+        }),
+    );
+
+    assert_eq!(result.status, "incomplete");
+    assert_eq!(result.browser_status, "complete");
+    assert_eq!(result.calendar_status, "incomplete");
+    assert_eq!(result.gap_count, 0);
+    assert_eq!(result.calendar_held, 1);
+}
+
+#[test]
 fn fatal_cancellation_skips_the_calendar_phase() {
     let mut calendar_called = false;
     let result = run_full_sequence(

@@ -17,6 +17,7 @@ const COVERAGE_REASONS = new Set([
   "parent-unavailable", "request-failed", "unsupported", "unpublished",
 ]);
 const MAX_SUMMARY_COUNT = 100_000;
+const MAX_ARCHIVED_FILE_BYTES = 256 * 1024 * 1024;
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -36,6 +37,16 @@ function hasResource(resources, endpoint, courseId) {
 
 function positiveId(value) {
   return Number.isSafeInteger(value) && value > 0;
+}
+
+function validArchivedFileReceipt(receipt, fileId) {
+  return receipt?.status === "archived" && receipt.fileId === fileId
+    && Number.isSafeInteger(receipt.byteCount) && receipt.byteCount > 0
+    && receipt.byteCount <= MAX_ARCHIVED_FILE_BYTES
+    && typeof receipt.sha256 === "string" && /^[a-f0-9]{64}$/u.test(receipt.sha256)
+    && typeof receipt.contentType === "string"
+    && /^[a-z0-9.+-]{1,64}\/[a-z0-9.+-]{1,64}$/u.test(receipt.contentType)
+    && receipt.sourceAuthenticity === "unverified";
 }
 
 function bounded(value) {
@@ -151,7 +162,11 @@ export function summarizeCanvasRefreshScope(snapshot) {
   const fileBodyResources = resources.filter((resource) => resource.endpoint === "fileBodies");
   for (const resource of fileBodyResources) {
     for (const receipt of resource.items) {
-      if (!positiveId(receipt?.fileId) || fileReceipts.has(receipt.fileId)) continue;
+      if (!positiveId(receipt?.fileId)) continue;
+      if (fileReceipts.has(receipt.fileId)) {
+        fileReceipts.set(receipt.fileId, null);
+        continue;
+      }
       fileReceipts.set(receipt.fileId, receipt);
       if (activeFileIds.has(receipt.fileId) && receipt.status === "gap"
           && NON_APPLICABLE_REASONS.has(receipt.reason)) omissionCount += 1;
@@ -166,7 +181,12 @@ export function summarizeCanvasRefreshScope(snapshot) {
       }
       seen.add(file.id);
       const receipt = fileReceipts.get(file.id);
-      if (!receipt || receipt.status !== "staged" && !NON_APPLICABLE_REASONS.has(receipt.reason)) addGap();
+      if (!receipt) {
+        addGap();
+        continue;
+      }
+      if (receipt.status === "gap" && NON_APPLICABLE_REASONS.has(receipt.reason)) continue;
+      if (!validArchivedFileReceipt(receipt, file.id)) addGap();
     }
   }
 

@@ -37,7 +37,12 @@ fn complete_daily_fixture() -> (Value, Vec<ActiveCourseCoverage>, Vec<CaptureCov
         "announcements",
         "courseFiles",
     ] {
-        resources.push(json!({"endpoint": endpoint, "courseId": 1, "items": []}));
+        let items = if endpoint == "courseFiles" {
+            json!([{"id":42}])
+        } else {
+            json!([])
+        };
+        resources.push(json!({"endpoint": endpoint, "courseId": 1, "items": items}));
         coverage_rows.push(coverage(endpoint, Some(1), "complete", None));
     }
     for endpoint in [
@@ -55,6 +60,12 @@ fn complete_daily_fixture() -> (Value, Vec<ActiveCourseCoverage>, Vec<CaptureCov
         coverage_rows.push(coverage(endpoint, None, "complete", None));
     }
     resources.push(json!({"endpoint":"conversation", "courseId":null, "items":[{"id":17}]}));
+    resources.push(json!({
+        "endpoint":"fileBodies", "courseId":null,
+        "items":[{"fileId":42,"status":"archived","byteCount":12,
+            "sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "contentType":"application/pdf","sourceAuthenticity":"unverified"}]
+    }));
     coverage_rows.push(coverage("conversation", None, "complete", None));
     // Calendar identity capture belongs to the separate native iCal lane.
     coverage_rows.push(coverage("calendar", None, "gap", Some("unsupported")));
@@ -67,6 +78,19 @@ fn daily_scope_distinguishes_archive_omissions_from_required_failures() {
     assert_eq!(
         daily_scope::summarize_daily_scope(&snapshot, &active, &rows).unwrap(),
         (0, 0)
+    );
+
+    let mut damaged_archive = snapshot.clone();
+    let receipt = damaged_archive["resources"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|resource| resource["endpoint"] == "fileBodies")
+        .unwrap();
+    receipt["items"][0]["sha256"] = json!("damaged");
+    assert_eq!(
+        daily_scope::summarize_daily_scope(&damaged_archive, &active, &rows).unwrap(),
+        (1, 0)
     );
 
     rows.push(coverage(
@@ -118,15 +142,8 @@ fn daily_scope_distinguishes_archive_omissions_from_required_failures() {
         .as_array_mut()
         .unwrap()
         .iter_mut()
-        .find(|resource| resource["endpoint"] == "courseFiles")
-        .unwrap()["items"] = json!([{"id":42}]);
-    file_failure["resources"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "endpoint":"fileBodies", "courseId":1,
-            "items":[{"fileId":42,"status":"gap","reason":"request-failed"}]
-        }));
+        .find(|resource| resource["endpoint"] == "fileBodies")
+        .unwrap()["items"][0] = json!({"fileId":42,"status":"gap","reason":"request-failed"});
     assert!(
         daily_scope::summarize_daily_scope(&file_failure, &active, &rows)
             .unwrap()
@@ -139,15 +156,8 @@ fn daily_scope_distinguishes_archive_omissions_from_required_failures() {
         .as_array_mut()
         .unwrap()
         .iter_mut()
-        .find(|resource| resource["endpoint"] == "courseFiles")
-        .unwrap()["items"] = json!([{"id":42}]);
-    active_locked["resources"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "endpoint":"fileBodies", "courseId":1,
-            "items":[{"fileId":42,"status":"gap","reason":"locked"}]
-        }));
+        .find(|resource| resource["endpoint"] == "fileBodies")
+        .unwrap()["items"][0] = json!({"fileId":42,"status":"gap","reason":"locked"});
     assert_eq!(
         daily_scope::summarize_daily_scope(&active_locked, &active, &rows).unwrap(),
         (0, 1)
@@ -158,14 +168,14 @@ fn daily_scope_distinguishes_archive_omissions_from_required_failures() {
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "endpoint":"courseFiles", "courseId":2, "items":[{"id":42}]
+            "endpoint":"courseFiles", "courseId":2, "items":[{"id":43}]
         }));
     archived_locked["resources"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "endpoint":"fileBodies", "courseId":null,
-            "items":[{"fileId":42,"status":"gap","reason":"locked"}]
+            "items":[{"fileId":43,"status":"gap","reason":"locked"}]
         }));
     assert_eq!(
         daily_scope::summarize_daily_scope(&archived_locked, &active, &rows).unwrap(),

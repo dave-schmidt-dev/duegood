@@ -11,13 +11,13 @@ import {
 import { parseDashboard } from "./dashboard-response";
 export { dashboardEventKind, parseDashboard } from "./dashboard-response";
 import { DASHBOARD_ROUTES, type DashboardPage } from "./routes";
-import { renderDesktopSetup, setupError, setupPanel, type DesktopSetupHandlers, type DesktopSetupState } from "./desktop-setup";
+import { setupPanel } from "./desktop-setup";
 export { renderDesktopSetup } from "./desktop-setup";
 export type { DesktopSetupHandlers, DesktopSetupState } from "./desktop-setup";
+import { mountDesktop, type DesktopDashboardOptions } from "./desktop-shell";
 import {
   createNativeTransport,
   DesktopCommandError,
-  type DesktopStoreStatus,
   type CanvasRefreshProgress,
   type FullRefreshProgress,
   type IcalRefreshProgress,
@@ -26,6 +26,8 @@ import {
   type NativeTransport,
 } from "./transport";
 import { fullRefreshFeedback } from "./full-refresh";
+import { createLibraryResourceActionRunner } from "./library-resource-action";
+import { boundedScrollPosition, createDashboardViewStateStore, reconcileDashboardViewState, type DashboardViewState } from "./dashboard-view-state";
 
 function element(tag: string, attrs: Record<string, string> = {}, text?: string): ElementDescriptor {
   return { tag, attrs, ...(text !== undefined ? { text } : {}) };
@@ -44,7 +46,7 @@ function reconciledDashboardState(state: DashboardState, data: DashboardData, re
     ...state,
     data: { ...data, refreshAvailable },
     selectedConversationId: data.conversations.some((conversation) => conversation.id === state.selectedConversationId) ? state.selectedConversationId : data.conversations[0]?.id,
-    selectedRefreshId: data.refreshes[0]?.id,
+    selectedRefreshId: data.refreshes.some((refresh) => refresh.id === state.selectedRefreshId) ? state.selectedRefreshId : data.refreshes[0]?.id,
     courseFilter: hasCourse(state.courseFilter) ? state.courseFilter : "all",
     gradeCourseFilter: hasCourse(state.gradeCourseFilter) ? state.gradeCourseFilter : "all",
     resourceFilter: hasResourceType ? state.resourceFilter : "all",
@@ -58,14 +60,6 @@ function pageFromHash(): DashboardPage {
 
 function replaced(set: ReadonlySet<string>, id: string, include: boolean): ReadonlySet<string> { const next = new Set(set); if (include) next.add(id); else next.delete(id); return next; }
 
-/** Desktop-only dashboard context: the store the data came from and the replace action. */
-interface DesktopDashboardOptions {
-  readonly info: DesktopStoreInfo;
-  readonly onReplacePreview?: () => void;
-  readonly onRecovery?: () => void;
-  readonly onExport?: () => void;
-}
-
 /** Native per-item conflicts always trigger a fresh document read before the notice is shown. */
 export async function resolveNativeMutationConflict(error: unknown, reload: () => Promise<boolean>, subject: "item" | "discussion"): Promise<{ readonly reloaded: boolean; readonly message: string }> {
   if (!(error instanceof DesktopCommandError) || error.code !== "item-conflict") return { reloaded: false, message: error instanceof Error ? error.message : "Could not save. Existing state was restored." };
@@ -76,12 +70,74 @@ export async function resolveNativeMutationConflict(error: unknown, reload: () =
 /** Mounts the dashboard; returns a disposer so the desktop shell can swap screens cleanly. */
 function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop: DesktopDashboardOptions): () => void {
   let avatarUrl: string | undefined;
+  const viewStateStore = createDashboardViewStateStore(desktop.info.dataFolder);
+  const storedViewState = viewStateStore.load();
+  let scrollPositions: Partial<Record<DashboardPage, number>> = { ...storedViewState.scrollPositions };
+  let restoredViewState = false;
+  let viewStateTimer: ReturnType<typeof setTimeout> | undefined;
+  let skipNextHashScrollCapture = false;
   let state: DashboardState = { page: pageFromHash(), loading: true, data: { ...EMPTY_DATA, refreshAvailable: desktopRefreshAvailable(desktop.info) }, now: Date.now(), eventMode: "all", courseFilter: "all", gradeCourseFilter: "all", gradeMode: "all", resourceFilter: "all", expandedEventIds: new Set(), pendingCompletionIds: new Set(), failedCompletionIds: new Set(), pendingDiscussionIds: new Set(), failedDiscussionIds: new Set(), pendingManualGradeIds: new Set(), failedManualGradeIds: new Set(), refreshState: "idle", desktop: desktop.info };
+  const resourceActionRunner = createLibraryResourceActionRunner((id) => transport.openResource(id));
   let disposed = false;
   let snapshotStatusTimer: ReturnType<typeof setTimeout> | undefined;
+  let topbarHeightObserver: ResizeObserver | undefined;
   const listeners = new AbortController();
 
-  function draw(): void { if (disposed) return; state = { ...state, now: Date.now() }; mount.replaceChildren(render(renderDashboard(state, handlers))); }
+  function measureTopbarHeight(): void {
+    topbarHeightObserver?.disconnect();
+    topbarHeightObserver = undefined;
+    const topbar = mount.querySelector<HTMLElement>(".topbar");
+    if (topbar === null) {
+      document.documentElement.style.removeProperty("--topbar-height");
+      return;
+    }
+    const updateHeight = (): void => document.documentElement.style.setProperty("--topbar-height", `${Math.ceil(topbar.getBoundingClientRect().height)}px`);
+    updateHeight();
+    if (typeof ResizeObserver !== "function") return;
+    topbarHeightObserver = new ResizeObserver(updateHeight);
+    topbarHeightObserver.observe(topbar);
+  }
+  function draw(): void { if (disposed) return; state = { ...state, now: Date.now() }; mount.replaceChildren(render(renderDashboard(state, handlers))); measureTopbarHeight(); }
+  function drawPreservingScroll(): void {
+    const page = state.page;
+    const preservedPosition = scrollPositions[page] ?? boundedScrollPosition(window.scrollY);
+    draw();
+    if (!disposed && state.page === page && preservedPosition > 0) window.scrollTo({ top: preservedPosition, behavior: "instant" });
+  }
+  function viewState(): DashboardViewState {
+    return {
+      eventMode: state.eventMode, courseFilter: state.courseFilter, gradeCourseFilter: state.gradeCourseFilter,
+      gradeMode: state.gradeMode, resourceFilter: state.resourceFilter, expandedEventIds: [...state.expandedEventIds],
+      ...(state.selectedConversationId === undefined ? {} : { selectedConversationId: state.selectedConversationId }),
+      ...(state.selectedRefreshId === undefined ? {} : { selectedRefreshId: state.selectedRefreshId }),
+      ...(state.editingManualGrade === undefined ? {} : { editingManualGrade: state.editingManualGrade }),
+      scrollPositions,
+    };
+  }
+  function saveViewState(): void { if (viewStateTimer !== undefined) { clearTimeout(viewStateTimer); viewStateTimer = undefined; } viewStateStore.save(viewState()); }
+  function scheduleViewStateSave(): void { if (viewStateTimer === undefined) viewStateTimer = setTimeout(saveViewState, 150); }
+  function captureScroll(): void {
+    if (state.loading) return;
+    const position = boundedScrollPosition(window.scrollY);
+    scrollPositions = { ...scrollPositions, [state.page]: position };
+    scheduleViewStateSave();
+  }
+  function restoreScroll(): void {
+    if (!disposed && !state.loading) window.scrollTo({ top: scrollPositions[state.page] ?? 0, behavior: "instant" });
+  }
+  function restoreStoredViewState(data: DashboardData): void {
+    if (restoredViewState) return;
+    const restored = reconcileDashboardViewState(storedViewState, data);
+    scrollPositions = { ...restored.scrollPositions };
+    state = {
+      ...state, eventMode: restored.eventMode, courseFilter: restored.courseFilter, gradeCourseFilter: restored.gradeCourseFilter,
+      gradeMode: restored.gradeMode, resourceFilter: restored.resourceFilter, expandedEventIds: new Set(restored.expandedEventIds),
+      ...(restored.selectedConversationId === undefined ? {} : { selectedConversationId: restored.selectedConversationId }),
+      ...(restored.selectedRefreshId === undefined ? {} : { selectedRefreshId: restored.selectedRefreshId }),
+      ...(restored.editingManualGrade === undefined ? {} : { editingManualGrade: restored.editingManualGrade }),
+    };
+    restoredViewState = true;
+  }
   async function withAvatar(data: DashboardData): Promise<DashboardData> {
     if (data.profile === null) return data;
     const avatar = await transport.readAvatar().catch(() => null);
@@ -92,12 +148,14 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
   async function load(): Promise<void> {
     try {
       const data = await withAvatar(parseDashboard(await transport.loadDashboardBody(false)));
+      restoreStoredViewState(data);
       state = { ...reconciledDashboardState(state, data), loading: false, error: undefined };
     } catch (error) {
       const detail = error instanceof DesktopCommandError ? ` ${error.message}` : "";
       state = { ...state, loading: false, error: `Coursework could not be loaded. No substitute or sample data was shown.${detail}` };
     }
     draw();
+    restoreScroll();
   }
 
   async function pollStartupSnapshot(): Promise<void> {
@@ -230,7 +288,7 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
         pendingManualGradeIds: replaced(state.pendingManualGradeIds, id, false),
         editingManualGrade: undefined,
       };
-      draw();
+      draw(); scheduleViewStateSave();
       return;
     } catch (error) {
       state = {
@@ -241,13 +299,14 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
         mutationError: { id, message: error instanceof Error ? error.message : "Could not save local grade. The previous value was restored." },
       };
     }
-    draw();
+    draw(); scheduleViewStateSave();
   }
 
   async function refresh(): Promise<void> {
     if (!state.data.refreshAvailable || state.refreshState === "running") return;
     const fullRefresh = state.desktop?.browserRefreshAvailable === true;
-    state = { ...state, refreshState: "running", refreshProgress: undefined, refreshDetail: undefined, refreshSettingError: undefined }; draw();
+    captureScroll();
+    state = { ...state, refreshState: "running", refreshProgress: undefined, refreshDetail: undefined, refreshSettingError: undefined }; drawPreservingScroll();
     try {
       let data = state.data;
       let updatedAt: string | null = null;
@@ -257,7 +316,7 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
         const result = await transport.startFullRefresh((progress: FullRefreshProgress) => {
           if (state.refreshState !== "running") return;
           state = { ...state, refreshProgress: { phase: progress.phase, completed: 0, total: null, bytesDone: null } };
-          draw();
+          drawPreservingScroll();
         });
         const feedback = fullRefreshFeedback(result);
         refreshState = feedback.state;
@@ -271,12 +330,12 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
           ? await transport.startIcalRefresh((progress: IcalRefreshProgress) => {
               if (state.refreshState !== "running") return;
               state = { ...state, refreshProgress: { phase: progress.phase, completed: 0, total: null, bytesDone: null } };
-              draw();
+              drawPreservingScroll();
             })
           : await transport.startCanvasRefresh((progress: CanvasRefreshProgress) => {
               if (state.refreshState !== "running") return;
               state = { ...state, refreshProgress: progress };
-              draw();
+              drawPreservingScroll();
             });
         updatedAt = result.updatedAt;
         refreshDetail = useCalendar ? `Calendar refresh complete · ${String((result as IcalRefreshResult).added)} added · ${String((result as IcalRefreshResult).updated)} updated · ${String((result as IcalRefreshResult).held)} held` : undefined;
@@ -303,7 +362,8 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
         state = { ...state, refreshState: "failed", refreshProgress: undefined, refreshDetail: reloaded ? "Full refresh failed. Latest saved data was reloaded." : "Full refresh failed and updated data could not be reloaded; the prior view is still shown." };
       } else state = { ...state, refreshState: "failed", refreshProgress: undefined, refreshDetail: undefined };
     }
-    draw();
+    drawPreservingScroll();
+    scheduleViewStateSave();
   }
 
   async function toggleCanvasRefresh(enabled: boolean): Promise<void> {
@@ -460,13 +520,21 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
   }
 
   const handlers: DashboardHandlers = {
-    onNavigate(page) { state = { ...state, page }; window.history.replaceState(null, "", `#${page}`); draw(); window.scrollTo({ top: 0, behavior: "instant" }); },
-    onEventMode(eventMode) { state = { ...state, eventMode }; draw(); },
-    onCourseFilter(courseFilter) { state = { ...state, courseFilter }; draw(); },
-    onGradeCourseFilter(gradeCourseFilter) { state = { ...state, gradeCourseFilter }; draw(); },
-    onGradeMode(gradeMode) { state = { ...state, gradeMode }; draw(); },
-    onResourceFilter(resourceFilter) { state = { ...state, resourceFilter }; draw(); },
-    onToggleEvent(id) { state = { ...state, expandedEventIds: replaced(state.expandedEventIds, id, !state.expandedEventIds.has(id)) }; draw(); },
+    onNavigate(page) {
+      if (page === state.page) { restoreScroll(); return; }
+      captureScroll();
+      state = { ...state, page };
+      draw();
+      restoreScroll();
+      skipNextHashScrollCapture = true;
+      window.location.hash = page;
+    },
+    onEventMode(eventMode) { state = { ...state, eventMode }; draw(); scheduleViewStateSave(); },
+    onCourseFilter(courseFilter) { state = { ...state, courseFilter }; draw(); scheduleViewStateSave(); },
+    onGradeCourseFilter(gradeCourseFilter) { state = { ...state, gradeCourseFilter }; draw(); scheduleViewStateSave(); },
+    onGradeMode(gradeMode) { state = { ...state, gradeMode }; draw(); scheduleViewStateSave(); },
+    onResourceFilter(resourceFilter) { state = { ...state, resourceFilter }; draw(); scheduleViewStateSave(); },
+    onToggleEvent(id) { state = { ...state, expandedEventIds: replaced(state.expandedEventIds, id, !state.expandedEventIds.has(id)) }; draw(); scheduleViewStateSave(); },
     onToggleCompletion(id) { void toggleCompletion(id); },
     onToggleDiscussion(id, field) { void toggleDiscussion(id, field); },
     onEditManualGrade(id) {
@@ -474,15 +542,15 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
       const item = state.data.events.find((event) => event.id === id);
       if (item === undefined || item.kind === "class") return;
       state = { ...state, editingManualGrade: { id, draft: item.manualGrade ?? "" }, failedManualGradeIds: replaced(state.failedManualGradeIds, id, false), mutationError: undefined };
-      draw();
+      draw(); scheduleViewStateSave();
     },
     onManualGradeDraft(draft) {
-      if (state.editingManualGrade !== undefined) state = { ...state, editingManualGrade: { ...state.editingManualGrade, draft } };
+      if (state.editingManualGrade !== undefined) { state = { ...state, editingManualGrade: { ...state.editingManualGrade, draft } }; scheduleViewStateSave(); }
     },
     onSaveManualGrade(id) { void saveManualGrade(id); },
-    onCancelManualGrade() { if (state.editingManualGrade !== undefined) { state = { ...state, editingManualGrade: undefined }; draw(); } },
-    onSelectConversation(selectedConversationId) { state = { ...state, selectedConversationId }; draw(); },
-    onSelectRefresh(selectedRefreshId) { state = { ...state, selectedRefreshId }; draw(); },
+    onCancelManualGrade() { if (state.editingManualGrade !== undefined) { state = { ...state, editingManualGrade: undefined }; draw(); scheduleViewStateSave(); } },
+    onSelectConversation(selectedConversationId) { state = { ...state, selectedConversationId }; draw(); scheduleViewStateSave(); },
+    onSelectRefresh(selectedRefreshId) { state = { ...state, selectedRefreshId }; draw(); scheduleViewStateSave(); },
     onRefresh() { void refresh(); },
     onToggleCanvasRefresh(enabled) { void toggleCanvasRefresh(enabled); },
     onCopyAssignment(id) { void copyAssignment(id); },
@@ -492,8 +560,11 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
     onCancelPendingLinkDecision() { cancelPendingLinkDecision(); },
     onResolvePendingLink() { void resolvePendingLink(); },
     onOpenResource(id: string) {
-      state = { ...state, resourceNotice: "Opening the saved library file…" }; draw();
-      void transport.openResource(id).then((action) => { state = { ...state, resourceNotice: action === "downloaded" ? "File saved." : action === "opened" ? "File opened." : "Save cancelled." }; draw(); }, () => { state = { ...state, resourceNotice: "The saved file could not be opened." }; draw(); });
+      const action = resourceActionRunner.run(id);
+      if (action === undefined) return;
+      state = { ...state, resourceActions: { ...state.resourceActions, [id]: { status: "pending", message: "Opening the saved library file…" } } };
+      draw();
+      void action.then((feedback) => { state = { ...state, resourceActions: { ...state.resourceActions, [id]: feedback } }; draw(); });
     },
     onPreparePromotion() { void prepareStorePromotion(); },
     onConfirmPromotion(proofId: string) { void confirmStorePromotion(proofId); },
@@ -505,7 +576,16 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
     ...(desktop?.onExport === undefined ? {} : { onExport: desktop.onExport }),
   };
 
-  window.addEventListener("hashchange", () => { state = { ...state, page: pageFromHash() }; draw(); }, { signal: listeners.signal });
+  window.addEventListener("scroll", captureScroll, { passive: true, signal: listeners.signal });
+  window.addEventListener("pagehide", () => { captureScroll(); saveViewState(); }, { signal: listeners.signal });
+  window.addEventListener("hashchange", () => {
+    const page = pageFromHash();
+    const acknowledgedNavigation = skipNextHashScrollCapture && page === state.page;
+    skipNextHashScrollCapture = false;
+    if (acknowledgedNavigation) return;
+    captureScroll();
+    state = { ...state, page }; draw(); restoreScroll();
+  }, { signal: listeners.signal });
   window.addEventListener("keydown", (event) => {
     if (state.page !== "more" || state.pendingLinkSaving === true || state.data.pendingSourceLinks.length === 0 || event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.key === "Escape" && state.pendingLinkDecision !== undefined) { event.preventDefault(); cancelPendingLinkDecision(); return; }
@@ -522,154 +602,16 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
   draw(); void load(); void pollStartupSnapshot();
   return () => {
     disposed = true;
+    captureScroll();
+    saveViewState();
     listeners.abort();
+    topbarHeightObserver?.disconnect();
+    document.documentElement.style.removeProperty("--topbar-height");
     if (snapshotStatusTimer !== undefined) clearTimeout(snapshotStatusTimer);
     for (const timer of copyTimeouts.values()) clearTimeout(timer);
     copyTimeouts.clear();
     if (avatarUrl !== undefined) URL.revokeObjectURL(avatarUrl);
   };
-}
-
-// --- Desktop first run, recovery, and import ---------------------------------------------------
-
-
-/** Desktop shell: store status first, then the dashboard or the first-run/recovery screen. */
-function mountDesktop(mount: HTMLElement, transport: NativeTransport): void {
-  let disposeDashboard: (() => void) | undefined;
-  let setup: DesktopSetupState | undefined;
-  let frame = 0;
-
-  function drawSetup(): void { if (setup !== undefined) mount.replaceChildren(render(renderDesktopSetup(setup, setupHandlers))); }
-  function scheduleDraw(): void {
-    if (frame !== 0) return;
-    frame = window.requestAnimationFrame(() => { frame = 0; drawSetup(); });
-  }
-  function update(next: Partial<DesktopSetupState>): void { if (setup !== undefined) setup = { ...setup, ...next }; }
-
-  function showDashboard(status: DesktopStoreStatus): void {
-    const storeState = status.state === "authoritative" ? "authoritative" : "preview";
-    const info: DesktopStoreInfo = { storeState, dataFolder: status.dataFolder, importedAt: status.importedAt, canvasRefreshEnabled: status.canvasRefreshEnabled, refreshAvailable: status.refreshAvailable, icalRefreshAvailable: status.icalRefreshAvailable, browserRefreshAvailable: status.browserRefreshAvailable, snapshotInProgress: status.snapshotInProgress, snapshotProgress: status.snapshotProgress, warning: status.problem };
-    setup = undefined;
-    // An authoritative store is never replaced by import, so only a preview offers replacement.
-    disposeDashboard = mountDashboard(mount, transport, { info, onRecovery: () => startRecovery(status), onExport: () => { startRecovery(status); void runExport(); }, ...(storeState === "preview" ? { onReplacePreview: () => startSetup(status, true) } : {}) });
-  }
-
-  function startRecovery(status: DesktopStoreStatus): void {
-    disposeDashboard?.();
-    disposeDashboard = undefined;
-    setup = { status, replacePreview: false, step: "idle", recoveryMode: true, snapshots: [] };
-    drawSetup();
-    void transport.listSnapshots().then((snapshots) => { if (setup?.recoveryMode === true) { update({ snapshots }); drawSetup(); } }, (error: unknown) => { if (setup?.recoveryMode === true) { update({ error: setupError(error) }); drawSetup(); } });
-  }
-
-  function startSetup(status: DesktopStoreStatus, replacePreview: boolean): void {
-    disposeDashboard?.();
-    disposeDashboard = undefined;
-    setup = { status, replacePreview, step: "idle" };
-    drawSetup();
-  }
-
-  async function showCurrent(): Promise<void> {
-    let status: DesktopStoreStatus;
-    try {
-      status = await transport.storeStatus();
-    } catch (error) {
-      mount.replaceChildren(render(setupPanel("Desktop app", "Due Good could not reach its app store", [element("p", { role: "alert" }, setupError(error).message)])));
-      return;
-    }
-    if (status.availability === "ready" && (status.state === "preview" || status.state === "authoritative")) showDashboard(status);
-    else if (status.availability === "ready" && (status.state === "damaged" || status.state === "unknown")) startRecovery(status);
-    else startSetup(status, false);
-  }
-
-  async function runRestore(id: string): Promise<void> {
-    if (setup?.recoveryMode !== true || setup.recoveryBusy === true || !setup.snapshots?.some((snapshot) => snapshot.id === id)) return;
-    update({ recoveryBusy: true, recoveryMessage: "Archiving the current store and restoring the snapshot…", error: undefined }); drawSetup();
-    try { await transport.restoreSnapshot(id); await showCurrent(); }
-    catch (error) { update({ recoveryBusy: false, error: setupError(error), recoveryMessage: undefined }); drawSetup(); }
-  }
-
-  async function runExport(): Promise<void> {
-    if (setup?.recoveryMode !== true || setup.recoveryBusy === true) return;
-    update({ recoveryBusy: true, recoveryMessage: "Choose an export folder…", recoveryFilesDone: 0, error: undefined }); drawSetup();
-    try {
-      const result = await transport.exportLegacy((progress) => { if (setup?.recoveryMode === true) { update({ recoveryMessage: "Copying rollback files…", recoveryFilesDone: progress.filesDone }); scheduleDraw(); } });
-      update({ recoveryBusy: false, recoveryMessage: "Rollback folder exported.", recoveryFilesDone: result.filesDone });
-    } catch (error) { update({ recoveryBusy: false, error: setupError(error), recoveryMessage: undefined }); }
-    drawSetup();
-  }
-
-  async function dryRun(): Promise<void> {
-    update({ step: "checking", report: undefined, error: undefined }); drawSetup();
-    try {
-      const report = await transport.dryRunImport();
-      update({ step: "ready", report });
-    } catch (error) {
-      update({ step: "idle", error: setupError(error) });
-    }
-    drawSetup();
-  }
-
-  async function choose(): Promise<void> {
-    if (setup === undefined || setup.step === "choosing" || setup.step === "checking" || setup.step === "importing") return;
-    update({ step: "choosing", error: undefined }); drawSetup();
-    let selected = false;
-    try {
-      selected = await transport.chooseLegacyRoot();
-    } catch (error) {
-      update({ step: "idle", error: setupError(error) }); drawSetup();
-      return;
-    }
-    if (setup === undefined) return;
-    update({ status: { ...setup.status, legacyRootSelected: selected } });
-    if (!selected) { update({ step: "idle" }); drawSetup(); return; }
-    await dryRun();
-  }
-
-  async function runImport(): Promise<void> {
-    if (setup === undefined || setup.step !== "ready" || setup.report?.wouldImport !== true) return;
-    const replacePreview = setup.replacePreview;
-    update({ step: "importing", progress: undefined, error: undefined }); drawSetup();
-    try {
-      await transport.importLegacyRoot(replacePreview, (progress) => {
-        if (setup?.step !== "importing") return;
-        update({ progress }); scheduleDraw();
-      });
-    } catch (error) {
-      // The selection is kept after a failure, so "Check again" re-runs the dry run.
-      update({ step: "idle", progress: undefined, report: undefined, error: setupError(error) });
-      drawSetup();
-      return;
-    }
-    if (frame !== 0) { window.cancelAnimationFrame(frame); frame = 0; }
-    await showCurrent();
-  }
-
-  async function connectCalendar(): Promise<void> {
-    if (setup?.status.state !== "empty" || setup.step === "connecting") return;
-    update({ step: "connecting", calendarProgress: undefined, error: undefined }); drawSetup();
-    try {
-      await transport.startIcalRefresh((calendarProgress) => {
-        if (setup?.step === "connecting") { update({ calendarProgress }); scheduleDraw(); }
-      });
-      if (frame !== 0) { window.cancelAnimationFrame(frame); frame = 0; }
-      await showCurrent();
-    } catch (error) {
-      update({ step: "idle", calendarProgress: undefined, error: setupError(error) }); drawSetup();
-    }
-  }
-
-  const setupHandlers: DesktopSetupHandlers = {
-    onConnectCalendar() { void connectCalendar(); },
-    onChoose() { void choose(); },
-    onRecheck() { if (setup !== undefined && setup.step !== "importing") void dryRun(); },
-    onImport() { void runImport(); },
-    onCancel() { void showCurrent(); },
-    onRestoreSnapshot(id) { void runRestore(id); },
-    onExport() { void runExport(); },
-  };
-
-  void showCurrent();
 }
 
 export function mount(): void {
@@ -678,5 +620,5 @@ export function mount(): void {
     mountEl.replaceChildren(render(setupPanel("Desktop app", "Due Good requires the desktop app", [element("p", {}, "Open Due Good in its Tauri desktop app to view or import coursework.")])));
     return;
   }
-  mountDesktop(mountEl, createNativeTransport((command, args) => invoke(command, args), (onMessage) => new Channel<unknown>(onMessage)));
+  mountDesktop(mountEl, createNativeTransport((command, args) => invoke(command, args), (onMessage) => new Channel<unknown>(onMessage)), mountDashboard);
 }

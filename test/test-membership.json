@@ -6,7 +6,12 @@
       "test/ui/browser-freshness.test.ts",
       "test/ui/browser-import-transport.test.ts",
       "test/ui/native-store-export-transport.test.ts",
-      "test/ui/full-refresh.test.ts"
+      "test/ui/full-refresh.test.ts",
+      "test/ui/recovery-panel.test.ts",
+      "test/ui/library-resource-action.test.ts",
+      "test/ui/dashboard-view-state.test.ts",
+      "test/ui/desktop-transport.test.ts",
+      "test/ui/desktop-setup.test.ts"
     ]
   },
   "container": {
@@ -123,7 +128,7 @@
       "src-tauri/src/clipboard.rs": 1,
       "src-tauri/src/commands.rs": 20,
       "src-tauri/src/commands_browser_tests.rs": 3,
-      "src-tauri/src/commands_full_refresh_tests.rs": 8,
+      "src-tauri/src/commands_full_refresh_tests.rs": 10,
       "src-tauri/src/config.rs": 10,
       "src-tauri/src/documents.rs": 4,
       "src-tauri/src/downloads_tests.rs": 6,
@@ -162,12 +167,15 @@
     "inclusiveRunner": "test:all",
     "tests": [
       "test/native/playwright/desktop-first-run.spec.ts",
+      "test/native/playwright/desktop-recovery-state.spec.ts",
       "test/native/playwright/canvas-browser-reader.spec.ts",
       "test/native/playwright/canvas-browser-auth-download.spec.ts",
       "test/native/playwright/canvas-browser-auth-production.spec.ts",
       "test/native/playwright/timeline-headers.spec.ts",
       "test/native/playwright/timeline-course-names.spec.ts",
-      "test/native/playwright/refresh-pages.spec.ts"
+      "test/native/playwright/refresh-pages.spec.ts",
+      "test/native/playwright/library-actions.spec.ts",
+      "test/native/playwright/dashboard-view-state.spec.ts"
     ]
   }
 }

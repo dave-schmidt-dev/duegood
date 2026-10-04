@@ -2,7 +2,7 @@
 
 Due Good is a macOS Tauri app for private coursework. It keeps the coursework store in the app's fixed local data folder and uses native commands for reads, edits, import, recovery, snapshots, and Canvas refresh. The embedded `src/ui` WebView is the desktop interface; there is no standalone browser product.
 
-The dashboard provides Timeline, Grades, Inbox, Completed, Courses, Library, Activity, and More. Timeline class-name headers stay visible while scrolling and align with each day's date and marker columns; painted course dividers continue through the header and body. Recovery and Export are in More. Date-only assignment and discussion due dates display at 11:59 p.m. in the owner's default timezone; Canvas source timestamps stay unchanged, and class meetings with unknown clocks remain time-unknown. Completion, discussion post/reply checks, and notes are local student state. Canvas submission and grades remain separate source facts. Inbox is read-only. An incomplete refresh retains existing coursework and reports the limit.
+The dashboard provides Timeline, Grades, Inbox, Completed, Courses, Library, Activity, and More. Timeline class-name headers stay visible while scrolling and align with each day's date and marker columns; painted course dividers continue through the header and body. Recovery and Export are in More. Date-only assignment and discussion due dates display at 11:59 p.m. in the owner's default timezone; Canvas source timestamps stay unchanged, and class meetings with unknown clocks remain time-unknown. Completion, discussion post/reply checks, and notes are local student state. Canvas submission and grades remain separate source facts. Inbox is read-only. An incomplete refresh retains existing coursework and reports the limit. Refresh diagnostics preserve bounded reason counts and distinguish Canvas coverage gaps from calendar-held items. Startup and recovery reads show loading or retry states; Library file actions are scoped to one resource, and bounded local view state survives navigation and reload.
 
 ## Current state
 
@@ -15,7 +15,7 @@ The dashboard provides Timeline, Grades, Inbox, Completed, Courses, Library, Act
 
 The all-task candidate is in preparation. Planned changes include compatible Rust security-lock updates, anchored same-handle import reads and staged deletion, truthful retained-calendar labels for rolling-feed omissions, atomic snapshot publication, restoration of the existing upcoming rail, and cold installed-path plus bundle-ID launch proofs that keep rollback bytes until both proofs pass. The unresolved `glib` alert remains subject to upstream Tauri/GTK/WebKit compatibility and macOS target-exposure evidence; it is not treated as fixed by forcing an incompatible dependency.
 
-The live acceptance path requires a populated-store macOS verifier that attaches to the running installed app, performs a full authenticated refresh, and checks Timeline, Grades, Inbox, Done, Courses, Library, Activity, and More. Private expected data and raw UI evidence stay local and temporary; only content-free outcomes are retained. Source checks, installation, live refresh, owner acceptance, and legacy retirement are separate gates. See [`docs/ALL-FIXES-FINAL-PLAN-20261002.md`](docs/ALL-FIXES-FINAL-PLAN-20261002.md) and [`docs/DESKTOP-CUTOVER.md`](docs/DESKTOP-CUTOVER.md).
+The local UI coverage uses synthetic unit and Playwright fixtures. Installed and live populated-store acceptance remain separate gates: the verifier must attach to the running installed app, perform a full authenticated refresh, and check Timeline, Grades, Inbox, Done, Courses, Library, Activity, and More. Private expected data and raw UI evidence stay local and temporary; only content-free outcomes are retained. Source checks, installation, live refresh, owner acceptance, and legacy retirement are separate gates. See [`docs/ALL-FIXES-FINAL-PLAN-20261002.md`](docs/ALL-FIXES-FINAL-PLAN-20261002.md) and [`docs/DESKTOP-CUTOVER.md`](docs/DESKTOP-CUTOVER.md).
 
 ## Compatibility and versions
 
@@ -23,7 +23,7 @@ Patch releases preserve the existing local coursework store, Canvas capture sche
 
 ## First run and recovery
 
-On an empty store, use **Connect calendar** in the native app. A successful, useful feed creates the local store without a Canvas API token or legacy-folder import. Calendar data does not contain grades, messages, or progress saved in an older Due Good folder. The older private source stays untouched. Damaged-store recovery and guarded preview replacement remain separate paths.
+On an empty store, use **Connect calendar** in the native app. A successful, useful feed creates the local store without a Canvas API token or legacy-folder import. Calendar data does not contain grades, messages, or progress saved in an older Due Good folder. The older private source stays untouched. Restoring a recovery point requires explicit confirmation; cancellation leaves the current app store unchanged. Damaged-store recovery and guarded preview replacement remain separate paths.
 
 The private coursework, grades, messages, feed URL, credentials, and screenshots do not belong in this repository, fixtures, CI output, or public issues. Public fixtures are synthetic.
 
