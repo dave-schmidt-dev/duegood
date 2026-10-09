@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Run screen-seizing checks (XCUITest smoke, production launch check, live populated-store verifier, and installer cold-launch proofs) only before a release, at an owner-qualification install, or for a walkthrough. Git hooks and phase gates stay headless, and the hook and test-membership checks now reject these runners in hooks and `test:all`.
+
 ### Fixed
 
 - Accept verified archived Canvas receipt statuses, separate Canvas coverage gaps from calendar held events, preserve bounded capture-reason counts, and omit nonapplicable quiz children from incomplete-refresh reporting.

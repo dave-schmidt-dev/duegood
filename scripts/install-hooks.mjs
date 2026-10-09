@@ -6,9 +6,12 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const checkOnly = process.argv.includes("--check");
+// Screen-seizing checks (XCUITest, installed-app launch, live native verifier) run only at a
+// release, owner-qualification install, or walkthrough; Git hooks stay headless.
+const screenSeizing = ["test:tauri:macos", "check:production-launch", "check:live-native", "install:tauri", "xcodebuild"];
 const hooks = [
-  ["pre-commit", ["npm run lint", "npm run deadcode"], ["test:all"]],
-  ["pre-push", ["npm run test:all"], ["npm run lint", "npm run deadcode"]],
+  ["pre-commit", ["npm run lint", "npm run deadcode"], ["test:all", ...screenSeizing]],
+  ["pre-push", ["npm run stage:tauri -- --skip-preflight --test test:all"], ["npm run lint", "npm run deadcode", ...screenSeizing]],
 ];
 
 function git(...args) {
@@ -45,4 +48,4 @@ for (const [name, required, forbidden] of hooks) {
   }
 }
 
-console.log("Verified pre-commit lint/dead-code and pre-push test:all hooks.");
+console.log("Verified pre-commit lint/dead-code and pre-push staged test:all hooks, with no screen-seizing checks.");

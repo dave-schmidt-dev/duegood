@@ -15,7 +15,7 @@ The dashboard provides Timeline, Grades, Inbox, Completed, Courses, Library, Act
 
 The all-task candidate is in preparation. Planned changes include compatible Rust security-lock updates, anchored same-handle import reads and staged deletion, truthful retained-calendar labels for rolling-feed omissions, atomic snapshot publication, restoration of the existing upcoming rail, and cold installed-path plus bundle-ID launch proofs that keep rollback bytes until both proofs pass. The unresolved `glib` alert remains subject to upstream Tauri/GTK/WebKit compatibility and macOS target-exposure evidence; it is not treated as fixed by forcing an incompatible dependency.
 
-The local UI coverage uses synthetic unit and Playwright fixtures. Installed and live populated-store acceptance remain separate gates: the verifier must attach to the running installed app, perform a full authenticated refresh, and check Timeline, Grades, Inbox, Done, Courses, Library, Activity, and More. Private expected data and raw UI evidence stay local and temporary; only content-free outcomes are retained. Source checks, installation, live refresh, owner acceptance, and legacy retirement are separate gates. See [`docs/ALL-FIXES-FINAL-PLAN-20261002.md`](docs/ALL-FIXES-FINAL-PLAN-20261002.md) and [`docs/DESKTOP-CUTOVER.md`](docs/DESKTOP-CUTOVER.md).
+The local UI coverage uses synthetic unit and Playwright fixtures. Installed and live populated-store acceptance remain separate milestone gates, run at a release or owner-qualification install: the verifier must attach to the running installed app, perform a full authenticated refresh, and check Timeline, Grades, Inbox, Done, Courses, Library, Activity, and More. Private expected data and raw UI evidence stay local and temporary; only content-free outcomes are retained. Source checks, installation, live refresh, owner acceptance, and legacy retirement are separate gates. See [`docs/ALL-FIXES-FINAL-PLAN-20261002.md`](docs/ALL-FIXES-FINAL-PLAN-20261002.md) and [`docs/DESKTOP-CUTOVER.md`](docs/DESKTOP-CUTOVER.md).
 
 ## Compatibility and versions
 
@@ -79,6 +79,12 @@ Stages use a fixed, gitignored `.stage/<purpose>` directory and share the projec
 Keep reusable Python caches in `.cache/uv` and `.cache/harvest-uv` by setting `UV_CACHE_DIR` to the matching absolute project path when running those tools. Do not create cache directories in `/private/tmp`.
 
 The project installer is `npm run install:tauri` after the staged build and asset checks pass. Launch the installed app by bundle ID, `open -b com.zerodelta.duegood`, so LaunchServices selects the registered app. Installation, launch, and live feed acceptance are separate checks. See [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md) and [`docs/DESKTOP-CUTOVER.md`](docs/DESKTOP-CUTOVER.md) for the remaining gates.
+
+## Validation cadence
+
+Day-to-day work and phase gates are headless. The pre-commit hook runs lint and dead-code checks; the pre-push hook runs `test:all` in a disposable staged candidate. `test:all` covers type, lint, unit, model, render, Rust, and headless Playwright checks against the local test server, and it never opens the desktop app.
+
+Checks that take over the screen run only at a milestone: before a release, at an install for owner qualification, or for a walkthrough. These are `npm run install:tauri` (cold-launch proofs), `npm run check:production-launch`, `npm run test:tauri:macos`, and the populated-store `npm run check:live-native` verifier. No hook or phase gate runs them or requires a record that they ran. Keep this native suite small: launch, quit, and one or two end-to-end journeys; move view- or model-only assertions to headless tests.
 
 ## Owner-supplied class times
 

@@ -223,9 +223,9 @@ The phase ends with that attended cutover: rehearsal, rollback drill, final cuto
 the legacy refresh consumer and its launcher entry points once the desktop app is accepted.
 
 Gate: the staged full suite plus the Rust test suite pass; the live checkout's `dist` digests and
-service PID are unchanged across every staged gate run; a headless smoke and a GUI smoke both pass under
-a dedicated test bundle identifier, plus a launch-only check of the production identifier; and the owner
-accepts the result.
+service PID are unchanged across every staged gate run; a headless smoke passes under a dedicated test
+bundle identifier; at the attended cutover install, a GUI smoke under that identifier and a launch-only
+check of the production identifier pass; and the owner accepts the result.
 Notarization, certification, deployment/publication, trust installation, and Windows and Linux installers stay outside this phase; any Windows build is unsigned. The current owner instruction separately authorizes committing and pushing the tested source candidate to public `main`.
 
 ## Red boundaries
@@ -430,3 +430,13 @@ Audit18 machine flows passed31/31 and Browser18 passed112/112, but captain full-
 ### CLEAR action regression fixture correction20 (2026-10-04)
 
 Browser19 passed112/113; the new action test assumed all event rows include Copy assignment, but the established class-meeting renderer deliberately shows Details only. Bounded contract `.logs/all-fixes-20261002/clear/task-CLEAR-ACTION-TEST-20.json` permits only correcting the expected labels by actual card kind in the registered spec, retaining every class/assignment row and all geometry/no-overlap/clipping/usable-bound assertions at all eight width/course configurations. App source and assets remain unchanged. Rebind20 and execute full browser/CLEAR checks; historical19 results remain nonfinal. Existing Switchyard failure latch authorizes the native worker fallback; no new route or publication authority.
+
+## 2026-10-04: Screen-seizing verification cadence
+
+Owner policy change: XCUITest runs, installed-app launches, and any other check that takes over the screen run only at a milestone: before a release, at an install for owner qualification, or for a walkthrough. They never run per phase, commit, or push, and no hook or phase gate requires them or a record that they ran. Phase gates and hooks use headless equivalents: `test:all` in a staged candidate, which includes headless Playwright against the local test server. `INVARIANTS.md` INV-15 records this; `npm run hooks:check` rejects native runners in the hooks, and `npm run test:membership` keeps them and `install:tauri` out of `test:all`. Milestone-only steps: `npm run install:tauri` (cold-launch proofs), `npm run check:production-launch`, `npm run test:tauri:macos`, and `npm run check:live-native`.
+
+Headless conversion candidates. The native suite should keep only launch, quit, and one or two end-to-end journeys. These XCUITest assertions in `test/native/macos/DueGoodDesktopUITests.swift` check only view or model state:
+
+- [ ] `testFirstRunCalendarConnectionWithoutLegacyImport`: its first-run copy and controls (**Connect calendar** present; **Choose legacy folder…** and **Refresh** absent) duplicate `test/native/playwright/desktop-first-run.spec.ts`. Cover "an empty store stays in first-run after a relaunch" in Rust with two `AppState::open` calls on one empty temp root, as in `src-tauri/src/phase4_smoke.rs`. Then reduce the native case to launch and quit.
+- [ ] `testProductionIdentifierLaunchOnly`: the setup copy ("separate from a Canvas API token") and the `~/Library/` display root are render and model facts. Assert the copy in `desktop-first-run.spec.ts` (already partly covered) and the production display-root formatting in a `src-tauri/src/config.rs` unit test. Then keep the native case to launching the production identifier at the milestone.
+- [ ] `testLiveRefreshAllPagesInPopulatedStore`: the refresh status transitions it polls for ("Canvas refresh is in progress", disabled **Refreshing…**, then "Full refresh complete." / "Full refresh partial." / "Full refresh failed." / the reload-failed note) and the eight "Due Good <page> page" regions with headings are view state. Assert the exact strings and all eight regions with synthetic data in `test/native/playwright/refresh-pages.spec.ts`. Keep the native case as the single private-data end-to-end journey at the milestone.
