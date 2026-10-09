@@ -134,6 +134,28 @@ describe("stageCandidate", () => {
     expect(Object.keys(result.receipt.files).sort()).toEqual(expectedCandidates);
   });
 
+  it("ignores the pushing repository's Git location variables that a worktree hook inherits", async () => {
+    const source = await makeSourceRepo();
+    const pushing = await makeSourceRepo();
+    const pushingHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: pushing, encoding: "utf8" });
+    const inherited = { GIT_DIR: path.join(pushing, ".git"), GIT_INDEX_FILE: path.join(pushing, ".git", "index") };
+    const saved = Object.fromEntries(Object.keys(inherited).map((name) => [name, process.env[name]]));
+    Object.assign(process.env, inherited);
+    try {
+      const destination = await freshDestination();
+      const result = await stageCandidate({ source, destination });
+      expect(result.receipt.stagedMatchesCandidate).toBe(true);
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+    const pushingGit = (args: string[]) => execFileSync("git", args, { cwd: pushing, encoding: "utf8" }).trim();
+    expect(pushingGit(["config", "--get", "core.bare"])).toBe("false");
+    expect(pushingGit(["rev-parse", "HEAD"])).toBe(pushingHead.trim());
+  });
+
   it("does not stage the compatibility target symlink or shared Cargo cache", async () => {
     const source = await makeSourceRepo();
     const outside = await makeTempDir("duegood-cargo-cache-");
