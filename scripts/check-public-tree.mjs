@@ -15,7 +15,7 @@ const bannedNames = new Set([
 ]);
 const bannedExtensions = new Set([".pem", ".key", ".db", ".sqlite", ".sqlite3"]);
 const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
-const allowedImageRoots = ["test/browser/__screenshots__/", "src-tauri/icons/"];
+const allowedImageRoots = ["test/browser/__screenshots__/", "src-tauri/icons/", "docs/motifs/"];
 const privateReferenceHashes = new Map([
   ["13485099d0cb205d4108f0de36b510059035b4bcae9f785b65e253c8d09b191a", "supplied design reference image"],
   ["248255d61f8219484333a86261e23780bba1ae87e7ac5db51a947fbe481689e8", "supplied design reference image"],

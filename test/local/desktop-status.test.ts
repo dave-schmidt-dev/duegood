@@ -1,7 +1,9 @@
-import { readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { scanPath } from "../../scripts/check-public-tree.mjs";
+import { afterEach, describe, expect, it } from "vitest";
+import { scanContent, scanPath } from "../../scripts/check-public-tree.mjs";
+import { createOwnedScratchRoot } from "../../scripts/owned-scratch-root.mjs";
 import { checkPlanAbsences, checklistItems, validateDesktopPhase1Section } from "../../scripts/check-desktop-status.mjs";
 
 const ROOT = path.resolve(__dirname, "..", "..");
@@ -112,5 +114,124 @@ describe("check-public-tree.mjs src-tauri/icons allowance", () => {
 
   it("still rejects a PNG outside the allowed roots", () => {
     expect(scanPath("random/icon.png")).toBe("image outside the synthetic browser snapshot directory");
+  });
+});
+
+describe("check-public-tree.mjs docs/motifs allowance", () => {
+  it("allows a motif PNG under the exact docs/motifs/ path", () => {
+    expect(scanPath("docs/motifs/2026-10-12/frames/library-navigation-stacked-books-dark.png")).toBeNull();
+  });
+
+  it("still rejects an image under the adjacent docs/motifs-private/ prefix", () => {
+    expect(scanPath("docs/motifs-private/2026-10-12/frames/icon.png")).toBe("image outside the synthetic browser snapshot directory");
+  });
+
+  it("still rejects images under other adjacent prefixes", () => {
+    for (const candidate of ["docs/motifs2/icon.png", "notdocs/motifs/icon.png", "docs/motifs.png"]) {
+      expect(scanPath(candidate)).toBe("image outside the synthetic browser snapshot directory");
+    }
+  });
+
+  it("still rejects private content even when the path is permitted", () => {
+    const privateKeyMarker = ["BEGIN", "PRIVATE", "KEY"].join(" ");
+    const tokenName = ["CANVAS", "API", "TOKEN"].join("_");
+    expect(scanPath("docs/motifs/2026-10-12/frames/library-navigation-stacked-books-dark.png")).toBeNull();
+    expect(scanContent(privateKeyMarker)).toBe("explicit secret marker");
+    expect(scanContent(`${tokenName} = "abcdef1234567890"`)).toBe("explicit secret marker");
+  });
+});
+
+const SYNTHETIC_MOTIF_PATH = "docs/motifs/2026-10-12/synthetic-motif.png";
+const SYNTHETIC_SENTINEL_BYTES = Buffer.from("synthetic-public-motif-sentinel-not-private-bytes\n", "utf8");
+const SYNTHETIC_MOTIF_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+const FIXTURE_GIT_ENVIRONMENT: NodeJS.ProcessEnv = {
+  ...process.env,
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_GLOBAL: "/dev/null",
+};
+
+function syntheticCryptoPreloadSource(): string {
+  return [
+    '"use strict";',
+    'const crypto = require("node:crypto");',
+    'const { syncBuiltinESMExports } = require("node:module");',
+    `const SYNTHETIC_SENTINEL = Buffer.from(${JSON.stringify(SYNTHETIC_SENTINEL_BYTES.toString("utf8"))}, "utf8");`,
+    'const KNOWN_BLOCKED_HASH = "13485099d0cb205d4108f0de36b510059035b4bcae9f785b65e253c8d09b191a";',
+    "const realCreateHash = crypto.createHash;",
+    "crypto.createHash = function syntheticAwareCreateHash(algorithm, options) {",
+    "  const hash = realCreateHash.call(this, algorithm, options);",
+    '  if (String(algorithm).toLowerCase() !== "sha256") return hash;',
+    "  const chunks = [];",
+    "  const realUpdate = hash.update.bind(hash);",
+    "  const realDigest = hash.digest.bind(hash);",
+    "  hash.update = function syntheticAwareUpdate(data, encoding) {",
+    '    chunks.push(typeof data === "string" ? Buffer.from(data, encoding) : Buffer.from(data));',
+    "    return realUpdate(data, encoding);",
+    "  };",
+    "  hash.digest = function syntheticAwareDigest(encoding) {",
+    "    const bytes = Buffer.concat(chunks);",
+    "    if (bytes.length === SYNTHETIC_SENTINEL.length && bytes.equals(SYNTHETIC_SENTINEL)) return KNOWN_BLOCKED_HASH;",
+    "    return realDigest(encoding);",
+    "  };",
+    "  return hash;",
+    "};",
+    "syncBuiltinESMExports();",
+  ].join("\n");
+}
+
+function buildPublicTreeFixture(scratchRoot: string, motifBytes: Buffer): { fixtureRoot: string; preloadPath: string } {
+  const fixtureRoot = path.join(scratchRoot, "fixture");
+  const motifPath = path.join(fixtureRoot, ...SYNTHETIC_MOTIF_PATH.split("/"));
+  mkdirSync(path.dirname(motifPath), { recursive: true });
+  mkdirSync(path.join(fixtureRoot, "scripts"), { recursive: true });
+  copyFileSync(path.join(ROOT, "scripts", "check-public-tree.mjs"), path.join(fixtureRoot, "scripts", "check-public-tree.mjs"));
+  writeFileSync(motifPath, motifBytes);
+  const preloadPath = path.join(fixtureRoot, "synthetic-crypto-preload.cjs");
+  writeFileSync(preloadPath, syntheticCryptoPreloadSource());
+  execFileSync("git", ["init", "--quiet", "-b", "main"], { cwd: fixtureRoot, env: FIXTURE_GIT_ENVIRONMENT, stdio: "pipe" });
+  execFileSync("git", ["add", "--all"], { cwd: fixtureRoot, env: FIXTURE_GIT_ENVIRONMENT, stdio: "pipe" });
+  return { fixtureRoot, preloadPath };
+}
+
+function runPublicTreeCli(fixture: { fixtureRoot: string; preloadPath: string }) {
+  return spawnSync(process.execPath, ["--require", fixture.preloadPath, "scripts/check-public-tree.mjs"], {
+    cwd: fixture.fixtureRoot,
+    encoding: "utf8",
+    env: FIXTURE_GIT_ENVIRONMENT,
+    timeout: 30_000,
+  });
+}
+
+describe("check-public-tree.mjs CLI content scanning", () => {
+  const temporaryRoots: Array<ReturnType<typeof createOwnedScratchRoot>> = [];
+
+  afterEach(() => {
+    for (const scratch of temporaryRoots.splice(0)) scratch.cleanup();
+  });
+
+  function buildFixture(motifBytes: Buffer): { fixtureRoot: string; preloadPath: string } {
+    const scratch = createOwnedScratchRoot("public-tree-cli");
+    temporaryRoots.push(scratch);
+    return buildPublicTreeFixture(scratch.root, motifBytes);
+  }
+
+  it("rejects a known blocked reference digest under the allowed docs/motifs/ path", () => {
+    const fixture = buildFixture(SYNTHETIC_SENTINEL_BYTES);
+    expect(scanPath(SYNTHETIC_MOTIF_PATH)).toBeNull();
+    const result = runPublicTreeCli(fixture);
+    expect(result.status).not.toBe(0);
+    const output = `${result.stdout}${result.stderr}`;
+    expect(output).toContain(SYNTHETIC_MOTIF_PATH);
+    expect(output).toContain("supplied design reference image");
+  });
+
+  it("passes a positive synthetic motif PNG through the same CLI", () => {
+    const fixture = buildFixture(SYNTHETIC_MOTIF_PNG);
+    const result = runPublicTreeCli(fixture);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Public-tree check passed");
   });
 });
