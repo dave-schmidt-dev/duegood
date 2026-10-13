@@ -1,0 +1,358 @@
+{
+  "app": "duegood",
+  "approvedOn": "2026-10-11",
+  "sourcePage": "/Users/dave/Documents/Projects/apple_developer/documents/2026-10-11-app-motif-comparison.html#app-7 (section id=\"app-7\")",
+  "themes": [
+    "dark"
+  ],
+  "elements": [
+    {
+      "id": "refresh-book-trace",
+      "title": "Refresh in progress: open book with a gently traced page",
+      "ownerKey": null,
+      "ownerSelection": "accepted 2026-10-11 (Due Good/Argus)",
+      "kind": "animated",
+      "multicolor": false,
+      "sizes": {
+        "20": {
+          "selector": "#app-7 .rows .comparison:nth-child(1) .proposed .tiny svg.glyph",
+          "displayPx": {
+            "width": 20,
+            "height": 20
+          },
+          "viewBox": "0 0 64 64",
+          "outsideViewBox": false,
+          "markup": "own markup",
+          "a11yLabel": null
+        },
+        "64": {
+          "selector": "#app-7 .rows .comparison:nth-child(1) .proposed .well svg.glyph",
+          "displayPx": {
+            "width": 64,
+            "height": 64
+          },
+          "viewBox": "0 0 64 64",
+          "outsideViewBox": false,
+          "markup": "own markup",
+          "a11yLabel": null
+        }
+      },
+      "colors": [
+        {
+          "layer": "path",
+          "prop": "stroke",
+          "cssVar": "--accent",
+          "cssVarCandidates": [
+            "--accent"
+          ],
+          "dark": "#b08d57",
+          "light": null
+        },
+        {
+          "layer": "trace",
+          "prop": "stroke",
+          "cssVar": "--accent",
+          "cssVarCandidates": [
+            "--accent"
+          ],
+          "dark": "#b08d57",
+          "light": null
+        }
+      ],
+      "a11yLabel": "Refresh in progress: open book with a gently traced page",
+      "assets": {
+        "svg": {
+          "20": {
+            "dark": "assets/refresh-book-trace-20-dark.svg"
+          },
+          "64": {
+            "dark": "assets/refresh-book-trace-64-dark.svg"
+          }
+        },
+        "template": {
+          "20": "assets/refresh-book-trace-20-template.svg",
+          "64": "assets/refresh-book-trace-64-template.svg"
+        },
+        "frames": {
+          "dark": "frames/refresh-book-trace-dark.png"
+        }
+      },
+      "inkColors": [
+        "#b08d57"
+      ],
+      "a11yLabelSource": "title (page svg has no aria-label)",
+      "motion": {
+        "cycleMs": 2000,
+        "sampleTimesMs": [
+          0,
+          250,
+          500,
+          1000,
+          1500,
+          1900,
+          1999,
+          2000
+        ],
+        "auditSampleTimesMs": [
+          0,
+          250,
+          500,
+          1000,
+          1500,
+          1900,
+          1999,
+          2000
+        ],
+        "designContractTimesMs": [],
+        "sampleTimesNote": "sampleTimesMs = audit times merged with the design-contract times, limited to one cycle (times past cycleMs only repeat the loop)",
+        "drivenBy": "css",
+        "seekSeed": 0,
+        "phases": null,
+        "reducedMotion": "Reduced motion removes the animation; the .active dash pattern (10 on, 7 off) stays on the page lines at offset 0. The 20 px check mirror has no .active class in the gallery, so its trace lines are solid.",
+        "motionNote": null,
+        "animations": [
+          {
+            "name": "trace",
+            "kind": "CSSAnimation",
+            "keyframes": [
+              {
+                "offset": 0,
+                "strokeDashoffset": "0px"
+              },
+              {
+                "offset": 1,
+                "strokeDashoffset": "-34px"
+              }
+            ],
+            "timing": {
+              "durationMs": 2000,
+              "delayMs": 0,
+              "iterations": "infinite",
+              "easing": "linear",
+              "direction": "normal",
+              "fill": "none"
+            },
+            "targets": [
+              "path.trace"
+            ]
+          }
+        ],
+        "contract": null,
+        "auditVariant": "book-trace-accepted",
+        "seekNote": "frames are captured with window.designReview.seek(t, 0) (generic Animation.currentTime fallback on Due Good/Argus); seed 0 makes t equal the cycle time on Wilted and Pantry, where the audit seed 42 would add 546 ms / 42 ms."
+      },
+      "themeNote": "Page has a single (dark) surface; light is not exported."
+    },
+    {
+      "id": "timeline-navigation-book-spine",
+      "title": "Timeline navigation: book spine with dated timeline dots",
+      "ownerKey": null,
+      "ownerSelection": "accepted 2026-10-11 (Due Good/Argus)",
+      "kind": "static",
+      "multicolor": false,
+      "sizes": {
+        "20": {
+          "selector": "#app-7 .rows .comparison:nth-child(2) .proposed .tiny svg.glyph",
+          "displayPx": {
+            "width": 20,
+            "height": 20
+          },
+          "viewBox": "0 0 64 64",
+          "outsideViewBox": false,
+          "markup": "own markup",
+          "a11yLabel": null
+        },
+        "64": {
+          "selector": "#app-7 .rows .comparison:nth-child(2) .proposed .well svg.glyph",
+          "displayPx": {
+            "width": 64,
+            "height": 64
+          },
+          "viewBox": "0 0 64 64",
+          "outsideViewBox": false,
+          "markup": "own markup",
+          "a11yLabel": null
+        }
+      },
+      "colors": [
+        {
+          "layer": "path",
+          "prop": "stroke",
+          "cssVar": "--accent",
+          "cssVarCandidates": [
+            "--accent"
+          ],
+          "dark": "#b08d57",
+          "light": null
+        },
+        {
+          "layer": "circle",
+          "prop": "stroke",
+          "cssVar": "--accent",
+          "cssVarCandidates": [
+            "--accent"
+          ],
+          "dark": "#b08d57",
+          "light": null
+        }
+      ],
+      "a11yLabel": "Timeline navigation: book spine with dated timeline dots",
+      "assets": {
+        "svg": {
+          "20": {
+            "dark": "assets/timeline-navigation-book-spine-20-dark.svg"
+          },
+          "64": {
+            "dark": "assets/timeline-navigation-book-spine-64-dark.svg"
+          }
+        },
+        "template": {
+          "20": "assets/timeline-navigation-book-spine-20-template.svg",
+          "64": "assets/timeline-navigation-book-spine-64-template.svg"
+        },
+        "frames": {
+          "dark": "frames/timeline-navigation-book-spine-dark.png"
+        }
+      },
+      "inkColors": [
+        "#b08d57"
+      ],
+      "a11yLabelSource": "title (page svg has no aria-label)",
+      "themeNote": "Page has a single (dark) surface; light is not exported."
+    },
+    {
+      "id": "library-navigation-stacked-books",
+      "title": "Library navigation: stacked books with a bookmark",
+      "ownerKey": null,
+      "ownerSelection": "accepted 2026-10-11 (Due Good/Argus)",
+      "kind": "static",
+      "multicolor": false,
+      "sizes": {
+        "20": {
+          "selector": "#app-7 .rows .comparison:nth-child(3) .proposed .tiny svg.glyph",
+          "displayPx": {
+            "width": 20,
+            "height": 20
+          },
+          "viewBox": "0 0 64 64",
+          "outsideViewBox": false,
+          "markup": "own markup",
+          "a11yLabel": null
+        },
+        "64": {
+          "selector": "#app-7 .rows .comparison:nth-child(3) .proposed .well svg.glyph",
+          "displayPx": {
+            "width": 64,
+            "height": 64
+          },
+          "viewBox": "0 0 64 64",
+          "outsideViewBox": false,
+          "markup": "own markup",
+          "a11yLabel": null
+        }
+      },
+      "colors": [
+        {
+          "layer": "path",
+          "prop": "stroke",
+          "cssVar": "--accent",
+          "cssVarCandidates": [
+            "--accent"
+          ],
+          "dark": "#b08d57",
+          "light": null
+        }
+      ],
+      "a11yLabel": "Library navigation: stacked books with a bookmark",
+      "assets": {
+        "svg": {
+          "20": {
+            "dark": "assets/library-navigation-stacked-books-20-dark.svg"
+          },
+          "64": {
+            "dark": "assets/library-navigation-stacked-books-64-dark.svg"
+          }
+        },
+        "template": {
+          "20": "assets/library-navigation-stacked-books-20-template.svg",
+          "64": "assets/library-navigation-stacked-books-64-template.svg"
+        },
+        "frames": {
+          "dark": "frames/library-navigation-stacked-books-dark.png"
+        }
+      },
+      "inkColors": [
+        "#b08d57"
+      ],
+      "a11yLabelSource": "title (page svg has no aria-label)",
+      "themeNote": "Page has a single (dark) surface; light is not exported."
+    },
+    {
+      "id": "mark-complete-notebook-check",
+      "title": "Mark complete action: notebook check",
+      "ownerKey": null,
+      "ownerSelection": "accepted 2026-10-11 (Due Good/Argus)",
+      "kind": "static",
+      "multicolor": false,
+      "sizes": {
+        "20": {
+          "selector": "#app-7 .rows .comparison:nth-child(4) .proposed .tiny svg.glyph",
+          "displayPx": {
+            "width": 20,
+            "height": 20
+          },
+          "viewBox": "0 0 64 64",
+          "outsideViewBox": false,
+          "markup": "own markup",
+          "a11yLabel": null
+        },
+        "64": {
+          "selector": "#app-7 .rows .comparison:nth-child(4) .proposed .well svg.glyph",
+          "displayPx": {
+            "width": 64,
+            "height": 64
+          },
+          "viewBox": "0 0 64 64",
+          "outsideViewBox": false,
+          "markup": "own markup",
+          "a11yLabel": null
+        }
+      },
+      "colors": [
+        {
+          "layer": "path",
+          "prop": "stroke",
+          "cssVar": "--accent",
+          "cssVarCandidates": [
+            "--accent"
+          ],
+          "dark": "#b08d57",
+          "light": null
+        }
+      ],
+      "a11yLabel": "Mark complete action: notebook check",
+      "assets": {
+        "svg": {
+          "20": {
+            "dark": "assets/mark-complete-notebook-check-20-dark.svg"
+          },
+          "64": {
+            "dark": "assets/mark-complete-notebook-check-64-dark.svg"
+          }
+        },
+        "template": {
+          "20": "assets/mark-complete-notebook-check-20-template.svg",
+          "64": "assets/mark-complete-notebook-check-64-template.svg"
+        },
+        "frames": {
+          "dark": "frames/mark-complete-notebook-check-dark.png"
+        }
+      },
+      "inkColors": [
+        "#b08d57"
+      ],
+      "a11yLabelSource": "title (page svg has no aria-label)",
+      "themeNote": "Page has a single (dark) surface; light is not exported."
+    }
+  ]
+}
