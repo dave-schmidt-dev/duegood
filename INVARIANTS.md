@@ -72,10 +72,10 @@ rationale: Import cannot replace an authoritative store. Preview replacement fir
 
 ### INV-11 — Installed bytes must match the tested candidate
 area: ["scripts/stage-tauri-candidate.mjs", "scripts/build-tauri.mjs", "scripts/verify-tauri-assets.mjs", "scripts/install-desktop-app.mjs", "src-tauri/build.rs"]
-gate_test: npm run test:tauri, npm run verify:tauri-assets, npm run check:production-launch
+gate_test: npm run test:tauri, npm run verify:tauri-assets, test/local/install-desktop-app.test.ts, test/local/install-desktop-launch.test.ts
 threshold: 1
 always_active: true
-rationale: Build and tests run in a private staged candidate. Installation verifies the candidate, signature, bundle identity, and embedded frontend hashes. Tests, installation, launch, live behavior, and owner acceptance are distinct evidence.
+rationale: Build and tests run in a private staged candidate. Installation verifies the candidate, signature, bundle identity, and embedded frontend hashes. Tests, installation, launch, live behavior, and owner acceptance are distinct evidence. The installed-app launch proofs (`npm run install:tauri`, `npm run check:production-launch`) are milestone checks under INV-15, not change gates.
 
 ### INV-12 — Store authority changes only through the owner flow
 area: ["src-tauri/src/commands.rs", "src-tauri/src/commands_ical.rs", "src-tauri/src/store.rs", "src-tauri/src/export.rs", "src-tauri/src/browser_import.rs", "src-tauri/src/ical_apply_bootstrap.rs", "src/ui/app.ts", "src/ui/desktop-shell.ts", "src/ui/desktop-setup.ts", "src/ui/transport.ts"]
@@ -97,3 +97,10 @@ gate_test: test/local/stage-tauri-candidate.test.ts, test/local/check-stage-budg
 threshold: 1
 always_active: true
 rationale: Stages use fixed owned roots under the project's gitignored .stage directory and one shared project Cargo cache. Unretained stages are removed after success, failure, or interruption; an explicit installer handoff is removed after consumption, while --keep is a diagnostic exception. A stage budget prevents accumulated copies. The macOS UI smoke removes its scratch root after app-stop attempts. The backlog collector is dry-run by default and refuses deletion without 24-hour inactivity, direct-child ownership, and complete open-handle checks.
+
+### INV-15 — Screen-seizing verification runs only at milestones
+area: [".githooks/pre-commit", ".githooks/pre-push", "package.json", "scripts/install-hooks.mjs", "scripts/check-test-membership.mjs", "scripts/smoke-tauri-macos.mjs", "scripts/check-production-launch.mjs", "scripts/check-live-native.mjs", "scripts/install-desktop-app.mjs", "test/native/macos/DueGoodDesktopUITests.swift"]
+gate_test: npm run hooks:check, npm run test:membership
+threshold: 1
+always_active: true
+rationale: XCUITest runs, installed-app launches, and anything else that takes over the owner's screen (`npm run test:tauri:macos`, `npm run check:production-launch`, `npm run check:live-native`, and the cold-launch proofs inside `npm run install:tauri`) run only before a release, at an install for owner qualification, or for a walkthrough. They never run per phase, commit, or push, and no hook or default gate requires them or a record that they ran. Day-to-day and phase gates use headless equivalents: unit, model, and render tests, and headless Playwright against the local test server. The native suite stays small: launch, quit, and one or two end-to-end journeys.

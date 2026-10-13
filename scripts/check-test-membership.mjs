@@ -193,9 +193,10 @@ if (typeof allScript !== "string" || !allScript.includes(`npm run ${desktopUi.ru
   throw new Error(`${desktopUi.inclusiveRunner} must contain the single Tauri UI Playwright batch.`);
 }
 
-// Native UI checks seize the host desktop, so they are explicit Phase 4 gates outside test:all.
-// Keep their XCTest cases and launch scripts in the manifest even though this checker never runs
-// Xcode or opens an app.
+// Native UI checks seize the host desktop, so they run only at a milestone (a release, an install
+// for owner qualification, or a walkthrough), never per phase, commit, or push. They stay outside
+// test:all and the Git hooks. Keep their XCTest cases and launch scripts in the manifest even
+// though this checker never runs Xcode or opens an app.
 {
   const native = manifest.native;
   if (!native || typeof native !== "object") throw new Error("Native UI test membership is missing.");
@@ -221,10 +222,10 @@ if (typeof allScript !== "string" || !allScript.includes(`npm run ${desktopUi.ru
   for (const file of native.supportFiles) {
     if (!existsSync(path.join(root, file))) throw new Error(`Native UI support file is missing: ${file}.`);
   }
-  if ((packageJson.scripts["test:all"] ?? "").includes(native.smokeRunner)
-      || (packageJson.scripts["test:all"] ?? "").includes(native.productionRunner)
-      || (packageJson.scripts["test:all"] ?? "").includes(native.liveRunner)) {
-    throw new Error("Native UI checks must remain explicit host gates outside test:all.");
+  // The installer's cold-launch proof also opens the app, so it is a milestone step too.
+  const milestoneOnly = [native.smokeRunner, native.productionRunner, native.liveRunner, "install:tauri"];
+  if (milestoneOnly.some((runner) => (packageJson.scripts["test:all"] ?? "").includes(runner))) {
+    throw new Error("Native UI checks and installation must remain milestone-only steps outside test:all.");
   }
 }
 
@@ -234,4 +235,4 @@ console.log(`Verified ${manifest.container.tests.length} container checks in the
 console.log(`Verified ${manifest.local.tests.length} local-source tests in ${manifest.local.runner} and test:all.`);
 console.log(`Verified ${tauriTestCount} Rust tests in ${Object.keys(manifest.tauri.tests).length} files via cargo test --list in ${manifest.tauri.runner} and test:all.`);
 console.log(`Verified ${(manifest.fixtures ?? []).length} listed test/fixtures files match what's on disk.`);
-console.log("Verified all three explicit native XCUITest cases and their host runners.");
+console.log("Verified all three milestone-only native XCUITest cases and their host runners outside test:all.");

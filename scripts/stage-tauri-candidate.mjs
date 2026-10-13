@@ -36,12 +36,29 @@ const FIXED_GIT_IDENTITY = Object.freeze({ name: "Due Good Stage", email: "stage
 const FIXED_GIT_DATE = "2026-01-01T00:00:00Z";
 const LAST_STABLE_MACOS_MAJOR_VERSION = 26;
 
+// `git rev-parse --local-env-vars`: Git exports these to hooks (a linked worktree's pre-push
+// gets GIT_DIR and friends), and inheriting them would point the disposable stage repo, and every
+// staged phase that runs Git, at the pushing repository instead of their own directory.
+const GIT_REPOSITORY_ENV = Object.freeze([
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+  "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE",
+  "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX",
+  "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
+]);
+
+/** Returns `env` without Git's repository-location variables, so Git resolves from each cwd. */
+export function withoutGitRepositoryEnv(env = process.env) {
+  const cleaned = { ...env };
+  for (const name of GIT_REPOSITORY_ENV) delete cleaned[name];
+  return cleaned;
+}
+
 function noop() {}
 
 function gitEnv(extra = {}) {
   // Disable global/system Git config so a developer's ~/.gitconfig (commit.gpgsign, a custom
   // core.hooksPath, init.templateDir, etc.) can never change what this disposable repo does.
-  return { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", ...extra };
+  return { ...withoutGitRepositoryEnv(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", ...extra };
 }
 
 function runGit(args, cwd, options = {}) {
@@ -471,7 +488,7 @@ export async function run(argv = process.argv.slice(2)) {
     onLog(`stage: complete at ${result.destination}`);
 
     const browsersPath = options.playwrightBrowsersPath ?? process.env.PLAYWRIGHT_BROWSERS_PATH ?? defaultPlaywrightCacheDirectory();
-    const stageEnv = { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsersPath, CARGO_TARGET_DIR: lifecycle.cargoTargetDir,
+    const stageEnv = { ...withoutGitRepositoryEnv(), PLAYWRIGHT_BROWSERS_PATH: browsersPath, CARGO_TARGET_DIR: lifecycle.cargoTargetDir,
       DUEGOOD_SOURCE_CHECKOUT: lifecycle.projectRoot, TMPDIR: lifecycle.temporaryDirectory };
     // The npm phases execute code in the stage, so recheck that it is still the directory we created.
     await assertOwnedStageDirectory(await realpath(source), result.destination, { allowProjectStage: true });

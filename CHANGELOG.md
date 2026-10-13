@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Run screen-seizing checks (XCUITest smoke, production launch check, live populated-store verifier, and installer cold-launch proofs) only before a release, at an owner-qualification install, or for a walkthrough. Git hooks and phase gates stay headless, and the hook and test-membership checks now reject these runners in hooks and `test:all`.
+
 ### Fixed
 
 - Accept verified archived Canvas receipt statuses, separate Canvas coverage gaps from calendar held events, preserve bounded capture-reason counts, and omit nonapplicable quiz children from incomplete-refresh reporting.
@@ -10,6 +14,7 @@
 - Wrap long timeline course labels and let Escape cancel a pending recovery-restore confirmation.
 - Use consistent accepted action styling for Recovery controls and distinguish failed Activity statuses from completed refreshes.
 - Keep Timeline Copy assignment and Details controls inside narrow course cards.
+- Stop a push from a linked worktree from turning the shared repository bare: the staged candidate now ignores the Git location variables a hook inherits.
 
 ## [0.3.0] - 2026-10-02
 
