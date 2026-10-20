@@ -48,6 +48,7 @@
       "test/local/tauri-export.test.ts",
       "test/local/refresh-helper.test.ts",
       "test/local/install-desktop-app.test.ts",
+      "test/local/install-desktop-app-stage.test.ts",
       "test/local/verify-tauri-assets.test.ts",
       "test/local/prepare-legacy-root.test.ts",
       "test/local/verify-cutover.test.ts",

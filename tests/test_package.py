@@ -64,4 +64,17 @@ class CanvasPhase1FixtureTests(unittest.TestCase):
     def test_package_checks(self):
         self.assertEqual(check(ROOT),[])
 
+class PackageRuntimeExclusionTests(unittest.TestCase):
+    def test_runtime_caches_are_excluded_but_source_files_are_checked(self):
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix='duegood-package-test-') as directory:
+            root = Path(directory)
+            for relative in ('.cache/coursework.json', '.stage/tauri/coursework.json', 'coursework.json'):
+                file = root/relative
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text('{}')
+            errors = check(root)
+            self.assertIn('Original private-data/launcher file present: coursework.json', errors)
+            self.assertFalse(any('.cache/' in error or '.stage/' in error for error in errors))
+
 if __name__ == '__main__': unittest.main()

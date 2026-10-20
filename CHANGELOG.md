@@ -45,22 +45,25 @@
 - Add populated-store macOS refresh verification for Timeline, Grades, Inbox, Done, Courses, Library, Activity, and More, with private UI artifacts removed after content-free results are extracted.
 - Update compatible Rust security fixes while documenting the unresolved `glib` advisory against the current upstream Tauri/GTK/WebKit compatibility constraint.
 
+---
 
-## [0.2.0] (release candidate)
+## Historical release-candidate preparations
 
-### Added
+### [0.2.0] (release candidate)
+
+#### Added
 
 - Import explicitly dated class sessions from captured course syllabi during Canvas refresh, retaining source provenance and personal progress.
 - Read bounded weekly DOCX declarations and PDF class-date tables with separate meeting-time and semester-year fields.
 - Import reviewed local class dates with owner-supplied times as personal sessions, preserving Canvas provenance and personal progress.
 
-### Fixed
+#### Fixed
 
 - Request syllabus content when capturing Canvas courses.
 
-## [0.1.1] (release candidate)
+### [0.1.1] (release candidate)
 
-### Fixed
+#### Fixed
 
 - Restore dashboard loading for legacy native stores with canonical decimal-string Canvas course IDs.
 - Accept separate child-detail coverage rows in Canvas imports while preserving optional gaps and required coverage uniqueness.

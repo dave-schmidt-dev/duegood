@@ -27,7 +27,7 @@ LOCAL_ONLY_NAMES = {
 IGNORED_PARTS = {
     ".git", "__pycache__", "node_modules", ".evidence", ".logs",
     "dist", "build", "coverage", "playwright-report", "test-results", ".playwright",
-    "target", ".wrangler", "spikes",
+    "target", ".wrangler", "spikes", ".cache", ".stage",
 }
 
 def validate_fixture(fixture: dict) -> None:
