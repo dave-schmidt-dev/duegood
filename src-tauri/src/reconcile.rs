@@ -106,7 +106,7 @@ pub fn reconcile_coursework(
         }
     }
 
-    let archive_existing = root
+    let mut archive_existing = root
         .get("archivedForecastItems")
         .map(|archive| {
             archive
@@ -155,19 +155,16 @@ pub fn reconcile_coursework(
             }
         }
     }
-    let archived_canvas_ids: HashSet<(String, String)> = archive_existing
+    // Archived ids stay reserved: a generated id must never duplicate one (INV-3).
+    let archived_item_ids: HashSet<String> = archive_existing
         .iter()
-        .filter_map(|item| {
-            Some((
-                item.get("course")?.as_str()?.to_owned(),
-                identity_key(item.get("canvasId")?)?,
-            ))
-        })
+        .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_owned))
         .collect();
 
     let mut seen = HashSet::<(String, String)>::new();
     let mut next_items = Vec::with_capacity(local_items.len());
     let mut newly_archived = Vec::new();
+    let mut archive_changed = false;
 
     for (item_index, mut item) in local_items.iter().cloned().enumerate() {
         let object = item.as_object().expect("validated item object");
@@ -211,7 +208,7 @@ pub fn reconcile_coursework(
             if let Some((assignment, matched_id)) = matched {
                 let ignored = ignored_ids(&local_courses, &key)?;
                 if ignored.contains(&matched_id) {
-                    move_to_archive(item, &mut newly_archived, &archived_canvas_ids);
+                    newly_archived.push(item);
                     continue;
                 }
                 update_item(&mut item, assignment, capture, &matched_id, captured_at)?;
@@ -224,7 +221,7 @@ pub fn reconcile_coursework(
                     next_items.push(item);
                     continue;
                 }
-                move_to_archive(item, &mut newly_archived, &archived_canvas_ids);
+                newly_archived.push(item);
             }
             continue;
         }
@@ -256,7 +253,7 @@ pub fn reconcile_coursework(
 
         if source == "syllabus" {
             if key.as_deref().is_some_and(|key| captures.contains_key(key)) {
-                move_to_archive(item, &mut newly_archived, &archived_canvas_ids);
+                newly_archived.push(item);
             } else {
                 next_items.push(item);
             }
@@ -298,12 +295,32 @@ pub fn reconcile_coursework(
             if seen.contains(&identity) {
                 continue;
             }
-            let item = new_item(&capture.key, assignment, capture, &canvas_id, captured_at)?;
+            // A republished assignment revives its archived record so completion, notes, and
+            // extensions survive instead of being recreated as a not-done duplicate (INV-3).
+            let revived = revivable_archived_index(&archive_existing, &capture.key, &canvas_id)?
+                .map(|index| archive_existing.remove(index));
+            let was_revived = revived.is_some();
+            let item = match revived {
+                Some(mut archived_item) => {
+                    update_item(
+                        &mut archived_item,
+                        assignment,
+                        capture,
+                        &canvas_id,
+                        captured_at,
+                    )?;
+                    archive_changed = true;
+                    archived_item
+                }
+                None => new_item(&capture.key, assignment, capture, &canvas_id, captured_at)?,
+            };
             let generated_id = item["id"]
                 .as_str()
                 .expect("new item id is a string")
                 .to_owned();
-            if !item_ids.insert(generated_id) {
+            if (!was_revived && archived_item_ids.contains(&generated_id))
+                || !item_ids.insert(generated_id)
+            {
                 return Err(invalid(
                     "generated coursework item id collides with an existing item",
                 ));
@@ -314,8 +331,15 @@ pub fn reconcile_coursework(
     }
 
     root.insert("items".to_owned(), Value::Array(next_items));
-    if !newly_archived.is_empty() {
+    if !newly_archived.is_empty() || archive_changed {
         let mut archived = archive_existing;
+        // A second vanish replaces the older archived copy of the same Canvas assignment rather
+        // than dropping the live item (INV-3).
+        archived.retain(|old| {
+            !newly_archived
+                .iter()
+                .any(|fresh| same_canvas_identity(old, fresh))
+        });
         archived.extend(newly_archived);
         root.insert("archivedForecastItems".to_owned(), Value::Array(archived));
     }
@@ -941,30 +965,43 @@ fn patch_submission(
     Ok(())
 }
 
-fn is_personal_live_item(kind: &str, source: &str) -> bool {
-    matches!(kind, "session" | "milestone") || source == "manual"
+fn canvas_identity(item: &Value) -> Option<(String, String)> {
+    Some((
+        item.get("course")?.as_str()?.to_owned(),
+        identity_key(item.get("canvasId")?)?,
+    ))
 }
 
-fn move_to_archive(
-    item: Value,
-    archive: &mut Vec<Value>,
-    archived_canvas_ids: &HashSet<(String, String)>,
-) {
-    let identity = item
-        .get("course")
-        .and_then(Value::as_str)
-        .and_then(|course| {
-            item.get("canvasId")
-                .and_then(identity_key)
-                .map(|canvas_id| (course.to_owned(), canvas_id))
-        });
-    if identity
-        .as_ref()
-        .is_some_and(|key| archived_canvas_ids.contains(key))
-    {
-        return;
+fn same_canvas_identity(old: &Value, fresh: &Value) -> bool {
+    old.get("source").and_then(Value::as_str) == Some("canvas")
+        && canvas_identity(old).is_some_and(|identity| Some(identity) == canvas_identity(fresh))
+}
+
+/// Index of the archived Canvas item for a reappearing assignment, if exactly one exists.
+fn revivable_archived_index(
+    archive: &[Value],
+    course: &str,
+    canvas_id: &str,
+) -> Result<Option<usize>, ReconcileError> {
+    let mut found = None;
+    for (index, item) in archive.iter().enumerate() {
+        if item.get("source").and_then(Value::as_str) != Some("canvas") {
+            continue;
+        }
+        if item.get("canvasId").and_then(identity_key).as_deref() != Some(canvas_id)
+            || item.get("course").and_then(Value::as_str) != Some(course)
+        {
+            continue;
+        }
+        if found.replace(index).is_some() {
+            return Err(invalid("archived Canvas assignment identity is duplicated"));
+        }
     }
-    archive.push(item);
+    Ok(found)
+}
+
+fn is_personal_live_item(kind: &str, source: &str) -> bool {
+    matches!(kind, "session" | "milestone") || source == "manual"
 }
 
 fn kind_for(assignment: &Value) -> &'static str {
@@ -1289,6 +1326,69 @@ mod tests {
         assert_eq!(result["archivedForecastItems"][0]["id"], "older-archive");
         assert_eq!(result["archivedForecastItems"][1]["done"], true);
         assert_eq!(result["archivedForecastItems"][1]["extension"], "preserved");
+    }
+
+    fn ids(result: &Value) -> Vec<String> {
+        result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(result["archivedForecastItems"].as_array().unwrap())
+            .map(|item| item["id"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn reappearing_canvas_assignment_revives_archived_progress_without_duplicate_ids() {
+        let (mut base, captures) = fixture_capture();
+        base["items"][0]["done"] = json!(true);
+        base["items"][0]["doneAt"] = json!("2026-11-18T12:00:00Z");
+        base["items"][0]["notes"] = json!("keep me");
+        let mut vanished = captures.clone();
+        vanished
+            .iter_mut()
+            .find(|capture| capture.key == "demo-alpha")
+            .unwrap()
+            .assignments
+            .retain(|assignment| assignment["id"] != 70001);
+
+        let archived = reconcile_coursework(&base, &vanished, captured_at()).expect("vanish");
+        assert!(!ids(&archived).iter().all(|id| id != "demo-alpha-70001"));
+        let revived = reconcile_coursework(&archived, &captures, captured_at()).expect("revive");
+        let item = revived["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["canvasId"] == json!(70001))
+            .expect("revived item is live");
+        assert_eq!(item["id"], "demo-alpha-70001");
+        assert_eq!(item["done"], true);
+        assert_eq!(item["doneAt"], "2026-11-18T12:00:00Z");
+        assert_eq!(item["notes"], "keep me");
+        let all = ids(&revived);
+        let unique: HashSet<&String> = all.iter().collect();
+        assert_eq!(all.len(), unique.len(), "no duplicate ids: {all:?}");
+
+        // A second vanish archives the live item again instead of silently dropping it.
+        base = revived;
+        base["items"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|item| item["canvasId"] == json!(70001))
+            .unwrap()["notes"] = json!("newer note");
+        let again = reconcile_coursework(&base, &vanished, captured_at()).expect("vanish again");
+        let archived_copy = again["archivedForecastItems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["canvasId"] == json!(70001))
+            .expect("archived again");
+        assert_eq!(archived_copy["notes"], "newer note");
+        assert_eq!(archived_copy["done"], true);
+        let all = ids(&again);
+        let unique: HashSet<&String> = all.iter().collect();
+        assert_eq!(all.len(), unique.len(), "no duplicate ids: {all:?}");
     }
 
     #[test]
