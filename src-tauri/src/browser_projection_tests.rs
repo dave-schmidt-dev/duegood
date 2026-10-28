@@ -223,6 +223,51 @@ fn drops_unsafe_link_schemes_and_redacts_credentials_inside_text() {
 }
 
 #[test]
+fn unread_optional_endpoints_are_not_published_as_empty_documents() {
+    // INV-4: a gapped optional endpoint must leave the retained document untouched.
+    let mut input = snapshot();
+    let base = "classes/demo-101/canvas-export";
+    let without = project_snapshot(&input, &[scope()]).expect("projection succeeds");
+    for name in [
+        "pages",
+        "modules",
+        "announcements",
+        "files",
+        "tabs",
+        "discussions",
+        "folders",
+    ] {
+        assert!(
+            !without
+                .documents
+                .contains_key(&format!("{base}/api/{name}.json")),
+            "{name} must not be emitted when its endpoint was not read"
+        );
+    }
+    assert!(!without
+        .documents
+        .contains_key(&format!("{base}/download-manifest.json")));
+    assert!(without
+        .documents
+        .contains_key(&format!("{base}/api/assignments.json")));
+
+    input["resources"]
+        .as_array_mut()
+        .unwrap()
+        .push(resource("pages", Some(101), json!([])));
+    let with = project_snapshot(&input, &[scope()]).expect("projection succeeds");
+    // A page list that was read and is genuinely empty is still published.
+    assert_eq!(
+        serde_json::from_slice::<Value>(&with.documents[&format!("{base}/api/pages.json")])
+            .unwrap(),
+        json!([])
+    );
+    assert!(!with
+        .documents
+        .contains_key(&format!("{base}/api/modules.json")));
+}
+
+#[test]
 fn rejects_traversal_scopes_and_raw_html() {
     let mut traversal = scope();
     traversal.folder = "classes/../outside/demo-101".into();

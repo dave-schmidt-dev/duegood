@@ -232,7 +232,9 @@ pub fn project_snapshot(
                         .collect::<Result<Vec<_>, _>>()?,
                 )
             } else {
-                Value::Array(Vec::new())
+                // INV-4: an optional endpoint that was not read this run is a gap, not an empty
+                // list. Emit no document so the staged copy of the live store keeps its record.
+                continue;
             };
             inventory.insert(document_name.into(), value.clone());
             put_json(
@@ -241,22 +243,24 @@ pub fn project_snapshot(
                 &value,
             )?;
         }
+        // The inventory only mirrors the documents read this run; the api documents above stay
+        // authoritative, so an unread endpoint is absent here rather than recorded as empty.
         put_json(
             &mut documents,
             &format!("{export_root}/course-inventory.json"),
             &Value::Object(inventory),
         )?;
-        let download_manifest = project_file_receipts(
-            file_receipts,
-            by_course
-                .get(&(scope.canvas_course_id, "courseFiles".to_owned()))
-                .copied(),
-        )?;
-        put_json(
-            &mut documents,
-            &format!("{export_root}/download-manifest.json"),
-            &Value::Array(download_manifest),
-        )?;
+        if let Some(course_files) = by_course
+            .get(&(scope.canvas_course_id, "courseFiles".to_owned()))
+            .copied()
+        {
+            let download_manifest = project_file_receipts(file_receipts, Some(course_files))?;
+            put_json(
+                &mut documents,
+                &format!("{export_root}/download-manifest.json"),
+                &Value::Array(download_manifest),
+            )?;
+        }
         put_json(
             &mut documents,
             &format!("{export_root}/api/calendar-event-identities.json"),
