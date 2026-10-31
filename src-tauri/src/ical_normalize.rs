@@ -158,11 +158,17 @@ pub(super) fn normalize_canvas_ical(
             );
             continue;
         };
-        let explicit = event
-            .url
-            .is_none()
-            .then(|| options.explicit_uid_mappings.get(uid))
-            .flatten();
+        // A Canvas calendar URL does not invalidate generation-bound API identity evidence.
+        // It must agree with that evidence; an unsafe or conflicting URL never falls back to UID.
+        let explicit = options.explicit_uid_mappings.get(uid).filter(|mapping| {
+            event.url.is_none()
+                || link.as_ref().is_some_and(|link| {
+                    link.kind == "event"
+                        && mapping.kind == EventKind::OtherEvent
+                        && mapping.stable_identity == format!("event:{}", link.id)
+                        && candidates.as_slice() == [mapping.course_key.as_str()]
+                })
+        });
         let parsed_start = parse_start(start)?;
         if let Some(expected_date) = explicit.and_then(|mapping| mapping.expected_date.as_deref()) {
             if !matches!(&parsed_start, StartTime::Date(date) if date == expected_date) {

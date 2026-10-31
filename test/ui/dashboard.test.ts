@@ -410,14 +410,21 @@ describe("dashboard production UI contract", () => {
     ]);
   });
 
+  it("explains ambiguous calendar Activity notices in plain language", () => {
+    const data = parseDashboard({ ...DATA, refreshes: [{ id: "held", source: "calendar", startedAt: NOW,
+      status: "partial", changes: [{ kind: "notice", title: "Calendar event synthetic", detail: "ambiguous-event" }] }] });
+    expect(data.refreshes[0]?.changes[0]).toEqual({ kind: "notice", title: "Calendar item needs review",
+      detail: "This calendar item could not be matched to one verified Canvas event and date. Its previous value was kept." });
+  });
+
   it("keeps Canvas freshness status visible across every dashboard page", () => {
     const data = parseDashboard({ ...DATA, sourceStatus: { state: "not_synced", label: "Desktop app store", detail: "Canvas capture unverified", coursework: "not_synced", inbox: "not_synced", library: "not_synced", browserFreshness: { current: false, reason: "capture-unverified", runId: null, observedAt: null, sections: [] } } });
     expect(data.sourceStatus).toMatchObject({ coursework: "not_synced", inbox: "not_synced", library: "not_synced", browserFreshness: { current: false } });
     for (const route of DASHBOARD_ROUTES) {
       const dashboard = renderDashboard({ ...state(route.page), data }, handlers);
       const notice = findAll(dashboard, (item) => item.attrs?.["data-source-freshness"] === "stale")[0];
-      expect(words(notice!)).toContain("Canvas coursework and grades, Inbox, library items may be stale or incomplete.");
-      expect(words(notice!)).toContain("independent calendar and personal records remain");
+      expect(words(notice!)).toContain("Canvas coursework and grades, Inbox, library items could not be verified from the latest refresh.");
+      expect(words(notice!)).toContain("calendar and personal records remain available");
     }
   });
 

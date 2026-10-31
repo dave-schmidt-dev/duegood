@@ -9,6 +9,8 @@
 
 ### Fixed
 
+- Match verified all-day Canvas calendar events even when the feed includes a calendar URL, classify rejected macOS metadata companions separately from their archived documents, and explain running refreshes, file failures, and held calendar items in plain language.
+
 - Accept verified archived Canvas receipt statuses, separate Canvas coverage gaps from calendar held events, preserve bounded capture-reason counts, and omit nonapplicable quiz children from incomplete-refresh reporting.
 - Sort date-only assignment deadlines at the assumed 11:59 p.m. while leaving class meetings with unspecified times unchanged.
 - Show immediate desktop startup and recovery loading or retry states, require confirmation before a recovery restore, retain bounded local dashboard view state, and latch duplicate Library file actions per resource.

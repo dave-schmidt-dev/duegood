@@ -318,12 +318,17 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
           state = { ...state, refreshProgress: { phase: progress.phase, completed: 0, total: null, bytesDone: null } };
           drawPreservingScroll();
         });
-        const feedback = fullRefreshFeedback(result);
+        const previousRefreshIds = new Set(data.refreshes.map((refresh) => refresh.id));
+        const reloaded = await reloadAuthoritativeDashboard();
+        if (reloaded) data = state.data;
+        const fileNotices = reloaded ? data.refreshes
+          .filter((refresh) => refresh.source === "canvas" && !previousRefreshIds.has(refresh.id))
+          .flatMap((refresh) => refresh.changes.filter((change) => change.kind === "notice" && change.title === "Canvas file check").map((change) => change.detail)) : [];
+        const feedback = fullRefreshFeedback(result, fileNotices);
         refreshState = feedback.state;
         refreshDetail = feedback.detail;
         updatedAt = result.updatedAt;
-        if (await reloadAuthoritativeDashboard()) data = state.data;
-        else refreshDetail += " Updated data could not be reloaded; the prior view is still shown.";
+        if (!reloaded) refreshDetail += " Updated data could not be reloaded; the prior view is still shown.";
       } else {
         const useCalendar = state.desktop?.refreshAvailable !== true && state.desktop?.icalRefreshAvailable === true;
         const result = useCalendar

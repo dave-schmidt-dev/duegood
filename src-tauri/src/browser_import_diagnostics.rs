@@ -168,6 +168,25 @@ pub(super) fn import_diagnostics(
     })
 }
 
+/// Adds bounded plain-language reasons to the same Activity entry as the imported data.
+pub(super) fn file_history_notices(bundle: &ValidatedCaptureBundle) -> Vec<Value> {
+    let diagnostics = file_receipt_diagnostics(bundle);
+    diagnostics["reasonCounts"].as_array().into_iter().flatten().map(|row| {
+        let count = row["count"].as_u64().unwrap_or(0);
+        let explanation = match row["reason"].as_str().unwrap_or("other") {
+            "HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH" => "could not be verified: the downloaded contents did not match a supported file type. Existing copies were kept",
+            "HELPER_DOWNLOAD_SIGN_IN_RESPONSE" => "returned a sign-in page instead of a file. Sign in to Canvas and refresh again",
+            "locked" => "locked in Canvas; skipped",
+            "unpublished" => "unpublished in Canvas; skipped",
+            "not-applicable" => "macOS metadata companions skipped; the matching documents were archived",
+            "unsupported" => "unsupported formats; skipped",
+            "HELPER_DOWNLOAD_SIZE_MISMATCH" | "file-size-mismatch" => "had an unexpected download size. Existing copies were kept; try refreshing again",
+            _ => "could not be downloaded. Existing copies were kept; try refreshing again",
+        };
+        json!({"kind": "notice", "title": "Canvas file check", "detail": format!("{count} {}: {explanation}.", if count == 1 { "file" } else { "files" })})
+    }).collect()
+}
+
 fn diagnostic_endpoint(value: &str) -> &'static str {
     DIAGNOSTIC_ENDPOINTS
         .iter()
@@ -264,7 +283,7 @@ fn file_receipt_diagnostics(bundle: &ValidatedCaptureBundle) -> Value {
             };
             let status = receipt.get("status").and_then(Value::as_str).unwrap_or("");
             let reason = receipt.get("reason").and_then(Value::as_str);
-            if status == "gap" {
+            if status == "gap" && listed_ids.contains(&file_id) {
                 let bucket = file_receipt_reason(reason);
                 let count = reason_counts.entry(bucket).or_default();
                 *count = count.saturating_add(1).min(MAX_DIAGNOSTIC_COUNT);
@@ -326,6 +345,7 @@ fn file_receipt_reason(value: Option<&str>) -> &'static str {
     match value {
         Some(reason) => FILE_RECEIPT_REASONS
             .iter()
+            .chain(OPTIONAL_FILE_REASONS.iter())
             .copied()
             .find(|allowed| *allowed == reason)
             .unwrap_or("other"),

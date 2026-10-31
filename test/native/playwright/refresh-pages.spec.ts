@@ -206,7 +206,8 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
           summary: { added: 1, updated: 2, removed: 0 }, changes: [
             { kind: "changed", title: "Synthetic Canvas changes", detail: "Full refresh completed its available sections." },
             ...(gapCount > 0
-              ? [{ kind: "notice", title: "Daily Canvas pages incomplete", detail: `${String(gapCount)} required daily sections were incomplete; existing data was preserved.` }]
+              ? [{ kind: "notice", title: "Daily Canvas pages incomplete", detail: `${String(gapCount)} required daily sections were incomplete; existing data was preserved.` },
+                { kind: "notice", title: "Canvas file check", detail: "1 file: could not be verified because its contents did not match a supported file type. Existing copies were kept." }]
               : [{ kind: "notice", title: "Daily Canvas pages refreshed", detail: `${setup.fullOmissionCount ?? 0} optional capture omissions recorded. Existing data was preserved.` }]),
           ],
         }, ...(documents.history as Record<string, unknown>[])];
@@ -360,12 +361,12 @@ test("full refresh uses the bundled browser command and updates every page witho
 
   await page.locator(".top-actions").getByRole("button", { name: "Refresh", exact: true }).click();
   const refresh = page.locator(".top-actions button.refresh-button");
-  await expect(page.locator(".sync-note")).toContainText("Canvas and calendar refresh · Opening Canvas");
+  await expect(page.locator(".sync-note")).toContainText("Canvas and calendar refresh · Reading Canvas and checking files");
   await expect(refresh).toBeDisabled();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __refreshCalls: { command: string }[] }).__refreshCalls.filter((call) => call.command === "start_full_refresh").length)).toBe(1);
   await page.evaluate(() => (window as unknown as { __releaseFullRefresh?: () => void }).__releaseFullRefresh?.());
-  await expect(page.locator(".sync-note")).toContainText("Current Canvas pages refreshed.");
-  await expect(page.locator(".sync-note")).toContainText("2 optional capture omissions recorded");
+  await expect(page.locator(".sync-note")).toContainText("Canvas and calendar updated.");
+  await expect(page.locator(".sync-note")).toContainText("2 optional items were unavailable or skipped");
   await expect(page.locator(".topbar .term-label")).toContainText("2 courses");
 
   await expect(page.getByRole("button", { name: "All courses", exact: true })).toHaveClass(/active/);
@@ -402,12 +403,15 @@ test("full refresh uses the bundled browser command and updates every page witho
   expect(commands).not.toContain("start_ical_refresh");
 });
 
-test("full refresh reports coverage gaps, reloads freshness, and rereads after command failure", async ({ page, context }) => {
+test("full refresh reports coverage gaps, reloads freshness, and rereads after command failure", async ({ page, context }, testInfo) => {
   await openDashboard(page, { mode: "full", fullGap: true });
   await page.locator(".top-actions").getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(page.locator(".sync-note")).toContainText("Full refresh partial. Canvas incomplete (2 required Canvas capture gaps; no optional capture omissions); calendar incomplete");
-  await expect(page.locator(".sync-note")).toContainText("1 calendar item held");
-  await expect(page.locator("[data-source-freshness=stale]")).toContainText("Capture status: capture unverified.");
+  await expect(page.locator(".sync-note")).toContainText("Refresh finished with items needing attention. 2 Canvas sections or files could not refresh.");
+  await expect(page.locator(".sync-note")).toContainText("1 calendar item was left unchanged");
+  await expect(page.locator(".sync-note")).toContainText("contents did not match a supported file type");
+  await expect(page.locator(".sync-note")).toContainText("See Activity for details.");
+  await page.screenshot({ path: testInfo.outputPath("refresh-attention.png") });
+  await expect(page.locator("[data-source-freshness=stale]")).toContainText("could not be verified from the latest refresh.");
   await expect(page.getByRole("heading", { name: "Before Canvas deadline" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Synthetic calendar deadline" })).toBeVisible();
   await visit(page, "Activity");
@@ -430,15 +434,30 @@ test("full refresh reports coverage gaps, reloads freshness, and rereads after c
   expect(commands.filter((command) => command === "start_full_refresh")).toHaveLength(1);
 });
 
+test("a running refresh explains temporary hiding without an error warning", async ({ page }, testInfo) => {
+  await openDashboard(page, { mode: "full", staleCapture: true, holdFullRefresh: true });
+  await expect(page.locator("[data-source-freshness=stale]")).toBeVisible();
+  await page.locator(".top-actions").getByRole("button", { name: "Refresh", exact: true }).click();
+  const notice = page.locator("[data-source-freshness=refreshing]");
+  await expect(notice).toContainText("Updating Canvas.");
+  await expect(notice).toContainText("temporarily hidden");
+  await expect(notice).not.toHaveClass(/inline-error/);
+  await expect(page.locator("[data-source-freshness=stale]")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Synthetic calendar deadline" })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("refresh-progress.png") });
+  await page.evaluate(() => (window as unknown as { __releaseFullRefresh?: () => void }).__releaseFullRefresh?.());
+  await expect(page.locator(".sync-note")).toContainText("Canvas and calendar updated.");
+});
+
 test("full refresh banner keeps 125 Canvas gaps separate from a held calendar item", async ({ page }) => {
   await openDashboard(page, { mode: "full", fullGap: true, fullGapCount: 125, fullCalendarHeld: 1, fullOmissionCount: 9 });
   await page.locator(".top-actions").getByRole("button", { name: "Refresh", exact: true }).click();
 
   const note = page.locator(".sync-note");
-  await expect(note).toContainText("125 required Canvas capture gaps");
-  await expect(note).toContainText("9 optional capture omissions recorded");
-  await expect(note).toContainText("calendar incomplete");
-  await expect(note).toContainText("1 calendar item held");
+  await expect(note).toContainText("125 Canvas sections or files could not refresh");
+  await expect(note).toContainText("9 optional items were unavailable or skipped");
+  await expect(note).toContainText("calendar item was left unchanged");
+  await expect(note).toContainText("1 calendar item was left unchanged");
   await expect(note).not.toContainText("126");
 });
 
@@ -447,10 +466,10 @@ test("full refresh banner stays partial when Canvas completes but calendar holds
   await page.locator(".top-actions").getByRole("button", { name: "Refresh", exact: true }).click();
 
   const note = page.locator(".sync-note");
-  await expect(note).toContainText("Full refresh partial.");
-  await expect(note).toContainText("Canvas complete (no required Canvas capture gaps");
-  await expect(note).toContainText("calendar incomplete");
-  await expect(note).toContainText("1 calendar item held");
+  await expect(note).toContainText("Refresh finished with items needing attention.");
+  await expect(note).toContainText("Canvas updated.");
+  await expect(note).toContainText("calendar item was left unchanged");
+  await expect(note).toContainText("1 calendar item was left unchanged");
 });
 
 test("calendar refresh changes only deadlines and labels its scope in Activity and after reload", async ({ page }) => {
@@ -578,8 +597,8 @@ test("stale browser freshness masks Canvas facts and explains the gap on each pa
   await expect(page.getByRole("heading", { name: "Synthetic calendar deadline" })).toBeVisible();
   for (const label of ["Timeline", "Grades", "Inbox", "Done", "Courses", "Library", "Activity", "More"]) {
     if (label !== "Timeline") await visit(page, label);
-    await expect(page.locator("[data-source-freshness=stale]")).toContainText("Capture status: capture unverified.");
-    await expect(page.locator("[data-source-freshness=stale]")).toContainText("independent calendar and personal records remain");
+    await expect(page.locator("[data-source-freshness=stale]")).toContainText("could not be verified from the latest refresh.");
+    await expect(page.locator("[data-source-freshness=stale]")).toContainText("calendar and personal records remain available");
   }
 });
 

@@ -121,7 +121,16 @@ function parseConversation(value: unknown): DashboardConversation | undefined {
 function parseChange(value: unknown): DashboardRefreshChange | undefined {
   const item = record(value); const rawKind = text(item.kind, "notice").toLowerCase(); const title = text(item.title); if (title.length === 0) return undefined;
   const kind = rawKind === "added" || rawKind === "changed" || rawKind === "removed" ? rawKind : "notice";
-  return { kind, title, detail: text(item.detail) };
+  const rawDetail = text(item.detail);
+  const calendarReason = ({
+    "ambiguous-event": "This calendar item could not be matched to one verified Canvas event and date. Its previous value was kept.",
+    "ambiguous-course": "This calendar item matched more than one course. Its previous value was kept.",
+    "unknown-course": "This calendar item belongs to a course that is not connected here. Its previous value was kept.",
+    "floating-time": "This calendar item has a time but no timezone. Its previous value was kept rather than guessing a deadline.",
+    "unsupported-event": "This calendar item has an unsupported format or missing details. Its previous value was kept.",
+    "cancelled-event": "Canvas marked this calendar item as cancelled. It was retained for review.",
+  } as Readonly<Record<string, string>>)[rawDetail];
+  return { kind, title: calendarReason === undefined ? title : "Calendar item needs review", detail: calendarReason ?? rawDetail };
 }
 
 function parseRefresh(value: unknown): DashboardRefresh | undefined {

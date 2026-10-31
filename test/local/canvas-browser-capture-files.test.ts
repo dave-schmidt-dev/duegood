@@ -134,6 +134,36 @@ describe("Canvas file body capture", () => {
     expect(JSON.stringify(capture)).not.toContain("synthetic private transfer detail");
   });
 
+  it("treats only rejected macOS companions of one archived same-folder document as optional", async () => {
+    const mismatch = "HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH";
+    for (const mode of ["paired", "reverse-order", "orphan", "other-folder", "failed-main", "conflicting-name", "duplicate-main", "network-failure", "valid-sidecar"] as const) {
+      const capture = createCanvasFileCapture({
+        progress: async () => {},
+        downloadFile: async ({ fileId }: { fileId: number }) => {
+          if ((fileId === 900 && mode !== "valid-sidecar") || mode === "failed-main") {
+            throw Object.assign(new Error("private details"), { code: mode === "network-failure" ? "HELPER_DOWNLOAD_REQUEST_FAILED" : mismatch });
+          }
+          return { kind: "staged", fileId, stagedFile: `${"b".repeat(32)}.blob`, byteCount: 27,
+            sha256: "a".repeat(64), contentType: "application/zip", sourceAuthenticity: "unverified" };
+        },
+      });
+      const sidecar = { id: 900, folder_id: 50, filename: "._Synthetic.pptx", size: 27, url: FILE_URL };
+      const main = { id: 901, folder_id: mode === "other-folder" ? 51 : 50, filename: "Synthetic.pptx", size: 27, url: FILE_URL };
+      if (mode === "reverse-order") await capture.capture(main);
+      await capture.capture(sidecar);
+      if (mode !== "orphan" && mode !== "reverse-order") await capture.capture(main);
+      if (mode === "conflicting-name") await capture.capture({ ...sidecar, filename: "Real.pptx" });
+      if (mode === "duplicate-main") await capture.capture({ ...main, id: 902 });
+      const receipts = capture.finish();
+      const result = receipts.find((receipt: { fileId: number }) => receipt.fileId === 900);
+      if (mode === "paired" || mode === "reverse-order") expect(result).toEqual({ fileId: 900, status: "gap", reason: "not-applicable" });
+      else if (mode === "valid-sidecar") expect(result?.status).toBe("staged");
+      else expect(result?.reason).toBe(mode === "network-failure" ? "HELPER_DOWNLOAD_REQUEST_FAILED" : mismatch);
+      expect(JSON.stringify(receipts)).not.toContain("Synthetic.pptx");
+      expect(capture.finish()).toEqual(receipts);
+    }
+  });
+
   it("records a locked file as an explicit omission without attempting a download", async () => {
     const test = testCollector({ fileItem: { locked_for_user: true } });
     const capture = await test.capture;

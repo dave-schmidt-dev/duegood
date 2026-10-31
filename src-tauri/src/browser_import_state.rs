@@ -16,8 +16,7 @@ use crate::store::{
 
 use super::{BrowserImportError, MAX_JSON_BYTES, STATUS_FILE, STATUS_FORMAT, STATUS_VERSION};
 
-#[path = "browser_import_diagnostics.rs"]
-mod diagnostics;
+use super::diagnostics;
 
 pub(super) struct NativeView {
     pub coursework: Value,

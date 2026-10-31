@@ -103,6 +103,14 @@ export function createCanvasFileCapture({ downloadFile, progress }) {
         else candidate.expectedSize = item.size;
       } else candidate.invalidSize = true;
     }
+    // Keep names local to the collector; they never enter progress or file receipts.
+    const identity = Number.isSafeInteger(item.folder_id) && item.folder_id > 0
+      && typeof item.filename === "string" && item.filename.length > 0 && item.filename.length <= 1024
+      ? { folderId: item.folder_id, filename: item.filename } : undefined;
+    if (identity !== undefined) {
+      if (candidate.identity === undefined) candidate.identity = identity;
+      else if (JSON.stringify(candidate.identity) !== JSON.stringify(identity)) candidate.identityConflict = true;
+    }
     const revision = revisionEvidence(item);
     if (candidate.revision === undefined) candidate.revision = revision;
     else if (JSON.stringify(candidate.revision) !== JSON.stringify(revision)) candidate.revisionConflict = true;
@@ -211,7 +219,22 @@ export function createCanvasFileCapture({ downloadFile, progress }) {
       attempted.add(candidate.fileId);
       gap(candidate.fileId, candidate.invalidSize ? "invalid-or-oversized-file-size" : "source-url-unavailable");
     }
-    return receipts.slice();
+    // A rejected macOS companion is optional only when its one real document in the same
+    // folder was actually archived. Orphans, conflicting metadata, and all other failures
+    // stay required gaps. Valid files (even with a ._ name) keep their validated receipts.
+    const stagedIds = new Set(receipts.filter((receipt) => receipt.status === "staged").map((receipt) => receipt.fileId));
+    return receipts.map((receipt) => {
+      const candidate = candidates.get(receipt.fileId);
+      const identity = candidate?.identity;
+      if (receipt.reason !== "HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH"
+          || candidate.identityConflict || candidate.revisionConflict || candidate.invalidSize
+          || !identity?.filename.startsWith("._") || identity.filename.length <= 2) return receipt;
+      const companions = [...candidates.values()].filter((other) => other.fileId !== candidate.fileId
+        && !other.identityConflict && !other.revisionConflict && !other.invalidSize
+        && other.identity?.folderId === identity.folderId && other.identity.filename === identity.filename.slice(2));
+      return companions.length === 1 && stagedIds.has(companions[0].fileId)
+        ? { fileId: receipt.fileId, status: "gap", reason: "not-applicable" } : receipt;
+    });
   };
 
   return { capture, finish };

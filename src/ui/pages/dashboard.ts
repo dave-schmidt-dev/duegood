@@ -758,18 +758,18 @@ export function renderDashboard(state: DashboardState, handlers: DashboardHandle
   const snapshotStatus = `Saving today’s private recovery snapshot… ${String(snapshotFiles)} file${snapshotFiles === 1 ? "" : "s"} · ${String(snapshotBytes)} bytes copied.`;
   const refreshScope = state.desktop?.browserRefreshAvailable === true ? "Canvas coursework, grades, Inbox, library, and calendar deadlines" : state.desktop?.refreshAvailable === true ? "Canvas coursework, grades, Inbox, and library" : state.desktop?.icalRefreshAvailable === true ? "Calendar deadlines only; grades, Inbox, and library keep the prior Canvas capture" : "Refresh unavailable";
   const refreshButton: ElementDescriptor = { tag: "button", attrs: { type: "button", class: `sync-button refresh-button${refreshing ? " refreshing" : ""}`, "aria-busy": String(refreshing), title: refreshScope, ...(refreshing ? { disabled: "" } : {}) }, text: refreshActionLabel(state, refreshing, "topbar"), on: { click: handlers.onRefresh } };
-  const sourceNotice = freshnessNotice(state.data.sourceStatus);
+  const sourceNotice = freshnessNotice(state.data.sourceStatus, refreshing && (state.desktop?.browserRefreshAvailable === true || state.desktop?.refreshAvailable === true));
   return el("div", undefined, { class: "app" }, [el("aside", undefined, { class: "sidebar" }, [el("div", undefined, { class: "brand" }, [brandMark, el("div", undefined, undefined, [el("div", "Due Good", { class: "brand-name" }), el("span", courses[0]?.term ?? "Marymount", { class: "brand-note" })])]), dashboardNav(state.page, handlers.onNavigate)]), el("div", undefined, { class: "workspace" }, [el("header", undefined, { class: "topbar" }, [el("div", undefined, { class: "term-label" }, [el("strong", courses[0]?.term ?? "Current term"), el("span", ` · ${courses.length} course${courses.length === 1 ? "" : "s"}`)]), el("div", undefined, { class: "top-actions" }, [...(state.desktop?.storeState === "preview" ? [el("span", "Preview copy", { class: "preview-badge", title: "Imported from the legacy folder. It never refreshes." })] : []), el("span", refreshNote(state, latest), { class: "sync-note", role: "status", "aria-live": "polite" }), ...(state.data.refreshAvailable ? [refreshButton] : [])])]), el("main", undefined, { id: "main", tabindex: "-1" }, [...(state.loading ? [empty("Loading coursework…")] : []), ...(state.desktop?.snapshotInProgress ? [el("div", snapshotStatus, { class: "status", role: "status", "aria-live": "polite" })] : []), ...(state.error === undefined ? [] : [el("div", state.error, { class: "load-error", role: "alert" })]), ...(state.desktop?.warning ? [el("div", state.desktop.warning, { class: "load-error", role: "alert" })] : []), ...(!state.loading && state.error === undefined ? [...(sourceNotice === undefined ? [] : [sourceNotice]), page(state, handlers)] : [])])])]);
 }
 
-function freshnessNotice(source: DashboardSourceStatus): ElementDescriptor | undefined {
+function freshnessNotice(source: DashboardSourceStatus, refreshing: boolean): ElementDescriptor | undefined {
   const affected = [
     ...(source.coursework === "not_synced" ? ["coursework and grades"] : []),
     ...(source.inbox !== undefined && source.inbox !== "synced" ? ["Inbox"] : []),
     ...(source.library === "not_synced" ? ["library items"] : []),
   ];
   if (affected.length === 0 && source.browserFreshness?.current !== false) return undefined;
-  const reason = source.browserFreshness?.current === false ? ` Capture status: ${source.browserFreshness.reason.replaceAll("-", " ")}.` : "";
+  if (refreshing) return el("p", "Updating Canvas. Unverified coursework is temporarily hidden; calendar and personal records remain available.", { class: "source-freshness-notice", role: "note", "data-source-freshness": "refreshing" });
   const sections = affected.length === 0 ? "Canvas" : `Canvas ${affected.join(", ")}`;
-  return el("p", `${sections} may be stale or incomplete.${reason} Unverified Canvas facts are withheld; independent calendar and personal records remain.`, { class: "inline-error source-freshness-notice", role: "note", "data-source-freshness": "stale" });
+  return el("p", `${sections} could not be verified from the latest refresh. Unverified coursework is hidden; calendar and personal records remain available. Refresh again or check Activity for details.`, { class: "inline-error source-freshness-notice", role: "note", "data-source-freshness": "stale" });
 }

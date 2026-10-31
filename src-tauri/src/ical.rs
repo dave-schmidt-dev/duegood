@@ -220,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_calendar_metadata_maps_only_matching_date_only_feed_without_url() {
+    fn exact_calendar_metadata_maps_only_matching_date_only_feed_and_url() {
         let mut options = options();
         options.explicit_uid_mappings.insert(
             "event-calendar-event-83".into(),
@@ -244,6 +244,31 @@ mod tests {
         assert_eq!(accepted.events[0].calendar_identity, "event:83");
         assert_eq!(accepted.events[0].at.kind, "date");
         assert_eq!(accepted.events[0].at.value, "2030-01-20");
+
+        // Canvas exports all-day events with a parameterized calendar URL. The URL and
+        // API-backed UID/date evidence must agree; neither alone can override a conflict.
+        let calendar_url = "https://canvas.synthetic.invalid/calendar?include_contexts=course_42&month=1&year=2030#calendar_event_83";
+        let with_url = event("event-calendar-event-83", calendar_url, "", "DTSTART;VALUE=DATE;VALUE=DATE:20300120")
+            .replace("URL:", "URL;VALUE=URI:");
+        let accepted_url = normalize_canvas_ical(&feed(&[with_url.clone()], ""), &options).unwrap();
+        assert_eq!(accepted_url.events.len(), 1);
+        assert!(accepted_url.held.is_empty());
+        assert_eq!(accepted_url.events[0].calendar_identity, accepted.events[0].calendar_identity);
+        assert_eq!(accepted_url.events[0].at, accepted.events[0].at);
+        for changed in [
+            with_url.replace("20300120", "20300121"),
+            with_url.replace("course_42", "course_999"),
+            with_url.replace("calendar_event_83", "calendar_event_84"),
+            with_url.replace("canvas.synthetic.invalid", "foreign.synthetic.invalid"),
+            with_url.replace("DTSTART;VALUE=DATE;VALUE=DATE:20300120", "DTSTART:20300120T120000Z"),
+        ] {
+            let rejected = normalize_canvas_ical(&feed(&[changed], ""), &options).unwrap();
+            assert!(rejected.events.is_empty());
+            assert_eq!(rejected.held.len(), 1);
+        }
+        let duplicate = normalize_canvas_ical(&feed(&[with_url.clone(), with_url], ""), &options).unwrap();
+        assert!(duplicate.events.is_empty());
+        assert_eq!(duplicate.held.len(), 2);
 
         let mismatched_date = normalize_canvas_ical(
             &feed(

@@ -1,5 +1,19 @@
 # Due Good local Marymount replacement plan
 
+## 2026-10-31 refresh correctness and explanations
+
+Scope: bounded local repair of the owner's refresh, with existing validation, source ownership, and retention contracts preserved. Captain-direct depth; no architecture, authentication, cloud, public API, or data migration changes. Preserve unrelated README/CHANGELOG edits.
+
+- Confirmed: starting a new capture invalidates the previous run; the UI currently renders that expected running state as an error. Terminal feedback exposes counts rather than actionable explanations.
+- Confirmed: three held all-day feed events each have one generation-bound Canvas identity and matching date. The feed supplies a parameterized Canvas calendar URL, but normalization uses its identity mapping only when no URL exists, then requires a separate unpopulated verification map for URL-bearing events.
+- Confirmed: the active rejected PowerPoint-labelled item has the macOS `._` companion name; exactly one same-folder original is successfully archived. Preserve signature rejection, but classify this narrowly matched companion as a nonapplicable omission. Orphan companions, failed originals, conflicting metadata, network failures, and genuine validated `._` files keep their existing outcomes. The rejected bytes were not retained; this is metadata-based classification, not a claim that their binary format was inspected.
+- Not applicable: deferred OAuth/cloud design and missing original legacy exporter/server audits.
+- Not verifiable yet: installed behavior after correction; source/synthetic checks and live diagnosis are distinct from installation and a successful live refresh.
+
+Implementation: reproduce the observed calendar URL/date shape with synthetic tests; use the existing generation-bound identity only when URL, course, event, and date agree; retain all conflict rejection. Resolve the file failure from evidence, preserving binary validation. Explain normal running status neutrally and describe incomplete results with retained-data status and Activity details. Add synthetic regression coverage in the existing Rust, UI, and Playwright runners and update test membership counts.
+
+Validation: targeted regression checks, required type/lint/dead-code/public-tree/membership checks, staged Rust suite, UI suite, and headless refresh Playwright checks with a synthetic rendered screenshot. Record actual results and remaining live qualification separately. No installed launch or screen-seizing test without the owner's required walkthrough/away authorization.
+
 ## 2026-09-27 stage and temporary-root repair
 
 **Confirmed:** session commands repeatedly passed `--destination /private/tmp/duegood-...` to the stage CLI. That CLI removed only implicit `$TMPDIR` roots, so those explicit full-copy stages survived. The collector scanned only `$TMPDIR`, two prefixes, and a two-hour age window. The installer retains hidden backup app bundles inside `/Applications`. **Changed:** the owner now requires one fixed gitignored `.stage/<purpose>` namespace and a shared gitignored `.cache/cargo-target` for all Tauri stages, including helper builds. **Not verifiable from the bounded session audit:** the creator of every older named root; do not classify all of them as CLI output. **Not applicable:** a generic cloud or OAuth migration for this local storage defect.

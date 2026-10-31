@@ -30,6 +30,8 @@ mod course_metadata;
 mod daily_scope;
 #[path = "browser_import_inventory.rs"]
 mod inventory;
+#[path = "browser_import_diagnostics.rs"]
+mod diagnostics;
 #[path = "browser_import_state.rs"]
 mod state;
 
@@ -557,6 +559,7 @@ fn canvas_import_history_event(
             "detail": format!("Daily Canvas pages refreshed{omission_summary}. Existing data was preserved."),
         }));
     }
+    changes.extend(diagnostics::file_history_notices(bundle));
     Ok(event)
 }
 

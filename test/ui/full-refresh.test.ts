@@ -18,8 +18,8 @@ describe("full refresh result semantics", () => {
     expect(result).not.toBeNull();
     const feedback = fullRefreshFeedback(result!);
     expect(feedback.state).toBe("complete");
-    expect(feedback.detail).toContain("Current Canvas pages refreshed.");
-    expect(feedback.detail).toContain("3 optional capture omissions recorded");
+    expect(feedback.detail).toContain("Canvas and calendar updated.");
+    expect(feedback.detail).toContain("3 optional items were unavailable or skipped");
     expect(feedback.detail).not.toContain("everything captured");
   });
 
@@ -36,7 +36,7 @@ describe("full refresh result semantics", () => {
       calendarHeld: 0, updatedAt: null,
     });
     expect(partial.state).toBe("partial");
-    expect(partial.detail).toContain("1 required Canvas capture gap");
+    expect(partial.detail).toContain("1 Canvas section or file could not refresh");
   });
 
   it("reports Canvas gaps separately from held calendar items", () => {
@@ -47,9 +47,9 @@ describe("full refresh result semantics", () => {
     });
 
     expect(feedback.state).toBe("partial");
-    expect(feedback.detail).toContain("125 required Canvas capture gaps");
-    expect(feedback.detail).toContain("9 optional capture omissions recorded");
-    expect(feedback.detail).toContain("58 updated, 1 calendar item held");
+    expect(feedback.detail).toContain("125 Canvas sections or files could not refresh");
+    expect(feedback.detail).toContain("9 optional items were unavailable or skipped");
+    expect(feedback.detail).toContain("58 updated. 1 calendar item was left unchanged");
     expect(feedback.detail).not.toContain("126");
   });
 
@@ -61,9 +61,9 @@ describe("full refresh result semantics", () => {
     });
 
     expect(feedback.state).toBe("partial");
-    expect(feedback.detail).toContain("Canvas complete");
-    expect(feedback.detail).toContain("calendar incomplete");
-    expect(feedback.detail).toContain("1 calendar item held");
+    expect(feedback.detail).toContain("Canvas updated.");
+    expect(feedback.detail).toContain("calendar item was left unchanged");
+    expect(feedback.detail).toContain("1 calendar item was left unchanged");
   });
 
   it("does not call a refresh complete when a held calendar item conflicts with source status", () => {
@@ -74,7 +74,16 @@ describe("full refresh result semantics", () => {
     });
 
     expect(feedback.state).toBe("partial");
-    expect(feedback.detail).toContain("calendar incomplete");
+    expect(feedback.detail).toContain("calendar item was left unchanged");
+  });
+
+  it("explains file failures from the current refresh and directs the user to Activity", () => {
+    const feedback = fullRefreshFeedback({
+      status: "incomplete", browserStatus: "incomplete", calendarStatus: "complete",
+      gapCount: 1, omissionCount: 1, calendarAdded: 0, calendarUpdated: 2, calendarHeld: 0, updatedAt: null,
+    }, ["1 file could not be verified: its contents did not match its file type."]);
+    expect(feedback.detail).toContain("contents did not match its file type");
+    expect(feedback.detail).toContain("See Activity for details.");
   });
 
   it("surfaces a failed source alongside the other source's status", () => {
@@ -85,7 +94,7 @@ describe("full refresh result semantics", () => {
     });
 
     expect(feedback.state).toBe("partial");
-    expect(feedback.detail).toContain("Canvas complete");
-    expect(feedback.detail).toContain("calendar failed");
+    expect(feedback.detail).toContain("Canvas updated.");
+    expect(feedback.detail).toContain("Calendar could not refresh");
   });
 });

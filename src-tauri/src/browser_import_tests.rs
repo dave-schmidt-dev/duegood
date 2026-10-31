@@ -685,7 +685,8 @@ fn status_coverage_coalesces_duplicate_endpoint_rows_to_gap() {
                 "items":[
                     {"fileId":501,"status":"archived"},
                     {"fileId":502,"status":"gap","reason":"HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH"},
-                    {"fileId":503,"status":"gap","reason":"secret-private-download-error"}
+                    {"fileId":503,"status":"gap","reason":"secret-private-download-error"},
+                    {"fileId":999,"status":"gap","reason":"HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH"}
                 ]
             }),
         ]);
@@ -777,6 +778,15 @@ fn status_coverage_coalesces_duplicate_endpoint_rows_to_gap() {
         .unwrap()
         .iter()
         .any(|row| row["reason"] == "other" && row["count"] == 1));
+    let notices = diagnostics::file_history_notices(&bundle);
+    assert!(notices.iter().any(|notice| notice["detail"].as_str().unwrap().starts_with("1 file: could not be verified")));
+    assert!(notices.iter().any(|notice| notice["detail"].as_str().unwrap().contains("could not be downloaded")));
+    assert!(!serde_json::to_string(&notices).unwrap().contains("secret-private-download-error"));
+    let resources = bundle.snapshot["resources"].as_array_mut().unwrap();
+    let receipts = resources.last_mut().unwrap()["items"].as_array_mut().unwrap();
+    receipts[1]["reason"] = json!("not-applicable");
+    let optional_notices = diagnostics::file_history_notices(&bundle);
+    assert!(optional_notices.iter().any(|notice| notice["detail"].as_str().unwrap().contains("macOS metadata companions skipped")));
     let encoded = serde_json::to_string(&status).unwrap();
     assert!(!encoded.contains("secretpayload"));
     assert!(!encoded.contains("private-course-token-991"));
