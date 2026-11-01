@@ -26,7 +26,7 @@ export const DATA: DashboardData = {
   refreshes: [{ id: "refresh", startedAt: NOW, status: "partial", summary: "Existing items were kept.", added: 0, changed: 0, removed: 0, changes: [{ kind: "notice", title: "IT 570 unavailable", detail: "No existing data was removed." }] }],
   profile: null,
   refreshAvailable: true,
-  sourceStatus: { state: "ready", label: "Local source", detail: "Available", lastRefreshAt: NOW },
+  sourceStatus: { coursework: "synced", inbox: "synced", state: "ready", label: "Local source", detail: "Available", lastRefreshAt: NOW },
 };
 
 export const handlers: DashboardHandlers = {

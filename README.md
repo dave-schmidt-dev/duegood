@@ -6,6 +6,8 @@ The dashboard provides Timeline, Grades, Inbox, Completed, Courses, Library, Act
 
 ## Current state
 
+When Canvas coursework or Inbox cannot be verified, Timeline marks its summary as unverified instead of claiming zero work or messages; retained calendar deadlines remain visible. Empty days do not imply free time until coursework is verified.
+
 - The installed bundle identifier is `com.zerodelta.duegood`. The iCal feed and Canvas browser capture remain independent sources; the app’s existing **Refresh** action attempts Canvas capture/import, then independently attempts calendar refresh and reports each source separately.
 - The dashboard accepts both numeric and canonical decimal-string Canvas course IDs retained by earlier native stores, while rejecting malformed or unsafe IDs.
 - The Canvas v2 capture-to-import workflow has separate source, synthetic, live-import, and installed-app acceptance gates. Earlier browser captures do not prove current native publication or installed behavior.

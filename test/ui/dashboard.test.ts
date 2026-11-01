@@ -5,6 +5,24 @@ import { DASHBOARD_ROUTES } from "../../src/ui/routes";
 import { DATA, DATA_FOLDER, handlers, NOW, state } from "./desktop-test-fixtures";
 import { findAll, words } from "./descriptor-test-helpers";
 describe("dashboard production UI contract", () => {
+  it("never presents unverified empty coursework or Inbox as a verified zero", () => {
+    for (const sourceStatus of [{}, { coursework: "not_synced", inbox: "not_synced" }, { coursework: "synced", inbox: "synced", browserFreshness: { current: false, reason: "capture-unverified", runId: null, observedAt: null, sections: [] } }] as const) {
+      const dashboard = renderDashboard({ ...state("timeline"), data: { ...DATA, events: [], conversations: [], sourceStatus } }, handlers);
+      const rail = findAll(dashboard, (item) => item.attrs?.class === "timeline-rail")[0]!;
+      expect(words(rail)).toContain("Due soon · Unverified");
+      expect(words(rail)).toContain("Coursework could not be verified.");
+      expect(words(rail)).toContain("Inbox could not be verified.");
+      expect(words(rail)).not.toContain("No unfinished assignments are due.");
+      expect(words(rail)).not.toContain("No unread Canvas messages.");
+      expect(words(rail)).not.toContain("Due soon · 0");
+      expect(words(dashboard)).not.toContain("Open day");
+      expect(words(dashboard)).not.toContain("Empty rows are time you can use.");
+    }
+    const verified = renderDashboard({ ...state("timeline"), data: { ...DATA, events: [], conversations: [] } }, handlers);
+    expect(words(verified)).toContain("No unfinished assignments are due.");
+    expect(words(verified)).toContain("No unread Canvas messages.");
+  });
+
   it("parses a local profile fail-closed and renders avatar fallback initials", () => {
     const parsed = parseDashboard({ profile: { displayName: "Alex Student", avatarPath: "/api/local/profile/avatar" } });
     expect(parsed.profile).toEqual({ displayName: "Alex Student", avatarPath: "/api/local/profile/avatar" });

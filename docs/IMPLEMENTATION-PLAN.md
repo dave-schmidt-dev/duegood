@@ -465,3 +465,11 @@ Headless conversion candidates. The native suite should keep only launch, quit, 
 - Gate prerequisite: the package validator omitted `.cache` and `.stage`, hashing the 31 GB Cargo cache and traversing transient candidates. Add those runtime roots to its existing exclusion set, with a synthetic regression proving forbidden filenames still fail in source. One non-test-line repair uses the captain-direct exception; unittest discovery already includes its existing test file.
 - Preserved holds: owner native/live acceptance and legacy runtime retirement; existing README work and staged CHANGELOG edits. No install, live institution access, commit, push or deployment.
 - Result: installer/launch quick checks 49 passed; staged local regressions 502 passed with two workers after sandbox/load recovery; typecheck, lint, dead-code, package structure and 18 Python tests, membership, hook policy, public-tree and checksum gates passed. Rust membership is discovery only; no native/live owner acceptance was attempted. See HISTORY 2026-10-19 and `.logs/health-size-20261019/stage-retry.log`.
+
+## 2026-11-01: Refresh startup and unverified empty states
+
+- Confirmed: installed browser broker reports SIGN_IN_REQUIRED; saved Canvas capture attempt failed. Owner sign-in is required; do not reset identity or copy cookies.
+- Confirmed: Homebrew Node cannot launch because its simdjson library ABI is missing; the pinned calendar helper uses env node. Repair the installed Node package without changing broker pins or secrets. Verify fetch through the existing broker separately from store application.
+- Confirmed: Timeline shows a zero due count and reassuring empty text while Canvas coursework is hidden. Gate coursework and Inbox summaries on their own source status; keep retained calendar items visible, label incomplete counts, and preserve verified empty states.
+- Changed: the October 31 source repair is already committed; these failures have different causes. Not verifiable: live authenticated Canvas completion before owner sign-in. Not applicable: OAuth, provider changes, data migration, or redesign.
+- Direct-depth captain repair; checks: registered unit and headless Playwright regressions, typecheck, lint, dead-code, membership, package checks. No screen takeover. Existing README/CHANGELOG edits are preserved.

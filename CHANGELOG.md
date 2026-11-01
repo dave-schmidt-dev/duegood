@@ -9,6 +9,8 @@
 
 ### Fixed
 
+- Mark unverified Timeline coursework and Inbox as unknown rather than claiming no assignments, unread messages, or work on empty days; retain available calendar deadlines.
+
 - Match verified all-day Canvas calendar events even when the feed includes a calendar URL, classify rejected macOS metadata companions separately from their archived documents, and explain running refreshes, file failures, and held calendar items in plain language.
 
 - Accept verified archived Canvas receipt statuses, separate Canvas coverage gaps from calendar held events, preserve bounded capture-reason counts, and omit nonapplicable quiz children from incomplete-refresh reporting.

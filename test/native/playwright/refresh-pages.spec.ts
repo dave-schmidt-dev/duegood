@@ -15,6 +15,7 @@ interface Setup {
   readonly failReload?: boolean;
   readonly noCalendarChange?: boolean;
   readonly staleCapture?: boolean;
+  readonly noDeadlines?: boolean;
   readonly dateOnlyActivity?: boolean;
   readonly malformedCalendarConfirmation?: boolean;
   readonly initialHistoryStatuses?: readonly { readonly status: "succeeded" | "incomplete" | "failed"; readonly sourceComplete: boolean }[];
@@ -66,6 +67,7 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
   const storageKey = "duegood-refresh-pages-synthetic-documents";
   let nextId = 1;
   let documents = JSON.parse(JSON.stringify(options.initial)) as Record<string, unknown>;
+  if (setup.noDeadlines) (documents.coursework as { items: unknown[] }).items = [];
   try {
     const stored = localStorage.getItem(storageKey);
     if (stored !== null) documents = JSON.parse(stored) as Record<string, unknown>;
@@ -591,10 +593,25 @@ test("Activity gives complete, partial, and failed refreshes their accepted stat
   expect(status("failed")).toMatchObject({ className: "refresh-status failed", color: statusStyles.clay });
 });
 
+test("unverified empty coursework never claims nothing is due", async ({ page }, testInfo) => {
+  await openDashboard(page, { mode: "canvas", staleCapture: true, noDeadlines: true });
+  const rail = page.locator(".timeline-rail");
+  await expect(rail).toContainText("Due soon · Unverified");
+  await expect(rail).toContainText("Coursework could not be verified. Refresh to check what is due.");
+  await expect(rail).toContainText("Inbox could not be verified.");
+  await expect(rail).not.toContainText("No unfinished assignments are due.");
+  await expect(rail).not.toContainText("No unread Canvas messages.");
+  await expect(page.locator(".hero-copy")).toContainText("Empty rows may have unverified coursework.");
+  await expect(page.locator(".open-day").first()).toHaveText("Coursework unverified");
+  await page.screenshot({ path: testInfo.outputPath("unverified-empty.png") });
+});
+
 test("stale browser freshness masks Canvas facts and explains the gap on each page", async ({ page }) => {
   await openDashboard(page, { mode: "canvas", staleCapture: true });
   await expect(page.getByRole("heading", { name: "Before Canvas deadline" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Synthetic calendar deadline" })).toBeVisible();
+  await expect(page.locator(".timeline-rail")).toContainText("Coursework could not be verified.");
+  await expect(page.locator(".timeline-rail .rail-due-list")).toContainText("Synthetic calendar deadline");
   for (const label of ["Timeline", "Grades", "Inbox", "Done", "Courses", "Library", "Activity", "More"]) {
     if (label !== "Timeline") await visit(page, label);
     await expect(page.locator("[data-source-freshness=stale]")).toContainText("could not be verified from the latest refresh.");
