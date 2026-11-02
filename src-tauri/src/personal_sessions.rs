@@ -1,6 +1,7 @@
 //! Bounded owner-supplied class sessions for the authoritative native coursework store.
 //!
-//! This accepts only explicit local clock facts. It does not read Canvas, capture archives, or
+//! This accepts explicit local clocks and exact owner-confirmed personal-session removals.
+//! It does not read Canvas, capture archives, or
 //! local notes. The supplied note digest is provenance only; the note text stays outside this
 //! helper and the coursework file unless another narrow owner action writes it.
 
@@ -44,6 +45,7 @@ impl std::error::Error for PersonalSessionHelperError {}
 pub struct PersonalSessionResult {
     pub added: usize,
     pub updated: usize,
+    pub removed: usize,
     pub unchanged: bool,
 }
 
@@ -61,6 +63,8 @@ pub struct PersonalSessionRequest {
     term: String,
     time_zone: String,
     sessions: Vec<SessionInput>,
+    #[serde(default)]
+    remove_session_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,11 +144,12 @@ fn apply_personal_sessions(
     }
     let coursework: Value = serde_json::from_slice(&prior.bytes)
         .map_err(|_| PersonalSessionHelperError("COURSEWORK_INVALID"))?;
-    let (next, added, updated) = merge_request(&coursework, request)?;
+    let (next, added, updated, removed) = merge_request(&coursework, request)?;
     if next == coursework {
         return Ok(PersonalSessionResult {
             added: 0,
             updated: 0,
+            removed: 0,
             unchanged: true,
         });
     }
@@ -158,6 +163,7 @@ fn apply_personal_sessions(
     Ok(PersonalSessionResult {
         added,
         updated,
+        removed,
         unchanged: false,
     })
 }
@@ -165,12 +171,12 @@ fn apply_personal_sessions(
 fn merge_request(
     coursework: &Value,
     request: &PersonalSessionRequest,
-) -> Result<(Value, usize, usize), PersonalSessionHelperError> {
+) -> Result<(Value, usize, usize, usize), PersonalSessionHelperError> {
     if request.canvas_course_id == 0
         || !bounded_text(&request.term)
         || !bounded_text(&request.time_zone)
-        || request.sessions.is_empty()
-        || request.sessions.len() > MAX_SESSIONS
+        || (request.sessions.is_empty() && request.remove_session_ids.is_empty())
+        || request.sessions.len() + request.remove_session_ids.len() > MAX_SESSIONS
     {
         return Err(PersonalSessionHelperError("INVALID_INPUT"));
     }
@@ -234,6 +240,35 @@ fn merge_request(
         }
     }
 
+    let prefix = format!("manual-session-{}-", request.canvas_course_id);
+    let mut removals = HashSet::new();
+    for id in &request.remove_session_ids {
+        if !id.strip_prefix(&prefix).is_some_and(valid_digest)
+            || !removals.insert(id.as_str())
+            || ids.contains(id)
+        {
+            return Err(PersonalSessionHelperError("INVALID_INPUT"));
+        }
+        if let Some(index) = existing.get(id) {
+            let item = &items[*index];
+            let provenance = &item["personalSession"];
+            let date = provenance["date"].as_str().unwrap_or("");
+            if item["kind"] != "session"
+                || item["source"] != "manual"
+                || item["course"] != course_key
+                || provenance["version"] != 1
+                || provenance["canvasCourseId"] != request.canvas_course_id
+                || provenance["term"] != request.term
+                || provenance["timeZone"] != request.time_zone
+                || !exact_date(date)
+                || NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err()
+                || session_id(request, date) != *id
+            {
+                return Err(PersonalSessionHelperError("SESSION_ID_CONFLICT"));
+            }
+        }
+    }
+
     let mut added = 0;
     let mut updated = 0;
     for fact in facts {
@@ -268,7 +303,10 @@ fn merge_request(
             added += 1;
         }
     }
-    Ok((result, added, updated))
+    let before_count = items.len();
+    items.retain(|item| !removals.contains(item["id"].as_str().unwrap_or("")));
+    let removed = before_count - items.len();
+    Ok((result, added, updated, removed))
 }
 
 fn session_fact(
@@ -306,17 +344,7 @@ fn session_fact(
     if start >= end {
         return Err(PersonalSessionHelperError("INVALID_INPUT"));
     }
-    let identity = json!([
-        request.canvas_course_id,
-        request.term,
-        input.date,
-        request.time_zone
-    ]);
-    let id = format!(
-        "manual-session-{}-{}",
-        request.canvas_course_id,
-        sha256_hex(identity.to_string().as_bytes())
-    );
+    let id = session_id(request, &input.date);
     Ok(SessionFact {
         id,
         at: start.to_rfc3339_opts(SecondsFormat::Secs, false),
@@ -327,6 +355,20 @@ fn session_fact(
             "timeZone":request.time_zone, "localNoteSha256":input.local_note_sha256
         }),
     })
+}
+
+fn session_id(request: &PersonalSessionRequest, date: &str) -> String {
+    let identity = json!([
+        request.canvas_course_id,
+        request.term,
+        date,
+        request.time_zone
+    ]);
+    format!(
+        "manual-session-{}-{}",
+        request.canvas_course_id,
+        sha256_hex(identity.to_string().as_bytes())
+    )
 }
 
 fn bounded_text(value: &str) -> bool {

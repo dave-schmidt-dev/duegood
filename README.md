@@ -90,7 +90,7 @@ Checks that take over the screen run only at a milestone: before a release, at a
 
 ## Owner-supplied class times
 
-For reviewed local syllabus dates whose meeting clocks are missing, the bounded `duegood-personal-sessions` native helper accepts explicit owner times as personal planning. It preserves Canvas facts and unrelated progress, checks the selected course, term and exact store version, and leaves identical replays unchanged. Build it with `npm run build:personal-sessions` after preparing the frontend assets. Its JSON input is private and must not be committed or printed; run with no arguments and provide the bounded request on standard input. Source refresh retains these manual class sessions.
+For reviewed local syllabus dates whose meeting clocks are missing, the bounded `duegood-personal-sessions` native helper accepts explicit owner times as personal planning. It preserves Canvas facts and unrelated progress, checks the selected course, term and exact store version, and leaves identical replays unchanged. Build it with `npm run build:personal-sessions` after preparing the frontend assets. Its JSON input is private and must not be committed or printed; run with no arguments and provide the bounded request on standard input. Source refresh retains these manual class sessions. For an owner-confirmed erroneous meeting, the same helper accepts `removeSessionIds` alongside `sessions: []`: it removes only exact owned personal-session identities, rejects stale versions and ownership conflicts, and reports a removed count. Retain a private rollback copy before a correction; never infer off-week dates from a weekday alone.
 
 ## Repository map
 

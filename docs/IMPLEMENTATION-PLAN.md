@@ -473,3 +473,9 @@ Headless conversion candidates. The native suite should keep only launch, quit, 
 - Confirmed: Timeline shows a zero due count and reassuring empty text while Canvas coursework is hidden. Gate coursework and Inbox summaries on their own source status; keep retained calendar items visible, label incomplete counts, and preserve verified empty states.
 - Changed: the October 31 source repair is already committed; these failures have different causes. Not verifiable: live authenticated Canvas completion before owner sign-in. Not applicable: OAuth, provider changes, data migration, or redesign.
 - Direct-depth captain repair; checks: registered unit and headless Playwright regressions, typecheck, lint, dead-code, membership, package checks. No screen takeover. Existing README/CHANGELOG edits are preserved.
+
+## 2026-11-02: Correct owner-reported manual meeting errors
+
+- Confirmed: the erroneous meeting is a native personal session; the current source schedule is unresolved. A parser-only change cannot correct the manual record. No evidence supports inferring an alternating recurrence.
+- Direct captain repair: extend the existing personal-session helper with bounded exact-identity removals, retaining its course/term checks, shared store lock and digest fence. Reject overlapping add/remove identities, malformed requests and mismatched ownership. Preserve unrelated records and personal fields.
+- Validate synthetic removal, stale-write rejection, replay and refresh preservation; build the fixed-root helper and apply only the owner-confirmed correction after retaining a private rollback copy. Keep private dates and identifiers out of committed tests and documentation. No GUI takeover, deployment, Canvas write, or publication.

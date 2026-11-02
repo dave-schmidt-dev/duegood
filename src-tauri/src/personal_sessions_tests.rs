@@ -104,6 +104,7 @@ fn adds_manual_session_with_explicit_clock_and_note_hash_provenance() {
         PersonalSessionResult {
             added: 1,
             updated: 0,
+            removed: 0,
             unchanged: false
         }
     );
@@ -149,6 +150,7 @@ fn replay_preserves_personal_fields_and_exact_bytes() {
         PersonalSessionResult {
             added: 0,
             updated: 0,
+            removed: 0,
             unchanged: true
         }
     );
@@ -179,6 +181,7 @@ fn corrected_owner_clock_updates_the_same_session_and_retains_progress_and_notes
         PersonalSessionResult {
             added: 0,
             updated: 1,
+            removed: 0,
             unchanged: false
         }
     );
@@ -417,4 +420,95 @@ fn empty_oversized_and_reversed_session_ranges_reject_without_write() {
     reversed.sessions[0].start_time = "20:30".into();
     reversed.sessions[0].end_time = "18:00".into();
     assert_rejected_without_write(&store, &reversed, "INVALID_INPUT");
+}
+
+fn removal_request(document: &Value, ids: Vec<Value>) -> PersonalSessionRequest {
+    parse(&json!({
+        "expectedVersion":sha256_hex(&node_json_bytes(document)),
+        "canvasCourseId":COURSE, "term":TERM, "timeZone":ZONE,
+        "sessions":[], "removeSessionIds":ids
+    }))
+}
+
+#[test]
+fn exact_manual_removal_preserves_other_records_and_replays_without_writing() {
+    let (_root, store) = seeded_store();
+    let original = document(&store);
+    apply_personal_sessions(&store, &request_for(&original), &mut |_| {}).unwrap();
+    let before = document(&store);
+    let id = before["items"].as_array().unwrap().last().unwrap()["id"].clone();
+    let request = removal_request(&before, vec![id.clone()]);
+    let result = apply_personal_sessions(&store, &request, &mut |_| {}).unwrap();
+    assert_eq!(result.removed, 1);
+    assert_eq!(result.added, 0);
+    assert_eq!(result.updated, 0);
+    assert!(!result.unchanged);
+    assert_eq!(document(&store), original);
+    assert_rejected_without_write(&store, &request, "VERSION_CONFLICT");
+    let mut progress = Vec::new();
+    let result = apply_personal_sessions(
+        &store,
+        &removal_request(&original, vec![id]),
+        &mut |phase| progress.push(phase),
+    )
+    .unwrap();
+    assert!(result.unchanged);
+    assert_eq!(result.removed, 0);
+    assert!(progress.is_empty());
+}
+
+#[test]
+fn removal_rejects_foreign_or_corrupt_session_ownership_without_writing() {
+    for (field, value) in [
+        ("source", json!("canvas")),
+        ("kind", json!("assignment")),
+        ("course", json!("synthetic-b")),
+        (
+            "personalSession",
+            json!({"version":1,"canvasCourseId":COURSE,
+            "term":TERM,"timeZone":ZONE,"date":"2030-01-21"}),
+        ),
+    ] {
+        let (_root, store) = seeded_store();
+        let original = document(&store);
+        apply_personal_sessions(&store, &request_for(&original), &mut |_| {}).unwrap();
+        let mut before = document(&store);
+        let item = before["items"].as_array_mut().unwrap().last_mut().unwrap();
+        let id = item["id"].clone();
+        item[field] = value;
+        atomic_write(
+            &store.store_dir().join(COURSEWORK_FILE),
+            &node_json_bytes(&before),
+        )
+        .unwrap();
+        assert_rejected_without_write(
+            &store,
+            &removal_request(&before, vec![id]),
+            "SESSION_ID_CONFLICT",
+        );
+    }
+}
+
+#[test]
+fn removal_rejects_invalid_duplicate_and_simultaneous_add_ids() {
+    let (_root, store) = seeded_store();
+    let original = document(&store);
+    apply_personal_sessions(&store, &request_for(&original), &mut |_| {}).unwrap();
+    let before = document(&store);
+    let id = before["items"].as_array().unwrap().last().unwrap()["id"].clone();
+    for ids in [
+        vec![json!("canvas-existing")],
+        vec![id.clone(), id.clone()],
+        vec![json!(format!(
+            "manual-session-{}-{}",
+            COURSE + 1,
+            "a".repeat(64)
+        ))],
+        vec![id.clone(); MAX_SESSIONS + 1],
+    ] {
+        assert_rejected_without_write(&store, &removal_request(&before, ids), "INVALID_INPUT");
+    }
+    let mut conflicting = request_for(&before);
+    conflicting.remove_session_ids = vec![id.as_str().unwrap().to_owned()];
+    assert_rejected_without_write(&store, &conflicting, "INVALID_INPUT");
 }

@@ -145,7 +145,7 @@
       "src-tauri/src/ical_receiver.rs": 6,
       "src-tauri/src/import.rs": 14,
       "src-tauri/src/locking.rs": 12,
-      "src-tauri/src/personal_sessions_tests.rs": 12,
+      "src-tauri/src/personal_sessions_tests.rs": 15,
       "src-tauri/src/phase4_smoke.rs": 1,
       "src-tauri/src/reconcile.rs": 15,
       "src-tauri/src/refresh.rs": 12,

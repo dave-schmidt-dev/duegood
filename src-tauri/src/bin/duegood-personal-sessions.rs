@@ -64,8 +64,8 @@ fn write_progress(output: &mut impl Write, progress: PersonalSessionProgress) ->
 fn write_result(output: &mut impl Write, result: PersonalSessionResult) -> io::Result<()> {
     writeln!(
         output,
-        "{{\"type\":\"result\",\"status\":\"complete\",\"added\":{},\"updated\":{},\"unchanged\":{}}}",
-        result.added, result.updated, result.unchanged
+        "{{\"type\":\"result\",\"status\":\"complete\",\"added\":{},\"updated\":{},\"removed\":{},\"unchanged\":{}}}",
+        result.added, result.updated, result.removed, result.unchanged
     )?;
     output.flush()
 }
@@ -98,6 +98,7 @@ mod tests {
             PersonalSessionResult {
                 added: 2,
                 updated: 1,
+                removed: 0,
                 unchanged: false,
             },
         )
@@ -107,7 +108,7 @@ mod tests {
             value,
             serde_json::json!({
                 "type":"result", "status":"complete", "added":2, "updated":1,
-                "unchanged":false
+                "removed":0, "unchanged":false
             })
         );
     }
