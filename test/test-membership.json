@@ -142,7 +142,7 @@
       "src-tauri/src/ical_apply_history_tests.rs": 9,
       "src-tauri/src/ical_bootstrap.rs": 1,
       "src-tauri/src/ical_confirmation_tests.rs": 6,
-      "src-tauri/src/ical_receiver.rs": 6,
+      "src-tauri/src/ical_receiver.rs": 8,
       "src-tauri/src/import.rs": 14,
       "src-tauri/src/locking.rs": 12,
       "src-tauri/src/personal_sessions_tests.rs": 15,

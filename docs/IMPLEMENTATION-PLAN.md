@@ -488,3 +488,10 @@ Headless conversion candidates. The native suite should keep only launch, quit, 
 - Changed: the current product is a native Tauri app, not the original proposed Worker. Legacy server behavior is not verifiable from this change; OAuth, import and Cloudflare findings are not applicable.
 
 - November 3 installation completed with owner authorization while away: signed candidate `1b886d4-dirty` passed embedded-asset, exact-path and bundle-ID cold-launch checks. This establishes installation and launch, not overnight observation or whole-app owner acceptance.
+
+## 2026-11-03: Publication gate calendar receiver repair
+
+- Confirmed: the full pre-push native suite reproduces the queued positive-loopback BrokenPipe failure. Accepted sockets are passed to a deadline-bound blocking parser without explicitly clearing inherited nonblocking mode.
+- Direct captain prerequisite repair: explicitly select blocking reads on the accepted socket; retain all host, origin, token, method, type, size and deadline checks. Add synthetic fragmented-request and stalled-client regressions, including explicitly nonblocking sockets for portability; register both tests in the manifest.
+- Acceptance: original positive regression and new tests pass in the mandatory full pre-push suite. No credential use, live calendar fetch, installed-app replacement, or validation relaxation.
+- Focused native result: all eight receiver regressions passed; full publication hook remains the final acceptance gate. This follow-up changes repository source only; the previously installed rollover build remains distinct.

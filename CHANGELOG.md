@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- Keep calendar imports from rejecting valid requests split across network reads on macOS, while retaining request deadlines.
+
 - Advance an idle Timeline to the current local date and catch up after sleep without losing filters or scroll.
 
 - Allow exact owner-confirmed personal class-session corrections through the native helper, with ownership checks and stale-write protection.

@@ -293,6 +293,11 @@ fn handle_connection(
     expected_token: &str,
     deadline: Instant,
 ) -> Result<Vec<u8>, Rejection> {
+    // Accepted sockets can inherit the listener's nonblocking mode on macOS.
+    // The parser below uses bounded blocking reads, including between request fragments.
+    stream
+        .set_nonblocking(false)
+        .map_err(|_| Rejection::BadRequest)?;
     let mut reader = BufReader::new(stream);
     let request_line = read_capped_line(&mut reader, 2_048, deadline)?;
     let request_line = strip_crlf(&request_line).ok_or(Rejection::BadRequest)?;
@@ -618,6 +623,42 @@ mod tests {
         stream.read_to_string(&mut response).unwrap();
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert_eq!(worker.join().unwrap(), Ok(()));
+    }
+
+    #[test]
+    fn nonblocking_accepted_socket_waits_for_fragmented_request() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let (ready, started) = std::sync::mpsc::channel();
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).unwrap();
+            started.recv().unwrap();
+            thread::sleep(Duration::from_millis(30));
+            stream.write_all(b"POST /api/local/").unwrap();
+            thread::sleep(Duration::from_millis(30));
+            stream.write_all(b"ical-import HTTP/1.1\r\nHost: 127.0.0.1:2137\r\nX-DueGood-CSRF-Token: tok\r\nContent-Type: text/calendar\r\nContent-Length: 3\r\n\r\na").unwrap();
+            thread::sleep(Duration::from_millis(30));
+            stream.write_all(b"bc").unwrap();
+        });
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_nonblocking(true).unwrap();
+        ready.send(()).unwrap();
+        let result = handle_connection(&mut stream, "tok", Instant::now() + Duration::from_secs(2));
+        client.join().unwrap();
+        assert_eq!(result, Ok(b"abc".to_vec()));
+    }
+
+    #[test]
+    fn nonblocking_accepted_socket_still_times_out_when_client_stalls() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_nonblocking(true).unwrap();
+        let start = Instant::now();
+        let result = handle_connection(&mut stream, "tok", start + Duration::from_millis(60));
+        assert_eq!(result, Err(Rejection::TimedOut));
+        assert!(start.elapsed() >= Duration::from_millis(30));
+        assert!(start.elapsed() < Duration::from_secs(2));
     }
 
     #[test]
