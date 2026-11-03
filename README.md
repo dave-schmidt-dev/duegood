@@ -88,6 +88,10 @@ Day-to-day work and phase gates are headless. The pre-commit hook runs lint and 
 
 Checks that take over the screen run only at a milestone: before a release, at an install for owner qualification, or for a walkthrough. These are `npm run install:tauri` (cold-launch proofs), `npm run check:production-launch`, `npm run test:tauri:macos`, and the populated-store `npm run check:live-native` verifier. No hook or phase gate runs them or requires a record that they ran. Keep this native suite small: launch, quit, and one or two end-to-end journeys; move view- or model-only assertions to headless tests.
 
+## Permission and consent testing
+
+For permission-related signing, staging, and prompt troubleshooting, follow the Apple Development & Testing Permissions Guide in the sibling `apple_developer/documents/apple-development-permissions.md` checkout. Automated tests and synthetic permission-state fixtures check app behavior but do not establish OS consent or access to the protected resource. Record any real permission-positive check as separate owner-attended acceptance evidence; this reference does not claim a workflow correction or live qualification.
+
 ## Owner-supplied class times
 
 For reviewed local syllabus dates whose meeting clocks are missing, the bounded `duegood-personal-sessions` native helper accepts explicit owner times as personal planning. It preserves Canvas facts and unrelated progress, checks the selected course, term and exact store version, and leaves identical replays unchanged. Build it with `npm run build:personal-sessions` after preparing the frontend assets. Its JSON input is private and must not be committed or printed; run with no arguments and provide the bounded request on standard input. Source refresh retains these manual class sessions. For an owner-confirmed erroneous meeting, the same helper accepts `removeSessionIds` alongside `sessions: []`: it removes only exact owned personal-session identities, rejects stale versions and ownership conflicts, and reports a removed count. Retain a private rollback copy before a correction; never infer off-week dates from a weekday alone.

@@ -468,10 +468,10 @@ Headless conversion candidates. The native suite should keep only launch, quit, 
 
 ## 2026-11-01: Refresh startup and unverified empty states
 
-- Confirmed: installed browser broker reports SIGN_IN_REQUIRED; saved Canvas capture attempt failed. Owner sign-in is required; do not reset identity or copy cookies.
-- Confirmed: Homebrew Node cannot launch because its simdjson library ABI is missing; the pinned calendar helper uses env node. Repair the installed Node package without changing broker pins or secrets. Verify fetch through the existing broker separately from store application.
-- Confirmed: Timeline shows a zero due count and reassuring empty text while Canvas coursework is hidden. Gate coursework and Inbox summaries on their own source status; keep retained calendar items visible, label incomplete counts, and preserve verified empty states.
-- Changed: the October 31 source repair is already committed; these failures have different causes. Not verifiable: live authenticated Canvas completion before owner sign-in. Not applicable: OAuth, provider changes, data migration, or redesign.
+- Resolved: diagnosis found SIGN_IN_REQUIRED and a failed capture attempt. After owner sign-in, the owner-supplied November 1 screenshot reports Canvas and calendar updated. This is live owner-observed evidence, not independent eight-page acceptance; identity binding and cookies were not changed by the repair.
+- Resolved: Homebrew Node could not launch because its simdjson library ABI was missing. Reinstallation repaired startup; the unchanged pinned calendar consumer fetched successfully through BWS into a discard-only receiver. The later owner-observed full refresh confirms the app reported calendar completion.
+- Implemented in e176585: Timeline gates coursework and Inbox summaries on source verification, keeps retained calendar items visible, and avoids claiming zero work or open days from hidden coursework. Registered unit/browser regressions passed. The UI repair is included in the November 3 installed rollover candidate; signature, embedded assets and both cold-launch checks passed.
+- Changed: the October 31 source repair is installed; the November 1 empty-state repair is included in the installed November 3 candidate. Remaining acceptance: owner review of the populated interface. Not applicable: OAuth, provider changes, data migration, or redesign.
 - Direct-depth captain repair; checks: registered unit and headless Playwright regressions, typecheck, lint, dead-code, membership, package checks. No screen takeover. Existing README/CHANGELOG edits are preserved.
 
 ## 2026-11-02: Correct owner-reported manual meeting errors
@@ -486,3 +486,5 @@ Headless conversion candidates. The native suite should keep only launch, quit, 
 - Direct captain repair: check local calendar-day changes every 30 seconds and on focus, visibility restoration, and pageshow. Redraw Timeline only when its day changes; retain filters and scroll and dispose the timer/listeners with the dashboard. No source refresh or private-data access is required.
 - Validate synthetic midnight, multi-day resume, same-day no-redraw and retained view state in the existing registered Playwright file; run type, lint, UI unit, dead-code and test-membership checks. Installed-app acceptance is separate; no screen-seizing installation is authorized by this repair.
 - Changed: the current product is a native Tauri app, not the original proposed Worker. Legacy server behavior is not verifiable from this change; OAuth, import and Cloudflare findings are not applicable.
+
+- November 3 installation completed with owner authorization while away: signed candidate `1b886d4-dirty` passed embedded-asset, exact-path and bundle-ID cold-launch checks. This establishes installation and launch, not overnight observation or whole-app owner acceptance.
