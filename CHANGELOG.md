@@ -9,6 +9,8 @@
 
 ### Fixed
 
+- Advance an idle Timeline to the current local date and catch up after sleep without losing filters or scroll.
+
 - Allow exact owner-confirmed personal class-session corrections through the native helper, with ownership checks and stale-write protection.
 
 - Mark unverified Timeline coursework and Inbox as unknown rather than claiming no assignments, unread messages, or work on empty days; retain available calendar deadlines.

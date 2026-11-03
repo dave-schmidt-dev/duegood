@@ -581,6 +581,18 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
     ...(desktop?.onExport === undefined ? {} : { onExport: desktop.onExport }),
   };
 
+  // A suspended WebView may miss midnight; resume events also compare the actual local day.
+  function checkCalendarDay(): void {
+    if (disposed || state.loading || state.page !== "timeline" || document.visibilityState === "hidden") return;
+    if (new Date(state.now).toDateString() === new Date().toDateString()) return;
+    captureScroll();
+    drawPreservingScroll();
+  }
+  const calendarDayTimer = window.setInterval(checkCalendarDay, 30_000);
+  window.addEventListener("focus", checkCalendarDay, { signal: listeners.signal });
+  window.addEventListener("pageshow", checkCalendarDay, { signal: listeners.signal });
+  document.addEventListener("visibilitychange", checkCalendarDay, { signal: listeners.signal });
+
   window.addEventListener("scroll", captureScroll, { passive: true, signal: listeners.signal });
   window.addEventListener("pagehide", () => { captureScroll(); saveViewState(); }, { signal: listeners.signal });
   window.addEventListener("hashchange", () => {
@@ -610,6 +622,7 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
     captureScroll();
     saveViewState();
     listeners.abort();
+    window.clearInterval(calendarDayTimer);
     topbarHeightObserver?.disconnect();
     document.documentElement.style.removeProperty("--topbar-height");
     if (snapshotStatusTimer !== undefined) clearTimeout(snapshotStatusTimer);

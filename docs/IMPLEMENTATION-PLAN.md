@@ -479,3 +479,10 @@ Headless conversion candidates. The native suite should keep only launch, quit, 
 - Confirmed: the erroneous meeting is a native personal session; the current source schedule is unresolved. A parser-only change cannot correct the manual record. No evidence supports inferring an alternating recurrence.
 - Direct captain repair: extend the existing personal-session helper with bounded exact-identity removals, retaining its course/term checks, shared store lock and digest fence. Reject overlapping add/remove identities, malformed requests and mismatched ownership. Preserve unrelated records and personal fields.
 - Validate synthetic removal, stale-write rejection, replay and refresh preservation; build the fixed-root helper and apply only the owner-confirmed correction after retaining a private rollback copy. Keep private dates and identifiers out of committed tests and documentation. No GUI takeover, deployment, Canvas write, or publication.
+
+## 2026-11-03: Idle Timeline calendar rollover
+
+- Confirmed: `mountDashboard.draw` samples the clock only during an existing redraw; no date timer or resume listener exists. The idle Timeline can retain yesterday indefinitely.
+- Direct captain repair: check local calendar-day changes every 30 seconds and on focus, visibility restoration, and pageshow. Redraw Timeline only when its day changes; retain filters and scroll and dispose the timer/listeners with the dashboard. No source refresh or private-data access is required.
+- Validate synthetic midnight, multi-day resume, same-day no-redraw and retained view state in the existing registered Playwright file; run type, lint, UI unit, dead-code and test-membership checks. Installed-app acceptance is separate; no screen-seizing installation is authorized by this repair.
+- Changed: the current product is a native Tauri app, not the original proposed Worker. Legacy server behavior is not verifiable from this change; OAuth, import and Cloudflare findings are not applicable.

@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+test.use({ timezoneId: "America/New_York" });
+
 function installDashboardMock(): void {
   type Callback = (message: unknown) => void;
   const callbacks = new Map<number, Callback>();
@@ -168,4 +170,41 @@ test("restores deep Timeline scroll in the first normal-motion frame after refre
   });
   expect(navigationFrame).toBeGreaterThan(2000);
   expect(Math.abs(navigationFrame - savedTimelinePosition)).toBeLessThanOrEqual(0.5);
+});
+
+
+test("idle Timeline advances at local midnight and preserves filters and scroll", async ({ page }) => {
+  await page.clock.install({ time: new Date("2026-11-02T23:59:50-05:00") });
+  await openDashboard(page);
+  await expect(page.locator(".day-slot.today")).toHaveAttribute("data-day", "2026-11-02");
+  await page.getByRole("button", { name: "SYN102", exact: true }).click();
+  await page.evaluate(() => window.scrollTo({ top: 1500, behavior: "instant" }));
+  const position = await page.evaluate(() => window.scrollY);
+  await page.clock.runFor(30_000);
+  await expect(page.locator(".day-slot.today")).toHaveAttribute("data-day", "2026-11-03");
+  await expect(page.getByRole("button", { name: "SYN102", exact: true })).toHaveClass(/active/);
+  expect(await page.evaluate(() => window.scrollY)).toBeCloseTo(position, 0);
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+  await page.screenshot({ path: ".logs/date-rollover/timeline.png" });
+});
+
+for (const event of ["focus", "pageshow", "visibilitychange"]) {
+  test(`Timeline catches up after multi-day suspension on ${event}`, async ({ page }) => {
+    await page.clock.install({ time: new Date("2026-11-02T12:00:00-05:00") });
+    await openDashboard(page);
+    await expect(page.locator(".day-slot.today")).toHaveAttribute("data-day", "2026-11-02");
+    await page.clock.setSystemTime(new Date("2026-11-05T09:00:00-05:00"));
+    await page.evaluate((name) => (name === "visibilitychange" ? document : window).dispatchEvent(new Event(name)), event);
+    await expect(page.locator(".day-slot.today")).toHaveAttribute("data-day", "2026-11-05");
+  });
+}
+
+test("same-day clock checks leave the current DOM untouched", async ({ page }) => {
+  await page.clock.install({ time: new Date("2026-11-02T12:00:00-05:00") });
+  await openDashboard(page);
+  await expect(page.locator(".day-slot.today")).toHaveAttribute("data-day", "2026-11-02");
+  await page.locator(".day-slot.today").evaluate((node) => node.setAttribute("data-retained", "yes"));
+  await page.clock.runFor(60_000);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.locator(".day-slot.today")).toHaveAttribute("data-retained", "yes");
 });
