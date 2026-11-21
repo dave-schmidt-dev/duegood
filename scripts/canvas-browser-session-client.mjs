@@ -22,7 +22,7 @@ export const CAPTURE_TIMEOUT_MS = 35 * 60_000;
 const STATE_HELPER_TIMEOUT_MS = 5_000;
 const STATE_HELPER_KILL_GRACE_MS = 250;
 const PROGRESS_STATES = new Set([
-  "WAITING_FOR_OWNER_SIGN_IN", "CANVAS_SESSION_AVAILABLE", "CHECKING_CANVAS_SESSION",
+  "WAITING_FOR_OWNER_SIGN_IN", "SIGNING_IN_AUTOMATICALLY", "CANVAS_SESSION_AVAILABLE", "CHECKING_CANVAS_SESSION",
   "PROBE_RUNNING", "PROBE_HEARTBEAT", "CAPTURE_OPENING", "CAPTURE_RUNNING", "CAPTURE_DOWNLOADING", "CAPTURE_SAVING",
 ]);
 const CHECK_NAMES = new Set([
@@ -141,14 +141,14 @@ async function sendCommand(command, timeoutMs, expectedUserId = undefined) {
   });
 }
 
-function launchDetachedBroker() {
+function launchDetachedBroker({ headless = false } = {}) {
   const childEnv = {
     PATH: process.env.PATH ?? "",
     HOME: homedir(),
     TMPDIR: process.env.TMPDIR ?? tmpdir(),
     LANG: process.env.LANG ?? "en_US.UTF-8",
   };
-  const child = spawn(process.execPath, [BROKER_SCRIPT], {
+  const child = spawn(process.execPath, headless ? [BROKER_SCRIPT, "--headless"] : [BROKER_SCRIPT], {
     cwd: ROOT,
     detached: true,
     stdio: "ignore",
@@ -159,7 +159,7 @@ function launchDetachedBroker() {
   child.unref();
 }
 
-async function startAndWait() {
+async function startAndWait({ headless = false } = {}) {
   await mkdir(appDirectory, { recursive: true, mode: 0o700 });
   const before = await lstat(appDirectory);
   if (!before.isDirectory() || before.isSymbolicLink()
@@ -169,7 +169,7 @@ async function startAndWait() {
   if ((after.mode & 0o077) !== 0) throw new Error("SOCKET_DIRECTORY_REJECTED");
   const existing = await sendCommand("status", 1_000).catch(() => undefined);
   if (existing?.status === "READY" || existing?.status === "BUSY") return existing;
-  try { launchDetachedBroker(); } catch { return { status: "START_FAILED" }; }
+  try { launchDetachedBroker({ headless }); } catch { return { status: "START_FAILED" }; }
   const deadline = Date.now() + START_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const status = await sendCommand("status", 1_000).catch(() => undefined);
@@ -438,13 +438,14 @@ async function main() {
   const validCaptureId = Number.isSafeInteger(captureUserId) && captureUserId > 0;
   if (["capture", "bind"].includes(command) && !validCaptureId
       || !["capture", "bind"].includes(command) && extra.length !== 0
+        && !(command === "start" && extra.length === 1 && extra[0] === "--headless")
       || !["start", "status", "probe", "identity", "bind", "capture", "refresh", "stop"].includes(command)) {
     output({ status: "INVALID_CONFIGURATION" });
     process.exitCode = 2;
     return;
   }
   let result;
-  if (command === "start") result = await startAndWait();
+  if (command === "start") result = await startAndWait({ headless: extra[0] === "--headless" });
   else if (command === "stop") result = await stopAndWait();
   else if (command === "bind") {
     const identity = await sendCommand("identity", 40_000).catch(() => undefined);

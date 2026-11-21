@@ -9,7 +9,7 @@ const PROGRESS_PHASES = new Set([
   "broker-starting", "waiting-for-canvas", "capturing", "importing", "complete",
 ]);
 const CAPTURE_PROGRESS = new Set([
-  "WAITING_FOR_OWNER_SIGN_IN", "CANVAS_SESSION_AVAILABLE", "CHECKING_CANVAS_SESSION",
+  "WAITING_FOR_OWNER_SIGN_IN", "SIGNING_IN_AUTOMATICALLY", "CANVAS_SESSION_AVAILABLE", "CHECKING_CANVAS_SESSION",
   "PROBE_RUNNING", "PROBE_HEARTBEAT", "CAPTURE_OPENING", "CAPTURE_RUNNING",
   "CAPTURE_DOWNLOADING", "CAPTURE_SAVING",
 ]);
@@ -81,7 +81,7 @@ function sanitizedResult(result) {
 
 function phaseForCaptureStatus(status) {
   if (!CAPTURE_PROGRESS.has(status)) return undefined;
-  return status === "WAITING_FOR_OWNER_SIGN_IN" ? "waiting-for-canvas"
+  return ["WAITING_FOR_OWNER_SIGN_IN", "SIGNING_IN_AUTOMATICALLY"].includes(status) ? "waiting-for-canvas"
     : ["CANVAS_SESSION_AVAILABLE", "CHECKING_CANVAS_SESSION", "PROBE_RUNNING", "PROBE_HEARTBEAT"].includes(status)
       ? "waiting-for-canvas" : "capturing";
 }

@@ -13,6 +13,7 @@ import {
   CANVAS_PROFILE_WAIT_TIMEOUT_MS,
   waitForCanvasProfile,
 } from "./canvas-browser-session-wait.mjs";
+import { waitForSignedInCanvas } from "./canvas-okta-sign-in.mjs";
 
 const APP_DIR = path.join(homedir(), "Library", "Application Support", "DueGood");
 const MAX_CAPTURE_DISK_BYTES = 4 * 1024 * 1024 * 1024;
@@ -78,6 +79,8 @@ export async function runCanvasCapture({
   waitForCanvasPage = waitForCanvasProfile,
   sessionWaitTimeoutMs = CANVAS_PROFILE_WAIT_TIMEOUT_MS,
   sessionPollIntervalMs = CANVAS_PROFILE_POLL_INTERVAL_MS,
+  automaticSignIn = undefined,
+  attendedSignIn = true,
 }) {
   const stateHelper = await lstat(stateHelperPath).catch(() => undefined);
   if (!stateHelper?.isFile() || stateHelper.isSymbolicLink() || (stateHelper.mode & 0o111) === 0
@@ -98,7 +101,10 @@ export async function runCanvasCapture({
         throw new Error("HELPER_UNAVAILABLE");
       }
       progress("WAITING_FOR_OWNER_SIGN_IN");
-      const page = await waitForCanvasPage(context, sessionWaitTimeoutMs, sessionPollIntervalMs);
+      const page = await waitForSignedInCanvas({
+        context, appDirectory, progress, waitForCanvasPage, automaticSignIn, attendedSignIn,
+        timeoutMs: sessionWaitTimeoutMs, pollIntervalMs: sessionPollIntervalMs,
+      });
       if (!page) throw new Error("CANVAS_SESSION_UNAVAILABLE");
       progress("CANVAS_SESSION_AVAILABLE");
       const generationId = randomUUID().replaceAll("-", "");

@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
 import { chromium } from "@playwright/test";
+import { sessionLaunchOptions } from "./canvas-browser-launch.mjs";
 import { runCanvasBrowserProbe } from "./canvas-browser-probe.mjs";
 import { readCanvasIdentity } from "./canvas-browser-identity.mjs";
 import { loadCurrentCanvasCapture } from "./canvas-browser-runtime-loader.mjs";
@@ -21,11 +22,11 @@ const MAX_REQUEST_BYTES = 256;
 const MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024;
 const SOCKET_TIMEOUT_MS = 5_000;
 const PROGRESS_STATES = new Set([
-  "WAITING_FOR_OWNER_SIGN_IN", "CANVAS_SESSION_AVAILABLE", "CHECKING_CANVAS_SESSION",
+  "WAITING_FOR_OWNER_SIGN_IN", "SIGNING_IN_AUTOMATICALLY", "CANVAS_SESSION_AVAILABLE", "CHECKING_CANVAS_SESSION",
   "PROBE_RUNNING", "PROBE_HEARTBEAT", "CAPTURE_OPENING", "CAPTURE_RUNNING", "CAPTURE_DOWNLOADING", "CAPTURE_SAVING",
 ]);
 const CAPTURE_PROGRESS_STATES = new Set([
-  "WAITING_FOR_OWNER_SIGN_IN", "CANVAS_SESSION_AVAILABLE",
+  "WAITING_FOR_OWNER_SIGN_IN", "SIGNING_IN_AUTOMATICALLY", "CANVAS_SESSION_AVAILABLE",
   "CAPTURE_OPENING", "CAPTURE_RUNNING", "CAPTURE_DOWNLOADING", "CAPTURE_SAVING",
 ]);
 const PUBLIC_CAPTURE_FAILURES = new Set([
@@ -365,9 +366,8 @@ export async function startSessionBroker({
   appDirectory = APP_DIR,
   profileDirectory = PROFILE_DIR,
   socketPath = SOCKET_PATH,
-  launchContext = () => chromium.launchPersistentContext(profileDirectory, {
-    channel: "chrome", headless: false, args: ["--disable-http-cache"], timeout: 20_000,
-  }),
+  headless = false,
+  launchContext = async () => chromium.launchPersistentContext(profileDirectory, await sessionLaunchOptions({ headless })),
   probe = ({ context, progress }) => runCanvasBrowserProbe({
     context, closeContext: false, attended: true, progress,
   }),
@@ -463,6 +463,7 @@ export async function startSessionBroker({
               expectedUserId: request.expectedUserId,
               protocolVersion: 2,
               progress: reportProgress,
+              attendedSignIn: !headless,
             });
             const validated = validateCapture(snapshot, request.expectedUserId);
             reportProgress("CAPTURE_SAVING");
@@ -512,7 +513,13 @@ export async function startSessionBroker({
 }
 
 async function main() {
-  const broker = await startSessionBroker();
+  const flags = process.argv.slice(2);
+  if (flags.some((flag) => flag !== "--headless") || flags.length > 1) {
+    process.stderr.write("SESSION_BROKER=INVALID_CONFIGURATION\n");
+    process.exitCode = 2;
+    return;
+  }
+  const broker = await startSessionBroker({ headless: flags.includes("--headless") });
   if (broker.alreadyRunning) {
     process.stderr.write("SESSION_BROKER=ALREADY_RUNNING\n");
     return;

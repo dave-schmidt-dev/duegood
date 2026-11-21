@@ -495,3 +495,13 @@ Headless conversion candidates. The native suite should keep only launch, quit, 
 - Direct captain prerequisite repair: explicitly select blocking reads on the accepted socket; retain all host, origin, token, method, type, size and deadline checks. Add synthetic fragmented-request and stalled-client regressions, including explicitly nonblocking sockets for portability; register both tests in the manifest.
 - Acceptance: original positive regression and new tests pass in the mandatory full pre-push suite. No credential use, live calendar fetch, installed-app replacement, or validation relaxation.
 - Focused native result: all eight receiver regressions passed; full publication hook remains the final acceptance gate. This follow-up changes repository source only; the previously installed rollover build remains distinct.
+
+## 2026-11-21: Automated Okta sign-in (owner decision)
+
+Decision: David asked for the Canvas refresh to sign in to Marymount Okta without an attended step, aiming for headless refreshes. This supersedes the earlier design line "Never ask the agent for a password" only in this narrow form: no agent ever sees, prints, or asks for the password or TOTP seed. David stores them in OpenBao at `dm5mbp/DUEGOOD_MARYMOUNT_SSO`; only the pinned `duegood-canvas-sso` broker consumer receives them, and it hands the username, password, and generated passcodes to the session broker on fd 3. The seed never leaves the consumer.
+
+Scope delivered on branch `okta-auto-login`: the sign-in step at `WAITING_FOR_OWNER_SIGN_IN`, the consumer helper, a `SIGNING_IN_AUTOMATICALLY` progress state, an opt-in `start --headless` broker mode, INV-2 and refresh-contract updates, and synthetic tests (unit tests plus Playwright against fake Okta widget pages). Visible mode and the attended sign-in remain the default and fallback.
+
+Classification: the earlier finding that a headless relaunch did not restore the session is still confirmed as historical evidence; its cause is not verified. The Okta Security Methods check was not verifiable from this session because the running app's broker held the capture profile.
+
+Remaining owner actions: confirm Google Authenticator is offered, enroll it with the setup key, store the three values, merge, register the consumer with the merged helper's SHA-256, and supervise the first live visible run before trying headless mode. See `docs/OKTA-AUTO-SIGN-IN.md`.

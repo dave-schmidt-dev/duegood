@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Sign in to Marymount Okta automatically when the Canvas capture session has expired, using a password and Google Authenticator code from a pinned broker consumer. Push, number match, FastPass, enrollment, CAPTCHA, unknown pages, and other hosts fail closed, and visible mode keeps the attended sign-in as the fallback.
+- Add an opt-in `canvas:session -- start --headless` mode that uses the same profile with a desktop Chrome user agent. Visible mode remains the default.
+
 ### Changed
 
 - Exclude disposable build caches and stages from package validation while continuing to check public source files.
