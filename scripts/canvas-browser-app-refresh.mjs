@@ -9,13 +9,13 @@ const PROGRESS_PHASES = new Set([
   "broker-starting", "waiting-for-canvas", "capturing", "importing", "complete",
 ]);
 const CAPTURE_PROGRESS = new Set([
-  "WAITING_FOR_OWNER_SIGN_IN", "SIGNING_IN_AUTOMATICALLY", "CANVAS_SESSION_AVAILABLE", "CHECKING_CANVAS_SESSION",
+  "SURVEY_POPUP_BLOCKING", "WAITING_FOR_OWNER_SIGN_IN", "SIGNING_IN_AUTOMATICALLY", "CANVAS_SESSION_AVAILABLE", "CHECKING_CANVAS_SESSION",
   "PROBE_RUNNING", "PROBE_HEARTBEAT", "CAPTURE_OPENING", "CAPTURE_RUNNING",
   "CAPTURE_DOWNLOADING", "CAPTURE_SAVING",
 ]);
 const ERROR_CODES = new Set([
   "BROWSER_REFRESH_FAILED", "CAPTURE_GAPS", "CAPTURE_STATE_UNAVAILABLE", "BINDING_REQUIRED",
-  "SIGN_IN_REQUIRED", "IDENTITY_MISMATCH", "NATIVE_IMPORT_FAILED", "INVALID_REFRESH_RESULT",
+  "SURVEY_POPUP_BLOCKING", "SIGN_IN_REQUIRED", "IDENTITY_MISMATCH", "NATIVE_IMPORT_FAILED", "INVALID_REFRESH_RESULT",
 ]);
 const MAX_CAPTURE_COUNT = 100_000;
 const MAX_IMPORT_COUNT = 100_000;
@@ -38,6 +38,7 @@ function errorCodeFor(result) {
   if (result?.status === "BINDING_REQUIRED") return "BINDING_REQUIRED";
   if (result?.status === "SIGN_IN_REQUIRED") return "SIGN_IN_REQUIRED";
   if (result?.status === "IDENTITY_MISMATCH") return "IDENTITY_MISMATCH";
+  if (result?.errorCode === "SURVEY_POPUP_BLOCKING") return "SURVEY_POPUP_BLOCKING";
   if (result?.errorCode === "CAPTURE_STATE_UNAVAILABLE") return "CAPTURE_STATE_UNAVAILABLE";
   if (result?.status === "PARTIAL" && Number.isSafeInteger(result?.dailyGapCount) && result.dailyGapCount > 0) return "CAPTURE_GAPS";
   return "BROWSER_REFRESH_FAILED";
@@ -81,7 +82,7 @@ function sanitizedResult(result) {
 
 function phaseForCaptureStatus(status) {
   if (!CAPTURE_PROGRESS.has(status)) return undefined;
-  return ["WAITING_FOR_OWNER_SIGN_IN", "SIGNING_IN_AUTOMATICALLY"].includes(status) ? "waiting-for-canvas"
+  return ["SURVEY_POPUP_BLOCKING", "WAITING_FOR_OWNER_SIGN_IN", "SIGNING_IN_AUTOMATICALLY"].includes(status) ? "waiting-for-canvas"
     : ["CANVAS_SESSION_AVAILABLE", "CHECKING_CANVAS_SESSION", "PROBE_RUNNING", "PROBE_HEARTBEAT"].includes(status)
       ? "waiting-for-canvas" : "capturing";
 }

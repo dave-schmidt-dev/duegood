@@ -485,7 +485,7 @@ describe("Canvas session broker process protocol", () => {
     }));
     const transition = setTimeout(() => { pageUrl = "https://marymount.instructure.com/"; }, 10);
     try {
-      const result = await runCanvasCapture({ context, expectedUserId: 41, progress, collector, appDirectory,
+      const result = await runCanvasCapture({ checkSurveyPopup: async () => {}, context, expectedUserId: 41, progress, collector, appDirectory,
         helperPath, stateHelperPath, withRunLease: syntheticRunLease, saveGeneration,
         protocolVersion: 2,
         sessionWaitTimeoutMs: 200, sessionPollIntervalMs: 5 });
@@ -518,7 +518,7 @@ describe("Canvas session broker process protocol", () => {
     const collector = vi.fn(async () => syntheticSnapshot(41));
     const saveGeneration = vi.fn();
 
-    await expect(runCanvasCapture({ context, expectedUserId: 41, progress, collector, appDirectory,
+    await expect(runCanvasCapture({ checkSurveyPopup: async () => {}, context, expectedUserId: 41, progress, collector, appDirectory,
       helperPath, stateHelperPath, withRunLease: syntheticRunLease, saveGeneration,
       sessionWaitTimeoutMs: 15, sessionPollIntervalMs: 1 }))
       .rejects.toThrow("CANVAS_SESSION_UNAVAILABLE");
@@ -565,9 +565,9 @@ describe("Canvas session broker process protocol", () => {
       snapshotSha256: "f".repeat(64), blobCount: 0,
       archivedSnapshot: snapshot }));
 
-    const legacyView = await runCanvasCapture({ context, expectedUserId: 41, progress, collector, appDirectory, helperPath,
+    const legacyView = await runCanvasCapture({ checkSurveyPopup: async () => {}, context, expectedUserId: 41, progress, collector, appDirectory, helperPath,
       stateHelperPath, withRunLease: syntheticRunLease, saveGeneration });
-    const currentView = await runCanvasCapture({ context, expectedUserId: 41, protocolVersion: 2,
+    const currentView = await runCanvasCapture({ checkSurveyPopup: async () => {}, context, expectedUserId: 41, protocolVersion: 2,
       progress, collector, appDirectory, helperPath,
       stateHelperPath, withRunLease: syntheticRunLease, saveGeneration });
 

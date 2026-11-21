@@ -101,3 +101,5 @@ npm run canvas:session -- refresh
 ```
 
 Headless mode uses the same profile and a desktop Chrome user agent (the installed Chrome major version without the `Headless` marker). In headless mode, any sign-in outcome other than success ends the wait at once, because nobody can complete a manual sign-in. The app's Refresh button still starts the broker in visible mode.
+
+After sign-in, capture waits briefly for the Canvas evaluation reminder. It uses the visible close link or “Do It Later”. If dismissal fails, visible sessions report `SURVEY_POPUP_BLOCKING` and wait for the owner until the sign-in deadline. Headless sessions fail immediately with the same code.

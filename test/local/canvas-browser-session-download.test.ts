@@ -71,7 +71,7 @@ describe("browser capture file staging lifecycle", () => {
         resourceCount: 1, itemCount: 1, blobCount: 1, blobBytes: 9, archivedSnapshot: snapshot };
     });
     const progress = vi.fn();
-    await runCanvasCapture({ context: browser, expectedUserId: 7, progress,
+    await runCanvasCapture({ checkSurveyPopup: async () => {}, context: browser, expectedUserId: 7, progress,
       appDirectory, helperPath, stateHelperPath, withRunLease: syntheticLease,
       collector: collector as unknown as typeof collectCanvasBrowserCapture, browserFileDownload, saveGeneration });
     expect(browserFileDownload).toHaveBeenCalledWith(expect.objectContaining({ sourceUrl, fileId: 41, page }));
@@ -100,7 +100,7 @@ describe("browser capture file staging lifecycle", () => {
         throw error;
       }
     });
-    await expect(runCanvasCapture({ context: browser, expectedUserId: 7, progress: () => {},
+    await expect(runCanvasCapture({ checkSurveyPopup: async () => {}, context: browser, expectedUserId: 7, progress: () => {},
       appDirectory, helperPath: path.join(appDirectory, "missing"), stateHelperPath, withRunLease }))
       .rejects.toThrow("HELPER_UNAVAILABLE");
     expect(withRunLease).toHaveBeenCalledTimes(1);
@@ -116,7 +116,7 @@ describe("browser capture file staging lifecycle", () => {
     const { browser } = context();
     browser.pages.mockReturnValue([]);
     const collector = vi.fn();
-    await expect(runCanvasCapture({ context: browser, expectedUserId: 7, progress: () => {}, collector,
+    await expect(runCanvasCapture({ checkSurveyPopup: async () => {}, context: browser, expectedUserId: 7, progress: () => {}, collector,
       appDirectory, helperPath, stateHelperPath, withRunLease: syntheticLease,
       sessionWaitTimeoutMs: 5, sessionPollIntervalMs: 1 })).rejects.toThrow("CANVAS_SESSION_UNAVAILABLE");
     expect(collector).not.toHaveBeenCalled();
@@ -134,7 +134,7 @@ describe("browser capture file staging lifecycle", () => {
       progress({ phase: "request-failed", endpoint: "courseTabs", privateBody: "must not persist" });
       throw new Error("REQUEST_FAILED");
     });
-    await expect(runCanvasCapture({ context: browser, expectedUserId: 7, progress: () => {}, collector,
+    await expect(runCanvasCapture({ checkSurveyPopup: async () => {}, context: browser, expectedUserId: 7, progress: () => {}, collector,
       appDirectory, helperPath, stateHelperPath, withRunLease: syntheticLease })).rejects.toThrow("REQUEST_FAILED");
     const diagnosticPath = path.join(appDirectory, "canvas-capture-last-error.json");
     expect(JSON.parse(await readFile(diagnosticPath, "utf8"))).toEqual({

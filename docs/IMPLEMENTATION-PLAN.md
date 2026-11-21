@@ -505,3 +505,7 @@ Scope delivered on branch `okta-auto-login`: the sign-in step at `WAITING_FOR_OW
 Classification: the earlier finding that a headless relaunch did not restore the session is still confirmed as historical evidence; its cause is not verified. The Okta Security Methods check was not verifiable from this session because the running app's broker held the capture profile.
 
 Remaining owner actions: confirm Google Authenticator is offered, enroll it with the setup key, store the three values, merge, register the consumer with the merged helper's SHA-256, and supervise the first live visible run before trying headless mode. See `docs/OKTA-AUTO-SIGN-IN.md`.
+
+### EvaluationKIT capture gate
+
+Confirmed in source: signed-in capture proceeds directly to collection. The owner observed the asynchronous dialog on Canvas. Verify dismissal, deadline handling and origin restrictions with synthetic pages. Live behavior remains unverified.

@@ -455,6 +455,7 @@ fn valid_runtime_error_code(value: Option<&str>) -> bool {
                 | "SIGN_IN_REQUIRED"
                 | "IDENTITY_MISMATCH"
                 | "NATIVE_IMPORT_FAILED"
+                | "SURVEY_POPUP_BLOCKING"
                 | "INVALID_REFRESH_RESULT"
         )
     })

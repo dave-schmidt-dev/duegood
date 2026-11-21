@@ -15,6 +15,8 @@ import {
 } from "./canvas-browser-session-wait.mjs";
 import { waitForSignedInCanvas } from "./canvas-okta-sign-in.mjs";
 
+import { handleSurveyPopup } from "./canvas-survey-popup.mjs";
+
 const APP_DIR = path.join(homedir(), "Library", "Application Support", "DueGood");
 const MAX_CAPTURE_DISK_BYTES = 4 * 1024 * 1024 * 1024;
 const DIAGNOSTIC_FILE = "canvas-capture-last-error.json";
@@ -81,6 +83,7 @@ export async function runCanvasCapture({
   sessionPollIntervalMs = CANVAS_PROFILE_POLL_INTERVAL_MS,
   automaticSignIn = undefined,
   attendedSignIn = true,
+  checkSurveyPopup = handleSurveyPopup,
 }) {
   const stateHelper = await lstat(stateHelperPath).catch(() => undefined);
   if (!stateHelper?.isFile() || stateHelper.isSymbolicLink() || (stateHelper.mode & 0o111) === 0
@@ -101,11 +104,13 @@ export async function runCanvasCapture({
         throw new Error("HELPER_UNAVAILABLE");
       }
       progress("WAITING_FOR_OWNER_SIGN_IN");
+      const deadline = Date.now() + sessionWaitTimeoutMs;
       const page = await waitForSignedInCanvas({
         context, appDirectory, progress, waitForCanvasPage, automaticSignIn, attendedSignIn,
         timeoutMs: sessionWaitTimeoutMs, pollIntervalMs: sessionPollIntervalMs,
       });
       if (!page) throw new Error("CANVAS_SESSION_UNAVAILABLE");
+      await checkSurveyPopup(page, { deadline, attended: attendedSignIn, progress });
       progress("CANVAS_SESSION_AVAILABLE");
       const generationId = randomUUID().replaceAll("-", "");
       const stagingDirectory = await mkdtemp(path.join(appDirectory, "canvas-capture-stage-"));

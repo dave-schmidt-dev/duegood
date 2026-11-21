@@ -206,7 +206,7 @@ async function captureHarness(options: RunOptions) {
     };
   });
   const progress = vi.fn();
-  const runPromise = runCanvasCapture({
+  const runPromise = runCanvasCapture({ checkSurveyPopup: async () => {},
     context: browser,
     expectedUserId,
     protocolVersion: 2,
