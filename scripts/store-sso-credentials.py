@@ -3,8 +3,10 @@
 
 Run it yourself in a terminal. It prompts for the username, password, and Google
 Authenticator setup key with hidden input, then writes all three as one KV v2
-secret at kv/dm5mbp/DUEGOOD_MARYMOUNT_SSO with the existing `importer` AppRole
-from the bws project. Values never appear in argv, the environment, shell history,
+secret at kv/dm5mbp/DUEGOOD_MARYMOUNT_SSO. It signs in with the existing
+`importer` AppRole from the bws project (Keychain); if that fails, it offers an
+existing bao login (BAO_TOKEN, VAULT_TOKEN, ~/.bao-token or ~/.vault-token), and
+finally a hidden prompt for a token with write access to kv/dm5mbp. Values never appear in argv, the environment, shell history,
 files, or output. It prints only OK/FAIL lines, and optionally the current
 6-digit code so you can compare it with your phone.
 """
@@ -15,6 +17,7 @@ import getpass
 import hashlib
 import hmac
 import json
+import os
 import re
 import struct
 import sys
@@ -55,13 +58,43 @@ def prompt() -> dict[str, str]:
     return {"username": username, "password": password, "totp_seed": seed}
 
 
+def existing_bao_token() -> tuple[str, str] | None:
+    """An already logged-in bao session from the environment or token file."""
+    for name in ("BAO_TOKEN", "VAULT_TOKEN"):
+        if os.environ.get(name, "").strip():
+            return name, os.environ[name].strip()
+    for file in (Path.home() / ".bao-token", Path.home() / ".vault-token"):
+        if file.is_file():
+            token = file.read_text(encoding="utf-8").strip()
+            if token:
+                return f"~/{file.name}", token
+    return None
+
+
+def obtain_token(bao) -> tuple[str, bool]:
+    """Returns (token, revoke_after). Never prints a token."""
+    try:
+        role_id, secret_id = bao._approle_credentials()
+        token = bao._login(role_id, secret_id)
+        print("login: importer AppRole OK")
+        return token, True
+    except Exception as error:  # noqa: BLE001
+        print(f"login: importer AppRole unavailable ({type(error).__name__}: {error})")
+    found = existing_bao_token()
+    if found and input(f"Use the existing bao login from {found[0]}? [Y/n] ").strip().lower() in ("", "y", "yes"):
+        return found[1], False
+    token = getpass.getpass("Paste an OpenBao token with write access to kv/dm5mbp (hidden; Enter to cancel): ").strip()
+    if not token:
+        raise RuntimeError("no OpenBao login available; nothing stored")
+    return token, False
+
+
 def store(values: dict[str, str]) -> None:
     sys.path.insert(0, str(BWS_PROJECT))
     from secret_backends import OpenBaoBackend, _openbao_request  # noqa: PLC0415
 
     bao = OpenBaoBackend("importer")
-    role_id, secret_id = bao._approle_credentials()
-    token = bao._login(role_id, secret_id)
+    token, revoke = obtain_token(bao)
     url = f"{bao._base_url()}/v1/kv/data/{SECRET_PATH}"
     try:
         # One write with all three keys: a KV v2 write replaces the whole secret.
@@ -74,7 +107,9 @@ def store(values: dict[str, str]) -> None:
                 raise RuntimeError(f"read-back mismatch for {key}")
             print(f"store {key}: OK")
     finally:
-        bao._revoke(token)
+        # Revoke only the short-lived AppRole token, never your own bao login.
+        if revoke:
+            bao._revoke(token)
 
 
 def main() -> int:
