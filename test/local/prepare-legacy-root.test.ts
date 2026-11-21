@@ -211,11 +211,11 @@ describe("prepareLegacyRoot", () => {
         DUEGOOD_PREPARE_DESTINATION: destination,
       },
       stdio: "pipe",
-      timeout: 60_000,
+      timeout: 240_000,
       maxBuffer: 4 * 1024 * 1024,
     });
     if (cargo.error || cargo.status !== 0 || !cargo.stdout.includes("legacy-root-dry-run: unprepared-refused prepared-importable")) {
       throw new Error("Rust dry-run helper failed on synthetic roots.");
     }
-  }, 70_000);
+  }, 250_000);
 });

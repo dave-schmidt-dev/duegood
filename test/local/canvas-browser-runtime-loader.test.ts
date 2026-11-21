@@ -98,6 +98,7 @@ it("loads the real bounded capture bundle and imports split PDF row text through
     const saveGeneration = vi.fn(saveCanvasCaptureGeneration);
     const progress = vi.fn();
     const result = await capture({
+      checkSurveyPopup: async () => {},
       appDirectory: directory, helperPath, stateHelperPath: helperPath, expectedUserId: 41, protocolVersion: 2,
       context: { pages: () => [{
         url: () => "https://marymount.instructure.com/", isClosed: () => false,

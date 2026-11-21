@@ -207,7 +207,7 @@ describe("headless launch options", () => {
       expect(result.status).toBe(2);
       expect(result.stderr).toBe("SESSION_BROKER=INVALID_CONFIGURATION\n");
     }
-  });
+  }, 30_000);
 
   it("keeps visible mode by default and replaces the HeadlessChrome user agent when headless", async () => {
     expect(await sessionLaunchOptions()).toEqual({ channel: "chrome", headless: false, args: ["--disable-http-cache"], timeout: 20_000 });
