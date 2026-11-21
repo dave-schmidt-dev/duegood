@@ -56,7 +56,13 @@ Create one KV v2 secret on the `kv` mount:
   - `password`: your Okta password
   - `totp_seed`: the setup key from step 2 (spaces and hyphens are ignored)
 
-Use your usual OpenBao write method and keep the values out of command-line arguments and shell history. No agent reads or prints these values.
+Run the helper in your own terminal; it prompts with hidden input, writes all three keys in one KV v2 write with the existing `importer` AppRole from the bws project, verifies each by SHA-256 read-back, and prints only OK/FAIL. It can show the current 6-digit code so you can confirm the setup key matches your phone before anything is stored.
+
+```sh
+~/Documents/Projects/duegood/scripts/store-sso-credentials.py
+```
+
+No agent reads or prints these values.
 
 ### 4. Register the broker consumer
 
