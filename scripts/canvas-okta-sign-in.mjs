@@ -21,6 +21,10 @@ const CREDENTIAL_TIMEOUT_MS = 45_000;
 const STEP_TIMEOUT_MS = 20_000;
 const MAX_STEPS = 6;
 const POLL_MS = 250;
+/** Bounded wait for the widget to render or for silent SSO to land on Canvas. */
+const SETTLE_MS = 15_000;
+/** Bounded grace for a short redirect hop through a host that is neither Okta nor Canvas. */
+const HOP_GRACE_MS = 5_000;
 /** Passcodes are used only with at least this much of their window left. */
 const PASSCODE_MARGIN_MS = 3_000;
 
@@ -35,16 +39,20 @@ export const SIGN_IN_OUTCOMES = Object.freeze([
 const BLOCKING_OUTCOMES = new Set(["CREDENTIALS_REJECTED"]);
 
 export class OktaSignInError extends Error {
-  constructor(code) {
+  constructor(code, viewClasses = []) {
     super(code);
     this.name = "OktaSignInError";
     this.code = code;
+    /** Widget CSS class names only, kept to explain a fail-closed outcome. */
+    this.viewClasses = viewClasses;
   }
 }
 
-function fail(code) {
-  throw new OktaSignInError(code);
+function fail(code, viewClasses = []) {
+  throw new OktaSignInError(code, viewClasses);
 }
+
+const delay = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 /** True only for an HTTPS URL on one of the reviewed Okta hosts with no credentials or port. */
 export function isOktaUrl(value) {
@@ -145,7 +153,7 @@ async function readView(page) {
   return page.evaluate(() => {
     const view = globalThis.document.querySelector("#okta-sign-in .siw-main-view, .siw-main-view");
     const errors = globalThis.document.querySelector(
-      ".o-form-has-errors .okta-form-infobox-error, .o-form-error-container .okta-form-infobox-error, .o-form-input-error");
+      ".o-form-has-errors .okta-form-infobox-error, .o-form-error-container .okta-form-infobox-error, .o-form-input-error, .o-form-error-container.o-form-has-errors:not(:empty)");
     const captcha = globalThis.document.querySelector(
       "iframe[src*='hcaptcha'], iframe[src*='recaptcha'], iframe[src*='captcha'], .captcha, [data-se='captcha']");
     return {
@@ -194,29 +202,36 @@ async function submit(page) {
 }
 
 async function waitForChange(page, previousKey, deadline) {
+  let offHostSince;
   while (Date.now() < deadline) {
     await page.waitForTimeout(POLL_MS);
     if (isCanvasUrl(page.url())) return { left: true };
-    if (!isOktaUrl(page.url())) return { left: true };
+    if (!isOktaUrl(page.url())) {
+      // Nothing is typed off Okta, so a short hop may finish before this fails closed.
+      offHostSince ??= Date.now();
+      if (Date.now() - offHostSince >= HOP_GRACE_MS) fail("OKTA_HOST_REJECTED");
+      continue;
+    }
+    offHostSince = undefined;
     let view;
     try { view = await readView(page); } catch { continue; }
     const key = `${view.classes.join(" ")}|${view.error}|${view.captcha}`;
     if (key !== previousKey && view.classes.length > 0) return { view };
   }
-  fail("STEP_TIMEOUT");
+  fail(isOktaUrl(page.url()) ? "STEP_TIMEOUT" : "OKTA_HOST_REJECTED");
 }
 
 /**
  * Completes one Okta sign-in on the given page. Returns "SIGNED_IN" when the page leaves
  * Okta for Canvas; the caller still verifies the Canvas session itself.
  */
-export async function performOktaSignIn({ page, credentials, now = Date.now, stepTimeoutMs = STEP_TIMEOUT_MS }) {
+export async function performOktaSignIn({ page, credentials, now = Date.now, stepTimeoutMs = STEP_TIMEOUT_MS, initialView = undefined }) {
   assertOktaPage(page);
-  let view = await readView(page);
+  let view = initialView ?? await readView(page);
   for (let step = 0; step < MAX_STEPS; step += 1) {
     assertOktaPage(page);
     const next = classifyView(view);
-    if (next.outcome) fail(next.outcome);
+    if (next.outcome) fail(next.outcome, view.classes);
     if (next.action === "identify") {
       await fillField(page, "input[name='identifier']", credentials.username);
       const remember = page.locator(".siw-main-view input[type='checkbox'][name='rememberMe']").first();
@@ -235,7 +250,7 @@ export async function performOktaSignIn({ page, credentials, now = Date.now, ste
     } else if (next.action === "select") {
       assertOktaPage(page);
       const option = page.locator(".siw-main-view [data-se='google_otp'] [data-se='button'], .siw-main-view [data-se='google_otp'] .select-factor").first();
-      if (await option.count() !== 1) fail("AUTHENTICATOR_UNAVAILABLE");
+      if (await option.count() !== 1) fail("AUTHENTICATOR_UNAVAILABLE", view.classes);
       const key = `${view.classes.join(" ")}|${view.error}|${view.captcha}`;
       await option.click({ timeout: 5_000 });
       const changed = await waitForChange(page, key, Date.now() + stepTimeoutMs);
@@ -260,8 +275,9 @@ async function readState(appDirectory) {
 }
 
 /** Records the last content-free outcome atomically in the private app directory. */
-export async function recordSignInOutcome(appDirectory, outcome, at = new Date()) {
+export async function recordSignInOutcome(appDirectory, outcome, at = new Date(), viewClasses = []) {
   if (!SIGN_IN_OUTCOMES.includes(outcome)) outcome = "UNKNOWN_PAGE";
+  const view = viewClasses.filter((name) => typeof name === "string" && /^[a-z0-9_-]{1,80}$/u.test(name)).slice(0, 12);
   const directory = await lstat(appDirectory).catch(() => undefined);
   if (!directory?.isDirectory() || directory.isSymbolicLink()) return;
   const target = path.join(appDirectory, AUTO_SIGN_IN_STATE_FILE);
@@ -271,7 +287,7 @@ export async function recordSignInOutcome(appDirectory, outcome, at = new Date()
     try {
       await handle.writeFile(`${JSON.stringify({
         format: "duegood-sso-auto-sign-in", version: 1, outcome,
-        blocked: BLOCKING_OUTCOMES.has(outcome), at: at.toISOString(),
+        blocked: BLOCKING_OUTCOMES.has(outcome), at: at.toISOString(), ...(view.length > 0 ? { view } : {}),
       })}\n`);
     } finally { await handle.close(); }
     await rename(temporary, target);
@@ -298,7 +314,7 @@ function scrub(credentials) {
  * Attempts one automated sign-in when a broker page is on the Okta sign-in widget.
  * Returns the content-free outcome; the caller falls back to the attended wait.
  * @param {{ context: any, appDirectory: string, progress?: (status: string) => void,
- *   getCredentials?: () => Promise<any>, now?: () => number, stepTimeoutMs?: number }} options
+ *   getCredentials?: () => Promise<any>, now?: () => number, stepTimeoutMs?: number, settleMs?: number }} options
  * @returns {Promise<string>}
  */
 export async function attemptAutomaticSignIn({
@@ -308,28 +324,66 @@ export async function attemptAutomaticSignIn({
   getCredentials = requestSsoCredentials,
   now = Date.now,
   stepTimeoutMs = STEP_TIMEOUT_MS,
+  settleMs = SETTLE_MS,
 }) {
-  const page = context.pages().find((candidate) => isOktaUrl(candidate.url()));
-  if (!page) return "NOT_ON_OKTA";
+  const found = await findSignInView(context, settleMs);
+  if (!found) return "NOT_ON_OKTA";
+  const { page, view } = found;
   const state = await readState(appDirectory);
   if (state?.blocked === true) return "BLOCKED_AFTER_REJECTION";
-  progress?.("SIGNING_IN_AUTOMATICALLY");
+  const first = classifyView(view);
+  if (first.outcome) {
+    // Fail closed before any credential is fetched.
+    await recordSignInOutcome(appDirectory, first.outcome, new Date(), view.classes).catch(() => undefined);
+    return first.outcome;
+  }
+  progress("SIGNING_IN_AUTOMATICALLY");
   let credentials;
   let outcome;
+  let viewClasses = [];
   try {
     credentials = await getCredentials();
-    outcome = await performOktaSignIn({ page, credentials, now, stepTimeoutMs });
+    outcome = await performOktaSignIn({ page, credentials, now, stepTimeoutMs, initialView: view });
   } catch (error) {
     outcome = error instanceof OktaSignInError && SIGN_IN_OUTCOMES.includes(error.code) ? error.code : "UNKNOWN_PAGE";
+    if (error instanceof OktaSignInError) viewClasses = error.viewClasses;
   } finally {
     scrub(credentials);
   }
-  await recordSignInOutcome(appDirectory, outcome).catch(() => undefined);
+  await recordSignInOutcome(appDirectory, outcome, new Date(), viewClasses).catch(() => undefined);
   return outcome;
+}
+
+/**
+ * Waits, bounded, until a page shows the rendered Okta widget, or until no page is on
+ * Okta and Canvas is past its login path (silent SSO). Returns undefined in the latter case.
+ */
+async function findSignInView(context, settleMs) {
+  const deadline = Date.now() + settleMs;
+  let lastOkta;
+  for (;;) {
+    const pages = context.pages();
+    if (pages.length === 0) return undefined;
+    const okta = pages.find((candidate) => isOktaUrl(candidate.url()));
+    if (okta) {
+      lastOkta = okta;
+      let view;
+      try { view = await readView(okta); } catch { view = undefined; }
+      if (view && view.classes.length > 0) return { page: okta, view };
+    } else if (pages.some((candidate) => isCanvasUrl(candidate.url()) && !new URL(candidate.url()).pathname.startsWith("/login"))) {
+      return undefined;
+    }
+    if (Date.now() >= deadline) {
+      return lastOkta && isOktaUrl(lastOkta.url()) ? { page: lastOkta, view: { classes: [], error: false, captcha: false } } : undefined;
+    }
+    await delay(Math.min(POLL_MS, Math.max(1, deadline - Date.now())));
+  }
 }
 
 const PRECHECK_MS = 5_000;
 const SSO_REDIRECT_MS = 15_000;
+/** Headless runs have nobody to sign in, so the post-attempt wait is short. */
+const HEADLESS_VERIFY_MS = 60_000;
 
 async function reachOkta(context, deadline) {
   if (context.pages().some((candidate) => isOktaUrl(candidate.url()))) return;
@@ -366,10 +420,11 @@ export async function waitForSignedInCanvas({
   let page = await waitForCanvasPage(context, quick, Math.min(pollIntervalMs, quick));
   if (page) return page;
   if (Date.now() < deadline) await reachOkta(context, deadline);
-  const outcome = await automaticSignIn({ context, appDirectory, progress });
+  const outcome = await automaticSignIn({ context, appDirectory, progress, settleMs: Math.min(SETTLE_MS, remaining()) });
   if (!attendedSignIn && !["SIGNED_IN", "NOT_ON_OKTA"].includes(outcome)) return undefined;
   if (Date.now() >= deadline) return undefined;
-  page = await waitForCanvasPage(context, remaining(), Math.min(pollIntervalMs, remaining()));
+  const budget = attendedSignIn ? remaining() : Math.min(remaining(), HEADLESS_VERIFY_MS);
+  page = await waitForCanvasPage(context, budget, Math.min(pollIntervalMs, budget));
   if (page && outcome !== "SIGNED_IN") await clearSignInBlock(appDirectory).catch(() => undefined);
   return page;
 }

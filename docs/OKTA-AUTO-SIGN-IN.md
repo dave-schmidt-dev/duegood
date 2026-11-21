@@ -28,7 +28,7 @@ Credentials are typed only on `https://marymount.okta.com` and `https://sso.mary
 | `CREDENTIALS_UNAVAILABLE` | The broker consumer failed or returned an invalid handoff |
 | `UNKNOWN_PAGE`, `STEP_TIMEOUT`, `STEP_LIMIT_EXCEEDED` | Anything else |
 
-The last outcome is stored in `~/Library/Application Support/DueGood/canvas-sso-auto-sign-in.json` (mode 0600). After `CREDENTIALS_REJECTED`, automatic attempts stop until you sign in by hand once; this protects the account from lockout. In visible mode, any failure leaves the Chrome window open for the normal attended sign-in.
+The last outcome is stored in `~/Library/Application Support/DueGood/canvas-sso-auto-sign-in.json` (mode 0600). For a fail-closed widget view, the record also lists the widget's CSS class names (no page text), which helps diagnose a failed live run. Unsupported first views fail before any credential is fetched, and silent SSO that lands on Canvas fetches nothing. After `CREDENTIALS_REJECTED`, automatic attempts stop until you sign in by hand once; this protects the account from lockout. In visible mode, any failure leaves the Chrome window open for the normal attended sign-in.
 
 ## One-time setup
 
@@ -76,7 +76,7 @@ After the branch is merged to `main`, add this entry to `CONSUMERS` in `~/Docume
 ),
 ```
 
-The broker's `multi` mode uses `execve`, so the inherited handoff pipe on fd 3 reaches the helper. The helper refuses arguments, refuses a terminal or regular file on fd 3, and writes only a content-free `DUEGOOD_SSO_HANDOFF=<code>` line to stderr on failure.
+By code reading, the broker's `multi` mode `execve`s the helper without closing inherited descriptors, so the handoff pipe on fd 3 should reach it; this has not run against the real broker yet. The helper refuses arguments, refuses a terminal or regular file on fd 3, and writes only a content-free `DUEGOOD_SSO_HANDOFF=<code>` line to stderr on failure.
 
 ## First live run (supervised)
 

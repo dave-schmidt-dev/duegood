@@ -72,7 +72,9 @@ const success: Record<string, Step> = {
   [`${OKTA}/password`]: { view: "challenge-authenticator--okta_password", body: passwordField, next: `${OKTA}/select` },
   [`${OKTA}/select`]: {
     view: "select-authenticator-authenticate", body: "", next: `${OKTA}/select`,
-    extra: `<div data-se="okta_verify"><a data-se="button" href="${OKTA}/push">Okta Verify</a></div><div data-se="google_otp"><a data-se="button" href="${OKTA}/otp">Google Authenticator</a></div>`,
+    // Mirrors okta-signin-widget 7.51 AuthenticatorVerifyOptions: data-se on .authenticator-button, button.select-factor.
+    extra: `<div class="authenticator-row clearfix"><div class="authenticator-button" data-se="okta_verify-push"><a class="button select-factor" href="${OKTA}/push">Okta Verify</a></div></div>`
+      + `<div class="authenticator-row clearfix"><div class="authenticator-button" data-se="google_otp"><a class="button select-factor" href="${OKTA}/otp">Google Authenticator</a></div></div>`,
   },
   [`${OKTA}/otp`]: { view: "challenge-authenticator--google_otp", body: passcodeField, next: `${CANVAS}/` },
 };
@@ -189,4 +191,42 @@ test("never logs, records, or reports a credential", async ({ page, context }) =
     for (const undo of restore) undo();
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("waits for a widget that renders late, then signs in", async ({ page, context }) => {
+  const late = widget(success[`${OKTA}/signin`] as Step).replace('<div id="okta-sign-in">', '<div id="okta-sign-in" hidden>')
+    .replace("<script>", '<script>setTimeout(() => { const root = document.getElementById("okta-sign-in"); const view = root.querySelector(".siw-main-view"); view.dataset.classes = view.className; view.className = ""; root.hidden = false; setTimeout(() => { view.className = view.dataset.classes; }, 600); }, 0);\n');
+  const fake = await routeFakeOkta(context, success, { [`${OKTA}/late`]: late });
+  await page.goto(`${OKTA}/late`);
+  const directory = mkdtempSync(path.join(os.tmpdir(), "duegood-okta-late-"));
+  try {
+    const outcome = await attemptAutomaticSignIn({ context, appDirectory: directory, getCredentials: async () => CREDENTIALS(), now: NOW, stepTimeoutMs: 5_000, settleMs: 5_000 });
+    expect(outcome).toBe("SIGNED_IN");
+    expect(fake.records).toHaveLength(3);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("silent SSO through an Okta interstitial never fetches credentials", async ({ page, context }) => {
+  await routeFakeOkta(context, {}, {
+    [`${OKTA}/app/sso`]: `<!doctype html><title>Synthetic redirect</title><script>setTimeout(() => { location.href = "${CANVAS}/courses"; }, 300);</script>`,
+  });
+  await page.goto(`${OKTA}/app/sso`);
+  let fetched = false;
+  const directory = mkdtempSync(path.join(os.tmpdir(), "duegood-okta-silent-"));
+  try {
+    const outcome = await attemptAutomaticSignIn({
+      context, appDirectory: directory, getCredentials: async () => { fetched = true; return CREDENTIALS(); }, now: NOW, settleMs: 5_000,
+    });
+    expect(outcome).toBe("NOT_ON_OKTA");
+    expect(fetched).toBe(false);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("tolerates a brief redirect hop through another host before Canvas", async ({ page, context }) => {
+  const fake = await routeFakeOkta(context, {
+    ...success,
+    [`${OKTA}/otp`]: { view: "challenge-authenticator--google_otp", body: passcodeField, next: "https://hop.example.net/relay" },
+  }, { "https://hop.example.net/relay": `<!doctype html><title>Synthetic hop</title><script>setTimeout(() => { location.href = "${CANVAS}/"; }, 500);</script>` });
+  expect(await signIn(page, `${OKTA}/signin`)).toBe("SIGNED_IN");
+  expect(fake.records).toHaveLength(3);
 });

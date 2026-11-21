@@ -118,14 +118,14 @@ describe("rejection block and outcome record", () => {
       format: "duegood-sso-auto-sign-in", version: 1, outcome: "CREDENTIALS_REJECTED", blocked: true, at: "2026-11-21T12:00:00.000Z",
     });
     const getCredentials = vi.fn();
-    const page = { url: () => "https://marymount.okta.com/signin" };
+    const page = { url: () => "https://marymount.okta.com/signin", evaluate: async () => ({ classes: ["siw-main-view", "identify"], error: false, captcha: false }) };
     const context = { pages: () => [page] };
-    expect(await attemptAutomaticSignIn({ context, appDirectory: directory, getCredentials })).toBe("BLOCKED_AFTER_REJECTION");
+    expect(await attemptAutomaticSignIn({ context, appDirectory: directory, getCredentials, settleMs: 50 })).toBe("BLOCKED_AFTER_REJECTION");
     expect(getCredentials).not.toHaveBeenCalled();
     await clearSignInBlock(directory);
     const progress = vi.fn();
     expect(await attemptAutomaticSignIn({
-      context, appDirectory: directory, progress,
+      context, appDirectory: directory, progress, settleMs: 50,
       getCredentials: async () => { throw Object.assign(new Error("x"), { code: "CREDENTIALS_UNAVAILABLE" }); },
     })).toBe("UNKNOWN_PAGE");
     expect(progress).toHaveBeenCalledWith("SIGNING_IN_AUTOMATICALLY");
@@ -135,7 +135,29 @@ describe("rejection block and outcome record", () => {
   it("does nothing when no page is on Okta", async () => {
     const getCredentials = vi.fn();
     const context = { pages: () => [{ url: () => "about:blank" }] };
-    expect(await attemptAutomaticSignIn({ context, appDirectory: scratch(), getCredentials })).toBe("NOT_ON_OKTA");
+    expect(await attemptAutomaticSignIn({ context, appDirectory: scratch(), getCredentials, settleMs: 50 })).toBe("NOT_ON_OKTA");
+    expect(getCredentials).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on an unsupported first view without fetching credentials and records its classes", async () => {
+    const directory = scratch();
+    const getCredentials = vi.fn();
+    const progress = vi.fn();
+    const page = { url: () => "https://marymount.okta.com/signin", evaluate: async () => ({ classes: ["siw-main-view", "challenge-poll--okta_verify", "mfa-verify"], error: false, captcha: false }) };
+    expect(await attemptAutomaticSignIn({ context: { pages: () => [page] }, appDirectory: directory, getCredentials, progress, settleMs: 50 }))
+      .toBe("PUSH_OR_NUMBER_CHALLENGE");
+    expect(getCredentials).not.toHaveBeenCalled();
+    expect(progress).not.toHaveBeenCalled();
+    expect(JSON.parse(readFileSync(path.join(directory, AUTO_SIGN_IN_STATE_FILE), "utf8")))
+      .toMatchObject({ outcome: "PUSH_OR_NUMBER_CHALLENGE", blocked: false, view: ["siw-main-view", "challenge-poll--okta_verify", "mfa-verify"] });
+  });
+
+  it("treats a Canvas page past its login path as silent SSO and an unrendered widget as unknown after the settle wait", async () => {
+    const getCredentials = vi.fn();
+    const canvas = { url: () => "https://marymount.instructure.com/courses" };
+    expect(await attemptAutomaticSignIn({ context: { pages: () => [canvas] }, appDirectory: scratch(), getCredentials, settleMs: 5_000 })).toBe("NOT_ON_OKTA");
+    const blank = { url: () => "https://marymount.okta.com/signin", evaluate: async () => ({ classes: [], error: false, captcha: false }) };
+    expect(await attemptAutomaticSignIn({ context: { pages: () => [blank] }, appDirectory: scratch(), getCredentials, settleMs: 50 })).toBe("UNKNOWN_PAGE");
     expect(getCredentials).not.toHaveBeenCalled();
   });
 });
