@@ -22,6 +22,8 @@
 
 ### Fixed
 
+- The desktop installer retries unregistering its retained backup and continues to the cold-launch proof when LaunchServices still refuses, so a transient refusal no longer stops the install before the Canvas helpers are rebuilt.
+
 - Desktop installation now refreshes the three external Canvas helpers. Canvas refresh reports stale helpers before downloading files.
 
 - Report a complete Canvas refresh when every accessible item was captured. Show the omission count for inaccessible items and keep failed downloads or verification visibly incomplete.
