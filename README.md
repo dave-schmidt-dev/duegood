@@ -33,10 +33,9 @@ The private coursework, grades, messages, feed URL, credentials, and screenshots
 
 Refresh starts Chrome headless using the private capture profile. If automatic sign-in needs help, Due Good explains why, opens Chrome and retries once. Finish sign-in or dismiss the survey there. Refresh closes the window it started after the retry and starts headless again next time. For first-time account binding, start Chrome with `--headed`, sign in, confirm the account ID reported by `identity`, and bind that ID locally. Refresh reuses an owner-started window until you stop it. See [Okta sign-in setup](docs/OKTA-AUTO-SIGN-IN.md).
 
-Run `canvas:prepare-helper` once to build and install the three fixed native helpers in the private DueGood Application Support directory: `duegood-capture-state` (capture run/lease), `duegood-capture-download` (bounded file transfer), and `duegood-browser-import` (native import). Later refreshes use those installed helpers and the saved account binding:
+The desktop installer prepares three native helpers in the private DueGood Application Support directory: `duegood-capture-state` (capture run/lease), `duegood-capture-download` (bounded file transfer), and `duegood-browser-import` (native import). For CLI-only setup, run `npm run canvas:prepare-helper` from the source checkout before binding the account. After desktop installation, start with the session command below.
 
 ```sh
-npm run canvas:prepare-helper
 npm run canvas:session -- start --headed
 npm run canvas:session -- status
 npm run canvas:session -- probe
@@ -80,7 +79,7 @@ Stages use a fixed, gitignored `.stage/<purpose>` directory and share the projec
 
 Keep reusable Python caches in `.cache/uv` and `.cache/harvest-uv` by setting `UV_CACHE_DIR` to the matching absolute project path when running those tools. Do not create cache directories in `/private/tmp`.
 
-The project installer is `npm run install:tauri` after the staged build and asset checks pass. Launch the installed app by bundle ID, `open -b com.zerodelta.duegood`, so LaunchServices selects the registered app. Installation, launch, and live feed acceptance are separate checks. See [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md) and [`docs/DESKTOP-CUTOVER.md`](docs/DESKTOP-CUTOVER.md) for the remaining gates.
+The project installer is `npm run install:tauri` after the staged build and asset checks pass. It also rebuilds the three external Canvas helpers for that candidate, reports compile progress, and checks their provenance. A successful installation needs no separate helper preparation. If Refresh later reports that the helpers are out of date, run `npm run canvas:prepare-helper` in the original source checkout matching the installed build. If the checkout has changed, stage and install the new candidate. Launch the installed app by bundle ID, `open -b com.zerodelta.duegood`, so LaunchServices selects the registered app. Installation, launch, and live feed acceptance are separate checks. See [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md) and [`docs/DESKTOP-CUTOVER.md`](docs/DESKTOP-CUTOVER.md) for the remaining gates.
 
 ## Validation cadence
 

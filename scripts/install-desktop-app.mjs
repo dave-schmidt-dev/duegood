@@ -2,12 +2,13 @@
 /** Install and resolve a verified Developer ID build of Due Good. */
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { cp, lstat, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { consumeOwnedStageHandoff, validateOwnedStageHandoff } from "./owned-stage-root.mjs";
 import { runColdLaunchProof, stopColdVerifiedCandidate, stopRunningInstalledCandidate } from "./install-desktop-launch.mjs";
+import { acquireCandidateInstallLock, installCandidateCanvasHelpers } from "./install-canvas-helpers.mjs";
 
 const BUNDLE_ID = "com.zerodelta.duegood";
 const LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
@@ -17,7 +18,7 @@ const HELPER_EXECUTABLES = Object.freeze(["duegood-refresh", "duegood-capture-do
 const IDENTITY_RE = /^Developer ID Application: .+$/u;
 const RETAINED_BACKUP_NAME_RE = /^\.Due Good\.backup-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.app$/u;
 
-const fsOps = Object.freeze({ cp, lstat, readFile, readdir, realpath, rename, rm, writeFile });
+const fsOps = Object.freeze({ cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, rmdir, writeFile });
 
 class RestoredAppRegistrationError extends Error {
   constructor(appPath, cause) {
@@ -326,6 +327,7 @@ export async function installDesktopApp({
   launchProof = runColdLaunchProof,
   stopCandidate = stopColdVerifiedCandidate,
   stopExistingApp = stopRunningInstalledCandidate,
+  prepareHelpers = undefined,
   log = console.log,
 } = {}) {
   if (platform !== "darwin") throw new Error("The desktop installer can run only on macOS.");
@@ -396,21 +398,30 @@ export async function installDesktopApp({
     });
     stageOwnership = receipt.stageOwnership;
   }
-  if (stageOwnership) {
-    log("install: the stage receipt grants an owned handoff; its stage is removed after this run");
-  } else if (receipt?.stageOwnership?.keep === true || receipt?.keep === true) {
-    log("install: the stage receipt requests retention; its stage is left in place");
+  const applicationsStat = await files.lstat(applicationsDirectory).catch(() => null);
+  if (!applicationsStat?.isDirectory() || applicationsStat.isSymbolicLink()) {
+    throw new Error("The Applications directory must exist as a real directory before installation.");
   }
 
+  const releaseInstallLock = await acquireCandidateInstallLock(files, applicationsDirectory);
   let installFailure;
   let installFailed = false;
   let installResult;
   let stageCleanupFailure;
   try {
+    if (stageOwnership) {
+      log("install: the stage receipt grants an owned handoff; its stage is removed after this run");
+    } else if (receipt?.stageOwnership?.keep === true || receipt?.keep === true) {
+      log("install: the stage receipt requests retention; its stage is left in place");
+    }
     const tree = safeTreeDigest(receipt.treeDigest);
     const committedTree = safeTreeDigest((await run("git", ["rev-parse", "HEAD^{tree}"], { cwd: candidateRootPath })).stdout.trim());
     if (committedTree !== tree) throw new Error("The staged candidate tree does not match its receipt.");
     const sourceRevision = (await run("git", ["describe", "--always", "--dirty"], { cwd: sourceCheckoutPath })).stdout.trim();
+    const sourceCommit = (await run("git", ["rev-parse", "HEAD"], { cwd: sourceCheckoutPath })).stdout.trim().toLowerCase();
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(sourceCommit)) {
+      throw new Error("The original source checkout does not have a valid Git commit digest.");
+    }
     if (!sourceRevision || [...sourceRevision].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) {
       throw new Error("The source checkout revision could not be recorded safely.");
     }
@@ -420,7 +431,11 @@ export async function installDesktopApp({
     } catch {
       throw new Error("The signed build metadata is missing or invalid.");
     }
-    if (buildMetadata?.schemaVersion !== 1 || buildMetadata?.sourceRevision !== sourceRevision || buildMetadata?.candidateTree !== tree) {
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(buildMetadata?.sourceCommit ?? "")) {
+      throw new Error("The staged app has no full source commit stamp. Build a fresh candidate with npm run stage:tauri.");
+    }
+    if (buildMetadata?.schemaVersion !== 1 || buildMetadata?.sourceRevision !== sourceRevision
+      || buildMetadata?.candidateTree !== tree || buildMetadata?.sourceCommit !== sourceCommit) {
       throw new Error("The signed build metadata does not match the original checkout and staged candidate.");
     }
     const signingName = requireIdentity(signingIdentity, (await run("/usr/bin/security", ["find-identity", "-v", "-p", "codesigning"])).stdout);
@@ -485,11 +500,6 @@ export async function installDesktopApp({
       upgrade = true;
       originalTargetStat = targetStat;
     }
-    const applicationsStat = await files.lstat(applicationsDirectory).catch(() => null);
-    if (!applicationsStat?.isDirectory() || applicationsStat.isSymbolicLink()) {
-      throw new Error("The Applications directory must exist as a real directory before installation.");
-    }
-
     const productionDataRoot = await canonicalFuturePath(files, path.join(homeDirectory, "Library", "Application Support", BUNDLE_ID));
     let dataRootExistedBeforeInstall = await exists(files, productionDataRoot);
     let markerStat;
@@ -624,6 +634,8 @@ export async function installDesktopApp({
     const ownedBackupPaths = await unregisterInstallerOwnedBackups({ files, run, applicationsDirectory, signingName, log });
     let candidateIdentity;
     let coldProof;
+    let canvasHelpers;
+    let installPhase = "cold launch proof";
     try {
       log("install: proving two cold launches against the installed path and bundle identifier");
       coldProof = await launchProof({
@@ -636,6 +648,17 @@ export async function installDesktopApp({
           log(`install: observed the owned candidate process from ${method} launch`);
         },
       });
+      installPhase = "Canvas helper preparation";
+      log("install: installing Canvas helpers from the verified candidate");
+      canvasHelpers = await installCandidateCanvasHelpers({
+        prepare: prepareHelpers,
+        candidateRoot: candidateRealPath,
+        sourceCommit: buildMetadata.sourceCommit,
+        candidateTree: tree,
+        homeDirectory,
+        recoveryCheckout: sourceCheckoutPath,
+        progress: (message) => log(`install: ${message}`),
+      });
     } catch (error) {
       if (upgrade && backupPath) {
         try {
@@ -644,9 +667,18 @@ export async function installDesktopApp({
             candidateIdentity, productionDataRoot, stopCandidate,
           });
         } catch (restoreError) {
-          throw new Error(`The cold launch proof failed; ${restorationFailureDetail(restoreError, installApp, backupPath)}.`, { cause: restoreError });
+          const restoreDetail = restorationFailureDetail(restoreError, installApp, backupPath);
+          if (installPhase === "cold launch proof") {
+            throw new Error(`The cold launch proof failed; ${restoreDetail}.`, { cause: restoreError });
+          }
+          const detail = error instanceof Error ? error.message : String(error);
+          throw new Error(`Canvas helper preparation failed. ${detail} The ${restoreDetail}.`, { cause: restoreError });
         }
-        throw new Error("The installed app cold launch proof failed; the previous app was restored.", { cause: error });
+        if (installPhase === "cold launch proof") {
+          throw new Error("The installed app cold launch proof failed; the previous app was restored.", { cause: error });
+        }
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`Canvas helper preparation failed; the previous app was restored. ${detail}`, { cause: error });
       }
       throw error;
     }
@@ -660,6 +692,9 @@ export async function installDesktopApp({
     log(`Production data root after open: ${dataRootExistsAfterOpen ? "present" : "absent"}`);
     log(`Installed helper SHA-256: ${installedHelperDigests["duegood-refresh"]}`);
     log(`Installed capture download helper SHA-256: ${installedHelperDigests["duegood-capture-download"]}`);
+    log(`Installed external Canvas download helper SHA-256: ${canvasHelpers.sha256}`);
+    log(`Installed external Canvas state helper SHA-256: ${canvasHelpers.stateHelperSha256}`);
+    log(`Installed external Canvas browser import helper SHA-256: ${canvasHelpers.importSha256}`);
     log(`Installed candidate: ${sourceRevision} (${tree})`);
     installResult = {
       appPath: installApp,
@@ -692,6 +727,13 @@ export async function installDesktopApp({
       } catch (cleanupError) {
         stageCleanupFailure = cleanupError;
       }
+    }
+    try {
+      await releaseInstallLock();
+    } catch (error) {
+      log("install: could not release the desktop installation lock");
+      installFailure ??= error;
+      installFailed = true;
     }
   }
 

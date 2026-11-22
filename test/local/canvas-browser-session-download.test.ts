@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { runCanvasCapture } from "../../scripts/canvas-browser-session.mjs";
 import { withCanvasRunLease } from "../../scripts/canvas-browser-run-lease.mjs";
 import { collectCanvasBrowserCapture } from "../../scripts/canvas-browser-capture.mjs";
+import { writeCanvasHelperProvenance } from "../../scripts/canvas-helper-provenance.mjs";
 
 const directories: string[] = [];
 async function directory() {
@@ -37,6 +39,42 @@ function context() {
 }
 
 describe("browser capture file staging lifecycle", () => {
+  it("rejects stale helper provenance before invoking the capture state helper", async () => {
+    const appDirectory = await directory();
+    const binDirectory = path.join(appDirectory, "bin");
+    await mkdir(binDirectory, { mode: 0o700 });
+    const helperNames = [
+      "duegood-capture-download",
+      "duegood-capture-state",
+      "duegood-browser-import",
+    ];
+    const helperDigests: Record<string, string> = {};
+    for (const name of helperNames) {
+      const bytes = Buffer.from(`synthetic helper ${name}`);
+      await writeFile(path.join(binDirectory, name), bytes, { mode: 0o700 });
+      helperDigests[name] = createHash("sha256").update(bytes).digest("hex");
+    }
+    await writeCanvasHelperProvenance({
+      binDirectory,
+      sourceCommit: "a".repeat(40),
+      candidateTree: "b".repeat(40),
+      helperDigests,
+    });
+    const withRunLease = vi.fn(syntheticLease);
+
+    await expect(runCanvasCapture({
+      checkSurveyPopup: async () => {},
+      context: context().browser,
+      expectedUserId: 7,
+      expectedBuildIdentity: { sourceCommit: "a".repeat(40), candidateTree: "c".repeat(40) },
+      progress: () => {},
+      appDirectory,
+      withRunLease,
+    })).rejects.toMatchObject({ code: "HELPER_STALE" });
+
+    expect(withRunLease).not.toHaveBeenCalled();
+  });
+
   it("keeps raw URLs in callback memory, saves only an opaque receipt, and removes its temporary root", async () => {
     const appDirectory = await directory();
     const helperPath = path.join(appDirectory, "synthetic-helper");

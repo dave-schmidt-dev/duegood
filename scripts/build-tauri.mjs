@@ -273,20 +273,30 @@ async function signAppAdhoc(appPath) {
   }
 }
 
-export function buildStamp({ sourceRevision, candidateTree }) {
+/** @param {{ sourceRevision: string, sourceCommit?: string, candidateTree: string }} identity */
+export function buildStamp({ sourceRevision, sourceCommit, candidateTree }) {
   if (typeof sourceRevision !== "string" || sourceRevision.length === 0 || sourceRevision.length > 256 || /[\r\n]/.test(sourceRevision)) {
     fail("source revision stamp must be a single non-empty line");
+  }
+  if (sourceCommit !== undefined && (typeof sourceCommit !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sourceCommit))) {
+    fail("source commit stamp must be a full Git commit digest");
   }
   if (typeof candidateTree !== "string" || !/^[0-9a-f]{40,64}$/.test(candidateTree)) {
     fail("candidate tree stamp must be a Git tree digest");
   }
-  return `${JSON.stringify({ schemaVersion: 1, sourceRevision, candidateTree }, null, 2)}\n`;
+  const stamp = { schemaVersion: 1, sourceRevision, ...(sourceCommit ? { sourceCommit: sourceCommit.toLowerCase() } : {}), candidateTree };
+  return `${JSON.stringify(stamp, null, 2)}\n`;
 }
 
 function getSourceRevision({ sourceCheckout, sourceDescribe }) {
   if (sourceDescribe) return sourceDescribe;
   if (!sourceCheckout) fail("set DUEGOOD_SOURCE_CHECKOUT to the original source checkout for build stamping");
   return run("git", ["describe", "--always", "--dirty"], { cwd: path.resolve(sourceCheckout), stdio: "pipe" }).trim();
+}
+
+function getSourceCommit({ sourceCheckout }) {
+  if (!sourceCheckout) return undefined;
+  return run("git", ["rev-parse", "HEAD"], { cwd: path.resolve(sourceCheckout), stdio: "pipe" }).trim();
 }
 
 function ensureNoTestMarker(file) {
@@ -303,6 +313,7 @@ async function packageTauri(mode, receipt, options) {
   }
   const stamp = buildStamp({
     sourceRevision: getSourceRevision(options),
+    sourceCommit: getSourceCommit(options),
     candidateTree: receipt.treeDigest,
   });
   for (const executable of SIDECAR_EXECUTABLES) await ensureSidecarBuildInput(executable);

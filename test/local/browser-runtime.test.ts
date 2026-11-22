@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,11 +11,27 @@ import {
   verifyBrowserRuntimeTree,
 } from "../../scripts/prepare-browser-runtime.mjs";
 import { runCanvasAppRefresh } from "../../scripts/canvas-browser-app-refresh.mjs";
+import { readRuntimeBuildIdentity } from "../../scripts/canvas-runtime-build-identity.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const RUNTIME = path.join(ROOT, "dist", "browser-runtime");
 
 describe.sequential("packaged browser runtime", () => {
+  it("requires build metadata for a packaged runtime and ignores source checkout metadata", async () => {
+    const isolatedRoot = await mkdtemp(path.join(tmpdir(), "duegood-runtime-identity-"));
+    try {
+      const runtimeRoot = path.join(isolatedRoot, "DueGood.app", "Contents", "Resources", "browser-runtime");
+      await mkdir(runtimeRoot, { recursive: true });
+      await expect(readRuntimeBuildIdentity({ runtimeRoot })).rejects.toMatchObject({ code: "HELPER_STALE" });
+
+      await writeFile(path.join(isolatedRoot, "duegood-build.json"), "{}");
+      await expect(readRuntimeBuildIdentity({ runtimeRoot: path.join(isolatedRoot, "source", "browser-runtime") }))
+        .resolves.toBeUndefined();
+    } finally {
+      await rm(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
   it("loads the full capture and PDF runtime outside the checkout with an empty environment", async () => {
     const isolatedRoot = await mkdtemp(path.join(tmpdir(), "duegood-browser-runtime-isolated-"));
     try {
@@ -228,6 +244,18 @@ describe.sequential("packaged browser runtime", () => {
     });
     expect(malformed.status).toBe("incomplete");
     expect(malformed.errorCode).toBe("BROWSER_REFRESH_FAILED");
+  });
+
+  it("preserves the content-free stale-helper result code", async () => {
+    const output: string[] = [];
+    const result = await runCanvasAppRefresh({
+      heartbeatMs: 60_000,
+      writeLine: (line) => { output.push(line); return true; },
+      runClient: async () => ({ status: "REQUEST_FAILED", errorCode: "HELPER_STALE" }),
+    });
+
+    expect(result).toMatchObject({ status: "incomplete", errorCode: "HELPER_STALE" });
+    expect(output.map((line) => JSON.parse(line).errorCode).filter(Boolean)).toEqual(["HELPER_STALE"]);
   });
 
   it("shows personal-file body failures when daily coursework has no gaps", async () => {

@@ -116,4 +116,16 @@ describe("full refresh result semantics", () => {
     expect(feedback.detail).toContain("Canvas updated.");
     expect(feedback.detail).toContain("Calendar could not refresh");
   });
+
+  it("tells the owner how to refresh stale Canvas helpers", () => {
+    const feedback = fullRefreshFeedback({
+      status: "incomplete", browserStatus: "failed", calendarStatus: "complete",
+      gapCount: 0, omissionCount: 0, calendarAdded: 0, calendarUpdated: 0,
+      calendarHeld: 0, updatedAt: null, errorCode: "helper-stale",
+    });
+
+    expect(feedback.state).toBe("partial");
+    expect(feedback.detail).toContain("Canvas capture helpers are out of date.");
+    expect(feedback.detail).toContain("npm run canvas:prepare-helper");
+  });
 });

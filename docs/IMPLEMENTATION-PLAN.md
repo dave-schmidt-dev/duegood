@@ -520,3 +520,7 @@ Confirmed in source: the producer, broker and client force partial results. The 
 First guard native test storage. Then classify reasoned omissions and actual capture failures, carry the outcome through the archive, import and UI, and exercise synthetic fixtures across each boundary. Keep legacy captures conservative and preserve exact IPC validation. Verify checksums and the requested offline gates before reporting.
 
 Confirmed the collector and importer currently treat a verified empty download as a missing body. Add a file-only omission for explicit zero-byte Canvas metadata plus successful download EOF, and retain failure for every other empty response. Extend signature verification to recognized raster substitutions, including HEIF and AVIF, and qualify both paths using synthetic data only.
+
+### External Canvas helper provenance
+
+Confirmed locally that capture uses separate executables and installation verifies only bundled helpers. Bind preparation to the staged candidate tree and full source commit, verify installed bytes, and reject stale helpers before capture. Use synthetic tests only. The reported October installation is not independently verifiable here.

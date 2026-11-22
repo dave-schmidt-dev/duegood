@@ -7,6 +7,7 @@ interface Setup {
   readonly mode?: "canvas" | "calendar" | "full" | "none";
   readonly refreshError?: boolean;
   readonly fullRefreshError?: boolean;
+  readonly fullErrorCode?: string;
   readonly fullGap?: boolean;
   readonly fullGapCount?: number;
   readonly fullCalendarHeld?: number;
@@ -187,6 +188,14 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
         }
         phase("browser-capture");
         if (setup.holdFullRefresh === true && setup.signInFallbackReason === undefined) await new Promise<void>((resolve) => { scope.__releaseFullRefresh = resolve; });
+        if (setup.fullErrorCode !== undefined) {
+          phase("browser-import"); phase("calendar"); phase("complete"); callback?.({ index, end: true });
+          return {
+            status: "incomplete", browserStatus: "failed", calendarStatus: "complete",
+            gapCount: 0, omissionCount: 0, calendarAdded: 0, calendarUpdated: 0, calendarHeld: 0,
+            updatedAt: null, errorCode: setup.fullErrorCode,
+          };
+        }
         const coursework = documents.coursework as { generated: string; courses: Record<string, unknown>[]; items: Record<string, unknown>[] };
         const calendarItem = coursework.items.find((item) => item.id === "calendar-deadline");
         if (calendarItem !== undefined) calendarItem.at = futureDate(20);
@@ -509,6 +518,15 @@ test("full refresh banner stays partial when Canvas completes but calendar holds
   await expect(note).toContainText("Canvas updated.");
   await expect(note).toContainText("calendar item was left unchanged");
   await expect(note).toContainText("1 calendar item was left unchanged");
+});
+
+test("full refresh gives an actionable stale-helper message", async ({ page }) => {
+  await openDashboard(page, { mode: "full", fullErrorCode: "helper-stale" });
+  await page.locator(".top-actions").getByRole("button", { name: "Refresh", exact: true }).click();
+
+  const note = page.locator(".sync-note");
+  await expect(note).toContainText("Canvas capture helpers are out of date.");
+  await expect(note).toContainText("npm run canvas:prepare-helper");
 });
 
 test("calendar refresh changes only deadlines and labels its scope in Activity and after reload", async ({ page }) => {

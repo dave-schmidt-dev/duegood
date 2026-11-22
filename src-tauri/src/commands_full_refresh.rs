@@ -388,6 +388,9 @@ fn run_browser_client_with_timeout(
                                     omissions: omission_count,
                                 }
                             }
+                            ("incomplete", Some("HELPER_STALE")) => BrowserOutcome::Failed {
+                                code: "helper-stale",
+                            },
                             ("incomplete", Some(_)) => BrowserOutcome::Failed {
                                 code: "browser-failed",
                             },
@@ -458,6 +461,7 @@ fn valid_runtime_error_code(value: Option<&str>) -> bool {
             "BROWSER_REFRESH_FAILED"
                 | "CAPTURE_GAPS"
                 | "CAPTURE_STATE_UNAVAILABLE"
+                | "HELPER_STALE"
                 | "BINDING_REQUIRED"
                 | "SIGN_IN_REQUIRED"
                 | "IDENTITY_MISMATCH"

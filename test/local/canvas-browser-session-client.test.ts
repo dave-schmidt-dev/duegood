@@ -31,6 +31,20 @@ const importFrame = {
 };
 
 describe("Canvas refresh client orchestration", () => {
+  it("returns stale helper provenance before invoking the capture state helper", async () => {
+    const stateCommand = vi.fn(async () => ({ runId: 9 }));
+    const verifyHelpers = vi.fn(async () => {
+      throw Object.assign(new Error("private helper details"), { code: "HELPER_STALE" });
+    });
+
+    await expect(runCanvasBrowserRefresh({ stateCommand, verifyHelpers }))
+      .resolves.toEqual({ status: "REQUEST_FAILED", errorCode: "HELPER_STALE" });
+    expect(verifyHelpers).toHaveBeenCalledTimes(1);
+    expect(stateCommand).not.toHaveBeenCalled();
+    expect(sanitizeFrame({ status: "REQUEST_FAILED", errorCode: "HELPER_STALE" }, "capture"))
+      .toEqual({ status: "REQUEST_FAILED", errorCode: "HELPER_STALE" });
+  });
+
   it.each([
     [completeCaptureFrame, "COMPLETE"],
     [captureFrame, "PARTIAL"],

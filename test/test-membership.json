@@ -134,7 +134,7 @@
       "src-tauri/src/clipboard.rs": 1,
       "src-tauri/src/commands.rs": 20,
       "src-tauri/src/commands_browser_tests.rs": 3,
-      "src-tauri/src/commands_full_refresh_tests.rs": 12,
+      "src-tauri/src/commands_full_refresh_tests.rs": 13,
       "src-tauri/src/config.rs": 11,
       "src-tauri/src/documents.rs": 4,
       "src-tauri/src/downloads_tests.rs": 6,

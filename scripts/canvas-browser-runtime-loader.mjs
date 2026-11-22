@@ -1,6 +1,7 @@
 import { build } from "esbuild";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readRuntimeBuildIdentity } from "./canvas-runtime-build-identity.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENTRY = path.join(ROOT, "scripts", "canvas-browser-session-capture.mjs");
@@ -116,6 +117,7 @@ async function fixedPdfTextExtractor() {
 
 /** Loads current capture source into the existing broker without closing its Chrome context. */
 export async function loadCurrentCanvasCapture({ entry = ENTRY, bundle = build, loadPdfText = fixedPdfTextExtractor } = {}) {
+  const buildIdentity = await readRuntimeBuildIdentity({ runtimeRoot: ROOT });
   const result = await bundle({
     entryPoints: [entry],
     bundle: true,
@@ -132,5 +134,9 @@ export async function loadCurrentCanvasCapture({ entry = ENTRY, bundle = build, 
   if (typeof runtime.runCanvasCapture !== "function") throw new Error("CAPTURE_RUNTIME_REJECTED");
   const extractPdfText = await loadPdfText();
   if (typeof extractPdfText !== "function") throw new Error("CAPTURE_RUNTIME_REJECTED");
-  return (options = {}) => runtime.runCanvasCapture({ ...options, extractPdfText });
+  return (options = {}) => runtime.runCanvasCapture({
+    ...options,
+    expectedBuildIdentity: buildIdentity,
+    extractPdfText,
+  });
 }

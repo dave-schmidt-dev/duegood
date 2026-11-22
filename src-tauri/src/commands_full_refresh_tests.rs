@@ -226,6 +226,25 @@ fn incomplete_capture_gaps_are_distinct_from_browser_import_failure() {
 }
 
 #[test]
+fn stale_canvas_helpers_keep_a_content_free_failure_code() {
+    let frame = serde_json::json!({
+        "type": "result", "status": "incomplete", "resourceCount": 0, "itemCount": 0,
+        "gapCount": 0, "omissionCount": 0, "importedCourses": 0, "archivedCourses": 0,
+        "promotedBlobs": 0, "reusedBlobs": 0, "bytesVerified": 0, "alreadyCurrent": false,
+        "errorCode": "HELPER_STALE",
+    });
+    let body = format!(
+        "printf '%s\\n' '{}'\nexit 1",
+        serde_json::to_string(&frame).unwrap()
+    );
+    let (_temp, runtime) = runtime_fixture(&body);
+    let (_app_root, app) = app_with_store("full-refresh-stale-helpers");
+    let outcome = run_browser_client(&app.shared, &runtime, &mut |_| true)
+        .expect("stale helper result is a valid bounded failure");
+    assert_eq!(outcome, BrowserOutcome::Failed { code: "helper-stale" });
+}
+
+#[test]
 fn browser_partial_or_failed_outcomes_still_attempt_calendar_and_keep_calendar_counts() {
     let mut calendar_called = false;
     let result = run_full_sequence(

@@ -8,6 +8,7 @@ import { acquireOwnedStageRoot } from "../../../scripts/owned-stage-root.mjs";
 export const identityHash = "A".repeat(40);
 export const identityName = "Developer ID Application: Zero Delta LLC (US) (4CJ49V6QHW)";
 export const candidateTree = "1234567890abcdef1234567890abcdef12345678";
+export const sourceCommit = "abcdef0123456789abcdef0123456789abcdef01";
 export const helperRelativePath = "Contents/MacOS/duegood-refresh";
 export const captureHelperRelativePath = "Contents/MacOS/duegood-capture-download";
 export const backupEntryName = ".Due Good.backup-01234567-89ab-cdef-0123-456789abcdef.app";
@@ -41,6 +42,7 @@ export interface InstallDesktopAppFixture {
   rootMarkerPath: string;
   commands: Array<{ command: string; args: string[]; cwd?: string }>;
   logs: string[];
+  helperRefreshes: Array<{ candidateRoot?: string; sourceCommit?: string; candidateTree?: string; homeDirectory?: string }>;
   registrations: string;
   signatureMode: "valid" | "unsigned" | "adhoc";
   embeddedAssetChecks: string[];
@@ -95,6 +97,7 @@ export async function createInstallDesktopAppFixture(): Promise<InstallDesktopAp
     await writeFile(path.join(appPath, "Contents", "Resources", "duegood-build.json"), `${JSON.stringify({
       schemaVersion: 1,
       sourceRevision: "v0.1.0-4-gabc1234-dirty",
+      sourceCommit,
       candidateTree,
     })}\n`);
     fixture.bundleIds.set(await realpath(appPath), id);
@@ -160,6 +163,27 @@ export async function createInstallDesktopAppFixture(): Promise<InstallDesktopAp
     await lifecycle.close();
   }
 
+  async function fakePrepareHelpers(options: {
+    sourceCheckout?: string;
+    sourceCommit?: string;
+    candidateTree?: string;
+    homeDirectory?: string;
+    progress?: (message: string) => void;
+  }) {
+    fixture.helperRefreshes.push({
+      candidateRoot: options.sourceCheckout,
+      sourceCommit: options.sourceCommit,
+      candidateTree: options.candidateTree,
+      homeDirectory: options.homeDirectory,
+    });
+    options.progress?.("compiling production helper");
+    return {
+      sha256: "1".repeat(64),
+      stateHelperSha256: "2".repeat(64),
+      importSha256: "3".repeat(64),
+    };
+  }
+
   function installFromStage(stageRoot: string, overrides: Record<string, unknown> = {}): Promise<InstallResult> {
     return fixture.installDesktopApp({
       candidateRoot: stageRoot,
@@ -177,6 +201,7 @@ export async function createInstallDesktopAppFixture(): Promise<InstallDesktopAp
 
   async function fakeRun(command: string, args: string[], options?: { cwd?: string; timeoutMs?: number }) {
     fixture.commands.push({ command, args, cwd: options?.cwd });
+    if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") return Promise.resolve({ stdout: `${sourceCommit}\n`, stderr: "" });
     if (command === "git" && args[0] === "rev-parse") return Promise.resolve({ stdout: `${candidateTree}\n`, stderr: "" });
     if (command === "git" && args[0] === "describe") return Promise.resolve({ stdout: "v0.1.0-4-gabc1234-dirty\n", stderr: "" });
     if (command.endsWith("/PlistBuddy")) {
@@ -257,6 +282,7 @@ export async function createInstallDesktopAppFixture(): Promise<InstallDesktopAp
     rootMarkerPath: "",
     commands: [],
     logs: [],
+    helperRefreshes: [],
     registrations: "bundle id: com.other.app\npath: /Applications/Other.app\n",
     signatureMode: "valid",
     embeddedAssetChecks: [],
@@ -280,6 +306,7 @@ export async function createInstallDesktopAppFixture(): Promise<InstallDesktopAp
     installFromStage,
     installDesktopApp: (options = {}) => installDesktopAppImplementation({
       ...options,
+      prepareHelpers: options.prepareHelpers ?? fakePrepareHelpers,
       launchProof: fakeLaunchProof,
       stopCandidate: fakeStopCandidate,
       stopExistingApp: async ({ bundleId, appPath, dataRoot }: { bundleId: string; appPath: string; dataRoot: string }) => {

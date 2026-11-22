@@ -122,8 +122,25 @@ describe("Tauri staged asset verifier", () => {
     expect(buildStamp({ sourceRevision: "abc123-dirty", candidateTree: "a".repeat(40) })).toBe(
       `${JSON.stringify({ schemaVersion: 1, sourceRevision: "abc123-dirty", candidateTree: "a".repeat(40) }, null, 2)}\n`,
     );
+    expect(buildStamp({
+      sourceRevision: "abc123-dirty",
+      sourceCommit: "B".repeat(40),
+      candidateTree: "a".repeat(40),
+    })).toBe(
+      `${JSON.stringify({
+        schemaVersion: 1,
+        sourceRevision: "abc123-dirty",
+        sourceCommit: "b".repeat(40),
+        candidateTree: "a".repeat(40),
+      }, null, 2)}\n`,
+    );
     expect(() => buildStamp({ sourceRevision: "bad\nrevision", candidateTree: "a".repeat(40) }))
       .toThrow("single non-empty line");
+    expect(() => buildStamp({
+      sourceRevision: "abc123",
+      sourceCommit: "short",
+      candidateTree: "a".repeat(40),
+    })).toThrow("full Git commit digest");
   });
 
   it("resolves build outputs into the shared Cargo target and defaults verification to the stage app", () => {

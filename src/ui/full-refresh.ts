@@ -14,8 +14,10 @@ export function fullRefreshFeedback(result: FullRefreshResult, fileNotices: read
   const complete = result.status === "complete" && result.browserStatus === "complete" && calendarStatus === "complete" && result.gapCount === 0;
   const failed = result.browserStatus === "failed" && (result.calendarStatus === "failed" || result.calendarStatus === "unavailable");
   const state = complete ? "complete" : failed ? "failed" : "partial";
-  const canvas = result.browserStatus === "failed"
-    ? "Canvas could not refresh. Sign in if prompted, then try again."
+  const canvas = result.browserStatus === "failed" && result.errorCode === "helper-stale"
+    ? "Canvas capture helpers are out of date. Run npm run canvas:prepare-helper, then try again."
+    : result.browserStatus === "failed"
+      ? "Canvas could not refresh. Sign in if prompted, then try again."
     : result.gapCount > 0
       ? `${String(result.gapCount)} Canvas section${result.gapCount === 1 ? " or file could" : "s or files could"} not refresh.`
       : result.browserStatus === "incomplete" ? "Canvas could not finish refreshing." : "Canvas updated.";

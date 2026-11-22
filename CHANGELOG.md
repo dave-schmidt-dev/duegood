@@ -20,6 +20,8 @@
 
 ### Fixed
 
+- Desktop installation now refreshes the three external Canvas helpers. Canvas refresh reports stale helpers before downloading files.
+
 - Report a complete Canvas refresh when every accessible item was captured. Show the omission count for inaccessible items and keep failed downloads or verification visibly incomplete.
 - Isolate native test storage so fixture imports cannot replace the owner’s archive pointer.
 

@@ -4,6 +4,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
+import { verifyCanvasHelperProvenance } from "./canvas-helper-provenance.mjs";
+import { readRuntimeBuildIdentity } from "./canvas-runtime-build-identity.mjs";
 import { fixedSessionPaths } from "./canvas-browser-session.mjs";
 import { bindCanvasAccount, readCanvasAccountBinding } from "./canvas-browser-binding.mjs";
 import { runCanvasBrowserNativeImport } from "./canvas-browser-native-import.mjs";
@@ -33,6 +35,16 @@ const CHECK_NAMES = new Set([
 ]);
 let lastProgressState = "";
 let lastProgressAt = 0;
+
+async function verifyRuntimeCanvasHelpers() {
+  const identity = await readRuntimeBuildIdentity({ runtimeRoot: ROOT });
+  if (!identity) return;
+  await verifyCanvasHelperProvenance({
+    binDirectory: path.dirname(STATE_HELPER_PATH),
+    sourceCommit: identity.sourceCommit,
+    candidateTree: identity.candidateTree,
+  });
+}
 
 function output(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -358,6 +370,7 @@ function captureSummary(frame, invalidResponse = "INVALID_CAPTURE_RESPONSE") {
  * }>} [nativeImport]
  * @property {(verb: "begin" | "fail", runId?: number) => Promise<{runId: number}>} [stateCommand]
  * @property {(status: string) => void} [reportImportProgress]
+ * @property {() => Promise<void>} [verifyHelpers]
  */
 
 /** Captures and imports one owner-bound Canvas session with a bounded completion summary.
@@ -372,7 +385,16 @@ export async function runCanvasBrowserRefresh({
   nativeImport = runCanvasBrowserNativeImport,
   stateCommand = runCaptureStateCommand,
   reportImportProgress = (status) => process.stderr.write(`CANVAS_NATIVE_IMPORT_PROGRESS=${status}\n`),
+  verifyHelpers = verifyRuntimeCanvasHelpers,
 } = {}) {
+  try {
+    await verifyHelpers();
+  } catch (error) {
+    return {
+      status: "REQUEST_FAILED",
+      errorCode: error?.code === "HELPER_STALE" ? "HELPER_STALE" : "CAPTURE_STATE_UNAVAILABLE",
+    };
+  }
   let preCaptureRunId;
   try {
     ({ runId: preCaptureRunId } = await stateCommand("begin"));

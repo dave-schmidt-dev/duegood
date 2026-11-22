@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cp, lstat, mkdir, readFile, readdir, realpath, rename as fsRename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, readdir, realpath, rename as fsRename, rm, rmdir, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -9,6 +9,7 @@ import {
   createInstallDesktopAppFixture,
   helperRelativePath,
   identityName,
+  sourceCommit,
   type InstallDesktopAppFixture,
 } from "./helpers/install-desktop-app";
 
@@ -44,8 +45,12 @@ describe("desktop app installer", () => {
       log: (message: string) => harness.logs.push(message),
     });
 
-    const stamp = JSON.parse(await readFile(result.buildMetadataPath, "utf8")) as { sourceRevision: string; candidateTree: string };
-    expect(stamp).toStrictEqual({ schemaVersion: 1, sourceRevision: "v0.1.0-4-gabc1234-dirty", candidateTree });
+    const stamp = JSON.parse(await readFile(result.buildMetadataPath, "utf8")) as {
+      sourceRevision: string;
+      sourceCommit: string;
+      candidateTree: string;
+    };
+    expect(stamp).toStrictEqual({ schemaVersion: 1, sourceRevision: "v0.1.0-4-gabc1234-dirty", sourceCommit, candidateTree });
     expect(result.helperDigest).toBe(expectedDigest);
     expect(result.helperDigests).toStrictEqual({
       "duegood-refresh": expectedDigest,
@@ -54,6 +59,14 @@ describe("desktop app installer", () => {
     expect(result.removedBackupPaths).toStrictEqual([]);
     expect(harness.logs).toContain(`Installed helper SHA-256: ${expectedDigest}`);
     expect(harness.logs).toContain(`Installed capture download helper SHA-256: ${expectedCaptureDigest}`);
+    expect(harness.logs).toContain("install: compiling production helper");
+    expect(harness.logs).toContain(`Installed external Canvas download helper SHA-256: ${"1".repeat(64)}`);
+    expect(harness.helperRefreshes).toStrictEqual([{
+      candidateRoot: await realpath(harness.candidateRoot),
+      sourceCommit,
+      candidateTree,
+      homeDirectory: harness.homeDirectory,
+    }]);
     expect(result.productionDataRootExistedBeforeInstall).toBe(false);
     expect(result.productionDataRootExistsAfterOpen).toBe(true);
     expect(harness.coldProofBackupSnapshots).toStrictEqual([[], []]);
@@ -73,6 +86,40 @@ describe("desktop app installer", () => {
     expect(harness.embeddedAssetChecks[1]).toContain("Applications/.Due Good.staging-");
     expect(harness.embeddedAssetChecks[2]).toContain("Applications/Due Good.app/Contents/MacOS/duegood-desktop");
     expect(await readdir(harness.applications)).toContain("Due Good.app");
+  });
+
+  it("refuses another install while the app and its external helpers are being replaced", async () => {
+    const lock = path.join(harness.applications, ".Due Good.install.lock");
+    const stage = await harness.makeOwnedHandoffStage();
+    await mkdir(lock);
+    await expect(harness.installFromStage(stage)).rejects.toThrow("Another desktop installation");
+    expect(await harness.exists(stage)).toBe(true);
+    expect(harness.helperRefreshes).toEqual([]);
+    expect(await readdir(harness.applications)).toEqual([".Due Good.install.lock"]);
+  });
+
+  it("refuses install metadata without the full source commit before replacing the app", async () => {
+    const metadataPath = path.join(harness.app, "Contents", "Resources", "duegood-build.json");
+    await writeFile(metadataPath, JSON.stringify({
+      schemaVersion: 1,
+      sourceRevision: "v0.1.0-4-gabc1234-dirty",
+      candidateTree,
+    }));
+
+    await expect(harness.installDesktopApp({
+      appPath: harness.app,
+      candidateRoot: harness.candidateRoot,
+      sourceCheckout: harness.sourceCheckout,
+      applicationsDirectory: harness.applications,
+      homeDirectory: harness.homeDirectory,
+      rootMarkerPath: harness.rootMarkerPath,
+      signingIdentity: identityName,
+      platform: "darwin",
+      run: harness.fakeRun,
+    })).rejects.toThrow("Build a fresh candidate with npm run stage:tauri");
+
+    expect(await readdir(harness.applications)).toEqual([]);
+    expect(harness.helperRefreshes).toHaveLength(0);
   });
 
   it("refuses an app bundle missing the fixed capture download helper", async () => {
@@ -217,6 +264,31 @@ describe("desktop app installer", () => {
     expect(harness.coldProofBackupSnapshots.every((snapshot) => snapshot.length === 1 && snapshot[0]?.exists)).toBe(true);
     expect(harness.commands.filter(({ command }) => command.endsWith("/pgrep"))).toHaveLength(2);
     expect(harness.commands.findIndex(({ command }) => command === "native-stop-existing-verified-app")).toBeLessThan(harness.commands.findIndex(({ command }) => command.endsWith("/pgrep")));
+  });
+
+  it("restores the previous app when candidate Canvas helper preparation fails", async () => {
+    const installed = path.join(harness.applications, "Due Good.app");
+    await harness.makeApp(installed);
+    await writeFile(path.join(installed, helperRelativePath), "owner-installed bytes");
+
+    await expect(harness.installDesktopApp({
+      appPath: harness.app,
+      candidateRoot: harness.candidateRoot,
+      sourceCheckout: harness.sourceCheckout,
+      applicationsDirectory: harness.applications,
+      homeDirectory: harness.homeDirectory,
+      rootMarkerPath: harness.rootMarkerPath,
+      signingIdentity: identityName,
+      platform: "darwin",
+      run: harness.fakeRun,
+      prepareHelpers: async () => {
+        throw new Error("synthetic build failure");
+      },
+      log: (message: string) => harness.logs.push(message),
+    })).rejects.toThrow(/the previous app was restored.*npm run canvas:prepare-helper/u);
+
+    expect(await readFile(path.join(installed, helperRelativePath), "utf8")).toBe("owner-installed bytes");
+    expect(await readdir(harness.applications)).toStrictEqual(["Due Good.app"]);
   });
 
   it("removes an older installer-owned backup and unregisters it after success", async () => {
@@ -436,7 +508,7 @@ describe("desktop app installer", () => {
     harness.failedLaunchServicesRegistration = true;
     let retainedBackupPath = "";
     const files = {
-      cp, lstat, readFile, readdir, realpath, rm, writeFile,
+      cp, lstat, mkdir, readFile, readdir, realpath, rm, rmdir, writeFile,
       rename: async (source: string, destination: string) => {
         if (source === installed && path.basename(destination).startsWith(".Due Good.backup-")) retainedBackupPath = destination;
         if (retainedBackupPath && source === retainedBackupPath && destination === installed) throw new Error("restore rename failed");

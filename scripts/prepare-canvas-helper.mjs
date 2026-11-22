@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /** Build and atomically install the production Canvas download helper from an isolated checkout. */
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { constants } from "node:fs";
-import { chmod, copyFile, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireOwnedStageRoot } from "./owned-stage-root.mjs";
+import { installCanvasHelpers } from "./canvas-helper-install.mjs";
 import { listUntrackedPaths, stageCandidate } from "./stage-tauri-candidate.mjs";
 import { signalNpmProcessGroup, stopNpmProcessGroup } from "./stage-npm-process.mjs";
 
@@ -230,37 +230,16 @@ async function prepareInstallDirectory(homeDirectory) {
   };
 }
 
-async function installAtomically(binaryPath, targetPath, signal, platform) {
-  const existing = await lstat(targetPath).catch((error) => {
-    if (error?.code === "ENOENT") return undefined;
-    throw error;
-  });
-  if (existing && (!existing.isFile() || existing.isSymbolicLink())) {
-    throw new Error("existing helper destination is not a regular file");
-  }
-
-  const temporaryPath = path.join(path.dirname(targetPath), `.${path.basename(targetPath)}.${randomUUID()}.tmp`);
-  try {
-    await copyFile(binaryPath, temporaryPath, constants.COPYFILE_EXCL);
-    await chmod(temporaryPath, 0o700);
-    checkInterrupted(signal);
-    const [sourceBytes, stagedBytes] = await Promise.all([readFile(binaryPath), readFile(temporaryPath)]);
-    if (!sourceBytes.equals(stagedBytes)) throw new Error("installed helper copy failed verification");
-    await rename(temporaryPath, targetPath);
-  } finally {
-    await rm(temporaryPath, { force: true }).catch(() => undefined);
-  }
-  const installed = await inspectBinary(targetPath, platform);
-  return installed;
-}
-
-/** Stages, builds, verifies, signs when applicable, and installs one production helper.
- * @param {{ sourceCheckout?: string, homeDirectory?: string, platform?: NodeJS.Platform,
+/** Stages, builds, verifies, signs when applicable, and installs production Canvas helpers.
+ * @param {{ sourceCheckout?: string, sourceCommit?: string, candidateTree?: string,
+ *   homeDirectory?: string, platform?: NodeJS.Platform,
  *   signal?: AbortSignal, progress?: (message: string) => void, stage?: typeof stageCandidate,
  *   untrackedPaths?: typeof listUntrackedPaths, compile?: typeof compileReleaseHelper, run?: ToolRunner }} [options]
  * @returns {Promise<{ path: string, sha256: string, byteCount: number, stateHelperPath: string, stateHelperSha256: string, stateHelperByteCount: number, importPath: string, importSha256: string, importByteCount: number }>} */
 export async function prepareCanvasHelper({
   sourceCheckout = scriptRoot,
+  sourceCommit: expectedSourceCommit,
+  candidateTree: expectedCandidateTree,
   homeDirectory = homedir(),
   platform = process.platform,
   signal,
@@ -272,6 +251,8 @@ export async function prepareCanvasHelper({
 } = {}) {
   let ownedStage;
   let phase = "initializing";
+  let sourceCommit = expectedSourceCommit;
+  let candidateTree = expectedCandidateTree;
   /** @type {{ path: string, sha256: string, byteCount: number } | undefined} */
   let result;
   let failure;
@@ -289,16 +270,33 @@ export async function prepareCanvasHelper({
     const stageHeartbeat = startHeartbeat(progress, "staging");
     try {
       const excludedStagePaths = [".stage", path.join(".cache", "cargo-target")];
-      const include = (await untrackedPaths(sourceCheckout)).filter((candidate) =>
-        !excludedStagePaths.some((excluded) => candidate === excluded || candidate.startsWith(`${excluded}${path.sep}`)));
+      const untracked = await untrackedPaths(sourceCheckout);
+      const include = expectedCandidateTree
+        ? []
+        : untracked.filter((candidate) =>
+          !excludedStagePaths.some((excluded) => candidate === excluded || candidate.startsWith(`${excluded}${path.sep}`)));
+      const exclude = expectedCandidateTree ? untracked : [];
       const staged = await stage({
         source: sourceCheckout,
         destination: checkoutDirectory,
         include,
+        exclude,
         stageOwnership: ownedStage.ownership,
         log: noop,
         checkInterrupted: () => checkInterrupted(signal),
       });
+      candidateTree ??= staged.treeDigest;
+      if (!candidateTree || staged.treeDigest !== candidateTree) {
+        throw new Error("the staged helper source does not match the installed app candidate");
+      }
+      sourceCommit ??= (await run("git", ["rev-parse", "HEAD"], {
+        cwd: sourceCheckout,
+        signal,
+        capture: true,
+      })).stdout.trim();
+      if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sourceCommit)) {
+        throw new Error("the full source commit could not be recorded");
+      }
       // macOS reports TMPDIR through /var, but imported modules resolve under /private/var.
       // Pass the canonical stage path to scripts with an argv/fileURL entrypoint guard.
       checkoutDirectory = staged.destination;
@@ -314,40 +312,70 @@ export async function prepareCanvasHelper({
 
     phase = "verifying";
     progress("verifying release helpers and build marker");
-    const binaryPaths = [binaries.downloadBinaryPath, binaries.stateBinaryPath, binaries.importBinaryPath];
+    const helperBinaries = [
+      ["duegood-capture-download", binaries.downloadBinaryPath],
+      ["duegood-capture-state", binaries.stateBinaryPath],
+      ["duegood-browser-import", binaries.importBinaryPath],
+    ];
+    const binaryPaths = helperBinaries.map(([, binaryPath]) => binaryPath);
     if (binaryPaths.some((binaryPath) => typeof binaryPath !== "string")) throw new Error("release helpers are missing");
-    for (const binaryPath of binaryPaths) await inspectBinary(binaryPath, platform);
+    const expectedDigests = {};
+    for (const [name, binaryPath] of helperBinaries) {
+      expectedDigests[name] = (await inspectBinary(binaryPath, platform)).sha256;
+    }
     checkInterrupted(signal);
 
     if (platform === "darwin") {
       phase = "signing";
-    progress("applying ad hoc signatures");
+      progress("applying ad hoc signatures");
       for (const binaryPath of binaryPaths) {
         await signAdHoc(binaryPath, { signal, run, checkoutDirectory });
         await inspectBinary(binaryPath, platform);
+      }
+      for (const [name, binaryPath] of helperBinaries) {
+        expectedDigests[name] = (await inspectBinary(binaryPath, platform)).sha256;
       }
     }
     checkInterrupted(signal);
 
     phase = "installing";
-    progress("installing helper atomically");
+    progress("installing the verified helper set");
     const destinations = await prepareInstallDirectory(homeDirectory);
     checkInterrupted(signal);
-    const [downloadHelper, stateHelper, importHelper] = await Promise.all([
-      installAtomically(binaries.downloadBinaryPath, destinations.downloadHelperPath, signal, platform),
-      installAtomically(binaries.stateBinaryPath, destinations.stateHelperPath, signal, platform),
-      installAtomically(binaries.importBinaryPath, destinations.importHelperPath, signal, platform),
-    ]);
+    const installed = await installCanvasHelpers({
+      binDirectory: path.dirname(destinations.downloadHelperPath),
+      entries: helperBinaries.map(([name, binaryPath], index) => ({
+        name,
+        binaryPath,
+        targetPath: [
+          destinations.downloadHelperPath,
+          destinations.stateHelperPath,
+          destinations.importHelperPath,
+        ][index],
+      })),
+      sourceCommit,
+      candidateTree,
+      expectedDigests,
+      platform,
+      signal,
+      inspectBinary,
+      progress,
+      beforePublish: async () => {
+        progress("finishing helper build stage before installation");
+        await ownedStage.close({ success: false });
+        ownedStage = undefined;
+      },
+    });
     progress("helpers installed and ready");
     result = {
       path: destinations.downloadHelperPath,
-      ...downloadHelper,
+      ...installed["duegood-capture-download"],
       stateHelperPath: destinations.stateHelperPath,
-      stateHelperSha256: stateHelper.sha256,
-      stateHelperByteCount: stateHelper.byteCount,
+      stateHelperSha256: installed["duegood-capture-state"].sha256,
+      stateHelperByteCount: installed["duegood-capture-state"].byteCount,
       importPath: destinations.importHelperPath,
-      importSha256: importHelper.sha256,
-      importByteCount: importHelper.byteCount,
+      importSha256: installed["duegood-browser-import"].sha256,
+      importByteCount: installed["duegood-browser-import"].byteCount,
     };
   } catch (error) {
     failure = new Error(`helper preparation failed during ${phase}`);

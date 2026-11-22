@@ -1,5 +1,6 @@
 import { chmod, lstat, mkdtemp, open, rename, rm, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { verifyCanvasHelperProvenance } from "./canvas-helper-provenance.mjs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { collectCanvasBrowserCapture } from "./canvas-browser-capture.mjs";
@@ -67,6 +68,7 @@ async function discardUnreferencedStaging(snapshot, stagingDirectory, stagedFile
 export async function runCanvasCapture({
   context,
   expectedUserId,
+  expectedBuildIdentity = /** @type {{ sourceCommit: string, candidateTree: string } | undefined} */ (undefined),
   protocolVersion = /** @type {2 | undefined} */ (undefined),
   progress,
   collector = collectCanvasBrowserCapture,
@@ -86,15 +88,23 @@ export async function runCanvasCapture({
   attendedSignIn = true,
   checkSurveyPopup = handleSurveyPopup,
 }) {
-  const stateHelper = await lstat(stateHelperPath).catch(() => undefined);
-  if (!stateHelper?.isFile() || stateHelper.isSymbolicLink() || (stateHelper.mode & 0o111) === 0
-      || (stateHelper.mode & 0o022) !== 0
-      || (typeof process.getuid === "function" && stateHelper.uid !== process.getuid())) {
-    throw new Error("STATE_HELPER_UNAVAILABLE");
-  }
   let phase = "opening";
   let endpoint = "unknown";
   try {
+    phase = "preflight";
+    if (expectedBuildIdentity) {
+      await verifyCanvasHelperProvenance({
+        binDirectory: path.dirname(stateHelperPath),
+        sourceCommit: expectedBuildIdentity.sourceCommit,
+        candidateTree: expectedBuildIdentity.candidateTree,
+      });
+    }
+    const stateHelper = await lstat(stateHelperPath).catch(() => undefined);
+    if (!stateHelper?.isFile() || stateHelper.isSymbolicLink() || (stateHelper.mode & 0o111) === 0
+        || (stateHelper.mode & 0o022) !== 0
+        || (typeof process.getuid === "function" && stateHelper.uid !== process.getuid())) {
+      throw new Error("STATE_HELPER_UNAVAILABLE");
+    }
     return await withRunLease({ helperPath: stateHelperPath, run: async (runId) => {
       phase = "preflight";
       await privateDirectory(appDirectory);
