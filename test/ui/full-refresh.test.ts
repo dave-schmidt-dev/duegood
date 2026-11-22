@@ -17,6 +17,8 @@ describe("full refresh result semantics", () => {
       calendarStatus: "complete",
       gapCount: 0,
       omissionCount: 3,
+      rubricCount: 2,
+      linkedFileCount: 4,
       calendarAdded: 1,
       calendarUpdated: 2,
       calendarHeld: 0,
@@ -27,19 +29,22 @@ describe("full refresh result semantics", () => {
     expect(feedback.state).toBe("complete");
     expect(feedback.detail).toContain("Complete. Canvas and calendar updated.");
     expect(feedback.detail).toContain("3 omissions recorded.");
+    expect(feedback.detail).toContain("Rubrics on 2 assignments. Metadata retrieved for 4 additional linked files.");
     expect(feedback.detail).not.toContain("everything captured");
   });
 
   it("rejects unbounded omission counts and leaves required gaps partial", () => {
     expect(parseFullRefreshResult({
       status: "complete", browserStatus: "complete", calendarStatus: "complete",
-      gapCount: 0, omissionCount: 100_001, calendarAdded: 0, calendarUpdated: 0,
+      gapCount: 0, omissionCount: 100_001, rubricCount: 0, linkedFileCount: 0,
+      calendarAdded: 0, calendarUpdated: 0,
       calendarHeld: 0, updatedAt: null,
     })).toBeNull();
 
     const partial = fullRefreshFeedback({
       status: "incomplete", browserStatus: "incomplete", calendarStatus: "complete",
-      gapCount: 1, omissionCount: 2, calendarAdded: 0, calendarUpdated: 0,
+      gapCount: 1, omissionCount: 2, rubricCount: 0, linkedFileCount: 0,
+      calendarAdded: 0, calendarUpdated: 0,
       calendarHeld: 0, updatedAt: null,
     });
     expect(partial.state).toBe("partial");
@@ -47,10 +52,31 @@ describe("full refresh result semantics", () => {
     expect(partial.detail).toContain("2 omissions recorded.");
   });
 
+  it("requires bounded content-free rubric and linked-file counts", () => {
+    const base = {
+      status: "complete",
+      browserStatus: "complete",
+      calendarStatus: "complete",
+      gapCount: 0,
+      omissionCount: 0,
+      rubricCount: 1,
+      linkedFileCount: 2,
+      calendarAdded: 0,
+      calendarUpdated: 0,
+      calendarHeld: 0,
+      updatedAt: null,
+    };
+    expect(parseFullRefreshResult(base)).not.toBeNull();
+    expect(parseFullRefreshResult({ ...base, linkedFileCount: 100_001 })).toBeNull();
+    expect(parseFullRefreshResult({ ...base, privateData: "course title" })).toBeNull();
+    expect(parseFullRefreshResult({ ...base, rubricCount: undefined })).toBeNull();
+  });
+
   it("keeps a zero omission count visible for a complete refresh", () => {
     const feedback = fullRefreshFeedback({
       status: "complete", browserStatus: "complete", calendarStatus: "complete",
-      gapCount: 0, omissionCount: 0, calendarAdded: 0, calendarUpdated: 0,
+      gapCount: 0, omissionCount: 0, rubricCount: 0, linkedFileCount: 0,
+      calendarAdded: 0, calendarUpdated: 0,
       calendarHeld: 0, updatedAt: null,
     });
 
@@ -61,7 +87,8 @@ describe("full refresh result semantics", () => {
   it("reports Canvas gaps separately from held calendar items", () => {
     const feedback = fullRefreshFeedback({
       status: "incomplete", browserStatus: "incomplete", calendarStatus: "incomplete",
-      gapCount: 125, omissionCount: 9, calendarAdded: 0, calendarUpdated: 58,
+      gapCount: 125, omissionCount: 9, rubricCount: 0, linkedFileCount: 0,
+      calendarAdded: 0, calendarUpdated: 58,
       calendarHeld: 1, updatedAt: null,
     });
 
@@ -75,7 +102,8 @@ describe("full refresh result semantics", () => {
   it("keeps a held calendar item partial when Canvas completed", () => {
     const feedback = fullRefreshFeedback({
       status: "incomplete", browserStatus: "complete", calendarStatus: "incomplete",
-      gapCount: 0, omissionCount: 0, calendarAdded: 0, calendarUpdated: 58,
+      gapCount: 0, omissionCount: 0, rubricCount: 0, linkedFileCount: 0,
+      calendarAdded: 0, calendarUpdated: 58,
       calendarHeld: 1, updatedAt: null,
     });
 
@@ -88,7 +116,8 @@ describe("full refresh result semantics", () => {
   it("does not call a refresh complete when a held calendar item conflicts with source status", () => {
     const feedback = fullRefreshFeedback({
       status: "complete", browserStatus: "complete", calendarStatus: "complete",
-      gapCount: 0, omissionCount: 0, calendarAdded: 0, calendarUpdated: 58,
+      gapCount: 0, omissionCount: 0, rubricCount: 0, linkedFileCount: 0,
+      calendarAdded: 0, calendarUpdated: 58,
       calendarHeld: 1, updatedAt: null,
     });
 
@@ -99,7 +128,8 @@ describe("full refresh result semantics", () => {
   it("explains file failures from the current refresh and directs the user to Activity", () => {
     const feedback = fullRefreshFeedback({
       status: "incomplete", browserStatus: "incomplete", calendarStatus: "complete",
-      gapCount: 1, omissionCount: 1, calendarAdded: 0, calendarUpdated: 2, calendarHeld: 0, updatedAt: null,
+      gapCount: 1, omissionCount: 1, rubricCount: 0, linkedFileCount: 0,
+      calendarAdded: 0, calendarUpdated: 2, calendarHeld: 0, updatedAt: null,
     }, ["1 file could not be verified: its contents did not match its file type."]);
     expect(feedback.detail).toContain("contents did not match its file type");
     expect(feedback.detail).toContain("See Activity for details.");
@@ -108,7 +138,8 @@ describe("full refresh result semantics", () => {
   it("surfaces a failed source alongside the other source's status", () => {
     const feedback = fullRefreshFeedback({
       status: "incomplete", browserStatus: "complete", calendarStatus: "failed",
-      gapCount: 0, omissionCount: 0, calendarAdded: 0, calendarUpdated: 0,
+      gapCount: 0, omissionCount: 0, rubricCount: 0, linkedFileCount: 0,
+      calendarAdded: 0, calendarUpdated: 0,
       calendarHeld: 0, updatedAt: null, errorCode: "calendar-failed",
     });
 
@@ -120,7 +151,8 @@ describe("full refresh result semantics", () => {
   it("tells the owner how to refresh stale Canvas helpers", () => {
     const feedback = fullRefreshFeedback({
       status: "incomplete", browserStatus: "failed", calendarStatus: "complete",
-      gapCount: 0, omissionCount: 0, calendarAdded: 0, calendarUpdated: 0,
+      gapCount: 0, omissionCount: 0, rubricCount: 0, linkedFileCount: 0,
+      calendarAdded: 0, calendarUpdated: 0,
       calendarHeld: 0, updatedAt: null, errorCode: "helper-stale",
     });
 

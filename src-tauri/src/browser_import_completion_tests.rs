@@ -101,6 +101,18 @@ fn complete_claim_accepts_omissions_and_rejects_failures_before_import() {
         .unwrap(),
         (0, 1)
     );
+    for reason in ["forbidden-optional", "not-found"] {
+        bundle.snapshot["resources"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|resource| resource["endpoint"] == "fileBodies")
+            .unwrap()["items"][0]["reason"] = json!(reason);
+        assert!(validate_complete_claim(&bundle).is_ok());
+        let report = diagnostics::import_diagnostics(&bundle, 0, 1);
+        assert_eq!(report["fileReceipts"]["personalFileReceipts"]["optionalOmissionReceipts"], 1);
+        assert_eq!(report["fileReceipts"]["personalFileReceipts"]["failedReceipts"], 0);
+    }
 
     for resource in bundle.snapshot["resources"].as_array_mut().unwrap() {
         if resource["endpoint"] == "personalFiles" {

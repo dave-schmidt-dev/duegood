@@ -15,6 +15,7 @@ import {
   safeLocalHref,
 } from "./pages/dashboard";
 import { parseBrowserFreshness, type BrowserFreshness } from "../shared/browser-freshness";
+import { parseCanvasRubric } from "../shared/canvas-rubric";
 
 function record(value: unknown): Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function text(value: unknown, fallback = ""): string { return typeof value === "string" ? value : fallback; }
@@ -56,6 +57,7 @@ function parseEvent(value: unknown): DashboardEvent | undefined {
     ...(optionalText(item.detail ?? item.description) === undefined ? {} : { detail: optionalText(item.detail ?? item.description) }),
     notes: typeof item.notes === "string" ? item.notes : null,
     completed: item.completed === true, completedAt: typeof item.completedAt === "number" ? item.completedAt : null,
+    ...(item.rubric === undefined ? {} : { rubric: parseCanvasRubric(item.rubric) }),
     ...(optionalText(item.submissionState) === undefined ? {} : { submissionState: optionalText(item.submissionState) }),
     source: typeof item.source === "string" ? item.source : null,
     ...(item.calendarRetained === true && item.source !== "canvas" ? { calendarRetained: true } : {}),

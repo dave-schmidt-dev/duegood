@@ -124,6 +124,8 @@ describe.sequential("packaged browser runtime", () => {
           gapCount: 0,
           dailyGapCount: 0,
           omissionCount: 3,
+          rubricCount: 2,
+          linkedFileCount: 1,
           fileBodiesIncomplete: false,
           snapshotPath: privateSentinel,
           courseName: "private course name",
@@ -153,6 +155,8 @@ describe.sequential("packaged browser runtime", () => {
         itemCount: 4,
         gapCount: 0,
         omissionCount: 3,
+        rubricCount: 2,
+        linkedFileCount: 1,
         importedCourses: 2,
         archivedCourses: 1,
         promotedBlobs: 3,
@@ -181,7 +185,7 @@ describe.sequential("packaged browser runtime", () => {
         process.stderr.write("CANVAS_CAPTURE_PROGRESS=CAPTURE_RUNNING\n");
         return {
           status: "COMPLETE", resourceCount: 1, itemCount: 1, gapCount: 0, dailyGapCount: 0,
-          omissionCount: 0, fileBodiesIncomplete: false,
+          omissionCount: 0, rubricCount: 0, linkedFileCount: 0, fileBodiesIncomplete: false,
           nativeImport: {
             status: "IMPORTED", importedCourses: 1, archivedCourses: 0, promotedBlobs: 0,
             reusedBlobs: 0, bytesVerified: 0, alreadyCurrent: false,
@@ -213,6 +217,8 @@ describe.sequential("packaged browser runtime", () => {
         gapCount: 2,
         dailyGapCount: 2,
         omissionCount: 0,
+        rubricCount: 0,
+        linkedFileCount: 0,
         fileBodiesIncomplete: true,
         snapshotPath: "/private/snapshot.json",
       }),
@@ -231,6 +237,8 @@ describe.sequential("packaged browser runtime", () => {
         gapCount: 0,
         dailyGapCount: 0,
         omissionCount: 0,
+        rubricCount: 0,
+        linkedFileCount: 0,
         nativeImport: {
           status: "IMPORTED",
           importedCourses: 1,
@@ -270,6 +278,8 @@ describe.sequential("packaged browser runtime", () => {
         gapCount: 3,
         dailyGapCount: 0,
         omissionCount: 0,
+        rubricCount: 0,
+        linkedFileCount: 0,
         fileBodiesIncomplete: true,
         nativeImport: {
           status: "IMPORTED",

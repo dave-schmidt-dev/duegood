@@ -350,6 +350,53 @@ describe("dashboard production UI contract", () => {
     expect(handlers.onToggleEvent).toHaveBeenLastCalledWith("a");
   });
 
+  it("shows the captured rubric inside expanded assignment details", () => {
+    const event = {
+      ...DATA.events[0]!,
+      rubric: {
+        criteria: [{
+          id: "criterion-1",
+          description: "Evidence",
+          longDescription: "Use two sources.",
+          points: 5,
+          ratings: [{ description: "Strong", longDescription: "Clear and relevant", points: 5 }],
+        }],
+        settings: { title: "Essay rubric", pointsPossible: 5, freeFormCriterionComments: true },
+        useForGrading: true,
+      },
+    } as const;
+    const collapsed = renderDashboard({ ...state("timeline"), data: { ...DATA, events: [event] } }, handlers);
+    expect(findAll(collapsed, (item) => item.attrs?.class === "event-rubric")).toHaveLength(0);
+
+    const dashboard = renderDashboard({
+      ...state("timeline"),
+      data: { ...DATA, events: [event] },
+      expandedEventIds: new Set([event.id]),
+    }, handlers);
+    const card = findAll(dashboard, (item) => item.attrs?.class?.includes("event-card") === true)[0]!;
+    const detail = findAll(card, (item) => item.attrs?.class === "event-detail")[0]!;
+    const rubricText = words(detail).replace(/\s+/g, " ");
+    expect(rubricText).not.toContain("No additional details were supplied.");
+    for (const text of ["Rubric", "Essay rubric", "Points possible: 5", "Used for grading", "Free-form comments are allowed", "Evidence", "5 points", "Use two sources.", "Strong", "Clear and relevant"]) {
+      expect(rubricText).toContain(text);
+    }
+
+    const parsed = parseDashboard({
+      events: [{
+        id: "rubric", courseCode: "IT 530", title: "Synthetic essay", kind: "deadline",
+        startsAt: "2030-01-01", completed: false,
+        rubric: {
+          criteria: [{ id: "criterion-1", description: "Evidence", long_description: "Use two sources.", points: 5, ratings: [] }],
+          settings: { title: "Essay rubric", pointsPossible: 5, freeFormCriterionComments: true },
+          useForGrading: true,
+        },
+      }],
+    });
+    expect(parsed.events[0]?.rubric?.criteria[0]?.longDescription).toBe("Use two sources.");
+    expect(parseDashboard({ events: [{ id: "old", courseCode: "IT 530", title: "Old assignment", startsAt: "2030-01-01" }] }).events[0]?.rubric).toBeUndefined();
+    expect(parseDashboard({ events: [{ id: "none", courseCode: "IT 530", title: "No rubric", startsAt: "2030-01-01", rubric: null }] }).events[0]?.rubric).toBeNull();
+  });
+
   it("surfaces a specific local save recovery message", () => {
     const dashboard = renderDashboard({ ...state("timeline"), failedDiscussionIds: new Set(["discussion"]), mutationError: { id: "discussion", message: "This discussion changed elsewhere. Latest state reloaded; try again." } }, handlers);
     expect(words(dashboard)).toContain("This discussion changed elsewhere. Latest state reloaded; try again.");

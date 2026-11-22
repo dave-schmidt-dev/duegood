@@ -72,11 +72,14 @@ export interface BrowserGradeFacts {
   readonly assignmentGroupId: string | null;
   readonly assignmentGroupName: string | null;
   readonly assignmentGroupWeight: number | null;
+  /** Canvas data tied to the same assignment capture as its grade facts. */
+  readonly rubric?: unknown;
 }
 
 export interface BrowserLibraryFact {
   readonly courseId: string;
   readonly type: string;
+  readonly linkedCaptureRunId?: number;
 }
 
 const ENDPOINTS = new Set<BrowserEndpoint>([
@@ -261,6 +264,7 @@ export function isBrowserLibraryFactCurrent(
   const course = courses.get(resource.courseId);
   if (course?.active === false) return true;
   if (course === undefined || course.canvasCourseId === null) return false;
+  if (freshness.current && resource.type === "File" && resource.linkedCaptureRunId === freshness.runId) return true;
   const endpoint: BrowserEndpoint = resource.type === "File" ? "courseFiles"
     : resource.type === "Page" ? "pages"
       : resource.type === "Announcement" ? "announcements" : "modules";
@@ -274,8 +278,10 @@ export function maskStaleBrowserGrade<T extends BrowserGradeFacts>(
   freshness: BrowserFreshness,
 ): T {
   if (fact.source !== "canvas" || isBrowserCourseCoverageCurrent(freshness, course, ["assignments", "assignmentGroups", "submissions"])) return fact;
+  const withoutRubric = { ...fact };
+  Reflect.deleteProperty(withoutRubric, "rubric");
   return {
-    ...fact,
+    ...withoutRubric,
     submissionState: "unknown",
     score: null,
     grade: null,

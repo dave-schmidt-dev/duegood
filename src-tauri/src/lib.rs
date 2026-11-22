@@ -13,6 +13,7 @@ mod browser_freshness;
 mod browser_import;
 mod browser_import_helper;
 mod browser_projection;
+mod canvas_rubric;
 mod browser_reconcile;
 mod browser_resources;
 mod browser_resources_io;

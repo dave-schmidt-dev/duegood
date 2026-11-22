@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 
 use super::ProjectionError;
 
-pub(super) fn project_fields(
+pub(crate) fn project_fields(
     item: &Value,
     allowed: &[&str],
 ) -> Result<Map<String, Value>, ProjectionError> {
@@ -32,7 +32,7 @@ pub(super) fn project_fields(
     Ok(result)
 }
 
-pub(super) fn sanitize_value(value: &Value, field: &str) -> Result<Value, ProjectionError> {
+pub(crate) fn sanitize_value(value: &Value, field: &str) -> Result<Value, ProjectionError> {
     match value {
         Value::Null | Value::Bool(_) | Value::Number(_) => Ok(value.clone()),
         Value::String(text) => {

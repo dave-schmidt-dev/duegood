@@ -186,6 +186,81 @@ fn sanitizes_link_queries_and_keeps_only_synthetic_archived_receipt_metadata() {
 }
 
 #[test]
+fn projects_individually_fetched_files_when_the_course_files_listing_is_unavailable() {
+    let mut input = snapshot();
+    input["runId"] = json!(44);
+    input["resources"].as_array_mut().unwrap().extend([
+        resource("file", Some(101), json!([{
+            "id": 9902,
+            "display_name": "Linked handout.pdf",
+            "filename": "linked-handout.pdf",
+            "size": 27,
+            "url": "https://marymount.instructure.com/files/9902/download?verifier=synthetic-file-secret"
+        }])),
+        resource("fileBodies", None, json!([{
+            "fileId": 9902,
+            "status": "archived",
+            "byteCount": 27,
+            "sha256": "b".repeat(64),
+            "contentType": "application/pdf",
+            "sourceAuthenticity": "unverified"
+        }]))
+    ]);
+
+    let documents = decoded_documents(&input);
+    let files = &documents.0["classes/demo-101/canvas-export/api/files.json"];
+    assert_eq!(files.as_array().unwrap().len(), 1);
+    assert_eq!(files[0]["id"], 9902);
+    assert_eq!(files[0]["url"], Value::Null);
+    assert_eq!(files[0]["linkedCaptureRunId"], 44);
+    let manifest = &documents.0["classes/demo-101/canvas-export/download-manifest.json"];
+    assert_eq!(manifest.as_array().unwrap().len(), 1);
+    assert_eq!(manifest[0]["fileId"], 9902);
+    assert_eq!(manifest[0]["status"], "saved");
+    let serialized = serde_json::to_string(&documents.0).unwrap();
+    assert!(!serialized.contains("synthetic-file-secret"));
+}
+
+#[test]
+fn deduplicates_a_linked_file_already_present_in_the_course_files_listing() {
+    let mut input = snapshot();
+    input["runId"] = json!(45);
+    let file = json!({
+        "id": 9903,
+        "display_name": "Shared handout.pdf",
+        "filename": "shared-handout.pdf",
+        "size": 27,
+        "url": "https://marymount.instructure.com/files/9903/download"
+    });
+    input["resources"].as_array_mut().unwrap().extend([
+        resource("courseFiles", Some(101), json!([file.clone()])),
+        resource("file", Some(101), json!([file.clone()])),
+        resource("file", Some(101), json!([file])),
+        resource(
+            "fileBodies",
+            None,
+            json!([{
+                "fileId": 9903,
+                "status": "archived",
+                "byteCount": 27,
+                "sha256": "c".repeat(64),
+                "contentType": "application/pdf",
+                "sourceAuthenticity": "unverified"
+            }]),
+        ),
+    ]);
+
+    let documents = decoded_documents(&input);
+    let files = &documents.0["classes/demo-101/canvas-export/api/files.json"];
+    assert_eq!(files.as_array().unwrap().len(), 1);
+    assert_eq!(files[0]["id"], 9903);
+    assert_eq!(files[0]["display_name"], "Shared handout.pdf");
+    let manifest = &documents.0["classes/demo-101/canvas-export/download-manifest.json"];
+    assert_eq!(manifest.as_array().unwrap().len(), 1);
+    assert_eq!(manifest[0]["fileId"], 9903);
+}
+
+#[test]
 fn drops_unsafe_link_schemes_and_redacts_credentials_inside_text() {
     let mut input = snapshot();
     input["resources"][0]["items"][0]["syllabus_body"] =

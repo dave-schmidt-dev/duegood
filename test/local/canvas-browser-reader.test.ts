@@ -24,6 +24,7 @@ describe("guarded Canvas browser API reader", () => {
       { input: { endpoint: "course", courseId: 88 }, path: "/api/v1/courses/88", search: "?include%5B%5D=syllabus_body" },
       { input: { endpoint: "syllabus", courseId: 88 }, path: "/api/v1/courses/88", search: "?include%5B%5D=syllabus_body" },
       { input: { endpoint: "courseTabs", courseId: 88 }, path: "/api/v1/courses/88/tabs", search: "?per_page=100" },
+      { input: { endpoint: "assignments", courseId: 88 }, path: "/api/v1/courses/88/assignments", search: "?include%5B%5D=rubric&per_page=100" },
       { input: { endpoint: "assignmentGroups", courseId: 88 }, path: "/api/v1/courses/88/assignment_groups", search: "?per_page=100" },
       { input: { endpoint: "submissions", courseId: 88 }, path: "/api/v1/courses/88/students/submissions", search: "?per_page=100" },
       { input: { endpoint: "submission", courseId: 88, assignmentId: 501 }, path: "/api/v1/courses/88/assignments/501/submissions/self", search: "?include%5B%5D=submission_comments" },
@@ -223,7 +224,7 @@ describe("guarded Canvas browser API reader", () => {
       }
       if (url.pathname === "/api/v1/courses/88/assignments") {
         return json([{ id: 501, course_id: 88, name: "Synthetic task one" }], {
-          link: `</api/v1/courses/88/assignments?per_page=1&page=2>; rel="next"`,
+          link: `</api/v1/courses/88/assignments?include%5B%5D=rubric&per_page=1&page=2>; rel="next"`,
         });
       }
       throw new Error("Unexpected synthetic URL");
@@ -237,8 +238,8 @@ describe("guarded Canvas browser API reader", () => {
     expect(result.items.map((item) => item.id)).toEqual([501, 502]);
     expect(calls.map(({ url }) => url.href)).toEqual([
       `${ORIGIN}/api/v1/users/self/profile`,
-      `${ORIGIN}/api/v1/courses/88/assignments?per_page=1`,
-      `${ORIGIN}/api/v1/courses/88/assignments?per_page=1&page=2`,
+      `${ORIGIN}/api/v1/courses/88/assignments?include%5B%5D=rubric&per_page=1`,
+      `${ORIGIN}/api/v1/courses/88/assignments?include%5B%5D=rubric&per_page=1&page=2`,
     ]);
     for (const { init } of calls) {
       expect(init.method).toBe("GET");

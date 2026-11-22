@@ -1,6 +1,6 @@
 //! Fixed daily-page completion contract, separate from immutable archive completeness.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -159,6 +159,8 @@ pub(super) fn summarize_daily_scope(
             || row.endpoint == "fileBodies"
             || required_rows.contains(&coverage_key(row))
             || row.endpoint == "conversation"
+            || row.group_id.is_some()
+            || row.endpoint == "personalFile" && row.course_id.is_none()
         {
             continue;
         }
@@ -202,17 +204,7 @@ pub(super) fn summarize_daily_scope(
             }
         }
     }
-    omissions += file_receipts
-        .values()
-        .filter_map(|receipt| receipt.as_ref())
-        .filter(|receipt| {
-            receipt.get("status").and_then(Value::as_str) == Some("gap")
-                && receipt
-                    .get("reason")
-                    .and_then(Value::as_str)
-                    .is_some_and(|reason| OPTIONAL_FILE_BODY_REASONS.contains(&reason))
-        })
-        .count();
+    let mut daily_file_ids = BTreeSet::new();
     for resource in resources.iter().filter(|resource| {
         resource.get("endpoint").and_then(Value::as_str) == Some("courseFiles")
             && resource
@@ -228,6 +220,7 @@ pub(super) fn summarize_daily_scope(
                 required_gaps += 1;
                 continue;
             };
+            daily_file_ids.insert(file_id);
             if !seen.insert(file_id) {
                 required_gaps += 1;
                 continue;
@@ -246,10 +239,125 @@ pub(super) fn summarize_daily_scope(
         }
     }
 
+    let linked_file_ids = linked_file_ids(resources, &active_ids, &daily_file_ids)?;
+    daily_file_ids.extend(linked_file_ids.iter().copied());
+    let linked_coverage = linked_file_detail_coverage(resources, coverage, &active_ids);
+    for (expected_resources, actual_resources) in linked_coverage.values() {
+        if expected_resources != actual_resources {
+            required_gaps += expected_resources.abs_diff(*actual_resources);
+        }
+    }
+    for file_id in linked_file_ids {
+        match file_receipts.get(&file_id).copied().flatten() {
+            Some(receipt) if valid_archived_file_receipt(receipt, file_id) => {}
+            Some(receipt)
+                if receipt.get("status").and_then(Value::as_str) == Some("gap")
+                    && receipt
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .is_some_and(|reason| OPTIONAL_FILE_BODY_REASONS.contains(&reason)) => {}
+            _ => required_gaps += 1,
+        }
+    }
+    let mut omission_file_ids = daily_file_ids;
+    for resource in resources.iter().filter(|resource| {
+        resource.get("endpoint").and_then(Value::as_str) == Some("personalFiles")
+            && resource.get("courseId").is_none_or(Value::is_null)
+            && resource.get("groupId").is_none_or(Value::is_null)
+            && resource.get("contextCode").is_none_or(Value::is_null)
+    }) {
+        for item in resource_items(resource)? {
+            if let Some(file_id) = positive_id(item.get("id")) {
+                omission_file_ids.insert(file_id);
+            }
+        }
+    }
+    omissions += omission_file_ids
+        .iter()
+        .filter_map(|file_id| file_receipts.get(file_id).copied().flatten())
+        .filter(|receipt| {
+            receipt.get("status").and_then(Value::as_str) == Some("gap")
+                && receipt
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .is_some_and(|reason| OPTIONAL_FILE_BODY_REASONS.contains(&reason))
+        })
+        .count();
+
     if required_gaps > 100_000 || omissions > 100_000 {
         return Err(BrowserImportError::Stage);
     }
     Ok((required_gaps, omissions))
+}
+
+fn linked_file_ids(
+    resources: &[Value],
+    active_ids: &BTreeSet<u64>,
+    listed_ids: &BTreeSet<u64>,
+) -> Result<BTreeSet<u64>, BrowserImportError> {
+    let mut ids = BTreeSet::new();
+    for resource in resources.iter().filter(|resource| {
+        resource.get("endpoint").and_then(Value::as_str) == Some("file")
+            && resource
+                .get("courseId")
+                .and_then(Value::as_u64)
+                .is_some_and(|id| active_ids.contains(&id))
+            && resource.get("groupId").is_none_or(Value::is_null)
+            && resource.get("contextCode").is_none_or(Value::is_null)
+    }) {
+        let items = resource_items(resource)?;
+        if items.len() != 1 {
+            return Err(BrowserImportError::Stage);
+        }
+        let Some(id) = positive_id(items[0].get("id")) else {
+            return Err(BrowserImportError::Stage);
+        };
+        if !listed_ids.contains(&id) && !ids.insert(id) {
+            return Err(BrowserImportError::Stage);
+        }
+    }
+    Ok(ids)
+}
+
+fn linked_file_detail_coverage(
+    resources: &[Value],
+    coverage: &[CaptureCoverage],
+    active_ids: &BTreeSet<u64>,
+) -> BTreeMap<(String, Option<u64>, Option<u64>, Option<String>), (usize, usize)> {
+    let mut scopes =
+        BTreeMap::<(String, Option<u64>, Option<u64>, Option<String>), (usize, usize)>::new();
+    for row in coverage.iter().filter(|row| {
+        row.endpoint == "file"
+            && row.course_id.is_some_and(|id| active_ids.contains(&id))
+            && row.group_id.is_none()
+            && row.context_code.is_none()
+    }) {
+        let count = &mut scopes.entry(coverage_key(row)).or_default().0;
+        if row.status == "complete" {
+            *count += 1;
+        }
+    }
+    for resource in resources.iter().filter(|resource| {
+        resource.get("endpoint").and_then(Value::as_str) == Some("file")
+            && resource
+                .get("courseId")
+                .and_then(Value::as_u64)
+                .is_some_and(|id| active_ids.contains(&id))
+            && resource.get("groupId").is_none_or(Value::is_null)
+            && resource.get("contextCode").is_none_or(Value::is_null)
+    }) {
+        let key = (
+            resource["endpoint"].as_str().unwrap_or_default().to_owned(),
+            positive_id(resource.get("courseId")),
+            positive_id(resource.get("groupId")),
+            resource
+                .get("contextCode")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        );
+        scopes.entry(key).or_default().1 += 1;
+    }
+    scopes
 }
 
 /// Returns whether a claimed full capture contains any known failure or unverified file body.
@@ -396,7 +504,7 @@ fn parent_is_omitted(
     coverage: &[CaptureCoverage],
     course_id: Option<u64>,
 ) -> bool {
-    let Some(parent_endpoint) = parent_endpoint(&row.endpoint) else {
+    let Some(parent_endpoint) = parent_endpoint(row) else {
         return false;
     };
     let matches = coverage
@@ -416,8 +524,9 @@ fn parent_is_omitted(
             .is_some_and(|reason| DAILY_OMISSION_REASONS.contains(&reason))
 }
 
-fn parent_endpoint(endpoint: &str) -> Option<&'static str> {
-    match endpoint {
+fn parent_endpoint(row: &CaptureCoverage) -> Option<&'static str> {
+    match row.endpoint.as_str() {
+        "file" if row.group_id.is_some() => Some("groupFolderFiles"),
         "file" => Some("courseFiles"),
         "page" => Some("pages"),
         "moduleItems" => Some("modules"),

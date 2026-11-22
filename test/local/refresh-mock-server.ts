@@ -38,6 +38,7 @@ export type RefreshMockOptions = {
   failPath?: string;
   failStatus?: number;
   detailFailureIds?: string[];
+  linkedDiscussion?: boolean;
   inboxAdditionalId?: string;
   pagination?: { courseId: string; target: "off-prefix" | string };
   download?: "fixture" | "foreign-redirect" | "oversized";
@@ -153,6 +154,10 @@ export class RefreshMockServer {
     }
 
     const url = new URL(requestPath, this.origin);
+    if (this.options.linkedDiscussion && url.pathname === "/files/678/download") {
+      response.writeHead(200, { "content-type": "text/plain" }).end("Synthetic notes");
+      return;
+    }
     if (/^\/files\/\d+\/download$/.test(url.pathname)) {
       this.respondFileDownload(response);
       return;
@@ -207,6 +212,18 @@ export class RefreshMockServer {
   private apiResponse(url: URL): { status?: number; body: unknown; link?: string | null } | undefined {
     const fixtureOrigin = this.fixture.conventions.canvasOrigin;
     const courseKeyById = new Map<string, string>(this.fixture.courses.map((course) => [String(course.canvasCourseId), course.key]));
+    if (this.options.linkedDiscussion) {
+      if (url.pathname === "/api/v1/courses/9101/discussion_topics/97/entries") {
+        return { body: [{ id: 98, attachments: [{ id: 678 }] }] };
+      }
+      if (url.pathname === "/api/v1/courses/9101/discussion_topics/97/entries/98/replies") {
+        return { body: [{ id: 99, message: '<a href="/files/678">Notes</a>' }] };
+      }
+      if (url.pathname === "/api/v1/files/678") {
+        return { body: { id: 678, filename: "notes.txt", size: 15, content_type: "text/plain",
+          url: this.origin + "/files/678/download" } };
+      }
+    }
     const courseMatch = url.pathname.match(/^\/api\/v1\/courses\/(\d+)(?:\/([^/]+))?$/);
     if (courseMatch) {
       const [, courseId, resource] = courseMatch;

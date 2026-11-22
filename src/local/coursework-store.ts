@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AssignmentListItem } from "../db/types";
+import { parseCanvasRubric } from "../shared/canvas-rubric";
 import { applySourceObservations, pendingSourceLinks, resolvePendingSourceLink, validateSourceReferences, type AcquisitionResult, type PendingLinkDecision, type PendingSourceLink, type SourceObservation } from "./acquisition";
 import type { IcalNormalization } from "./ical";
 import { captureCanvasSnapshot, readIcalFeedStatus, recordIcalFeedStatus, recordIcalImport, type IcalFeedStatus } from "./refresh-history";
@@ -230,6 +231,7 @@ function validateAndProject(document: JsonObject): Omit<LocalSnapshot, "version"
       submissionState: submissionState(item),
       completed: item.done === true,
       completedAt: typeof item.doneAt === "string" ? Date.parse(item.doneAt) || null : null,
+      ...(item.rubric === undefined ? {} : { rubric: parseCanvasRubric(item.rubric) }),
       source: stringOrNull(item.source),
       points: numberOrNull(item.points),
       score: numberOrNull(item.score),

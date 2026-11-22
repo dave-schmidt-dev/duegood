@@ -326,6 +326,13 @@ fn is_allowed_api_path(path: &str) -> bool {
     let parts: Vec<&str> = path.split('/').skip(1).collect();
     match parts.as_slice() {
         ["api", "v1", "courses", id] => numeric_id(id),
+        ["api", "v1", "files", id] => numeric_id(id),
+        ["api", "v1", "courses", course_id, "discussion_topics", topic_id, "entries"] => {
+            numeric_id(course_id) && numeric_id(topic_id)
+        }
+        ["api", "v1", "courses", course_id, "discussion_topics", topic_id, "entries", entry_id, "replies"] => {
+            numeric_id(course_id) && numeric_id(topic_id) && numeric_id(entry_id)
+        }
         ["api", "v1", "courses", id, resource] => {
             numeric_id(id)
                 && matches!(
@@ -364,6 +371,12 @@ fn is_paginated_path(path: &str) -> bool {
                         | "files"
                         | "folders"
                 )
+        }
+        ["api", "v1", "courses", course_id, "discussion_topics", topic_id, "entries"] => {
+            numeric_id(course_id) && numeric_id(topic_id)
+        }
+        ["api", "v1", "courses", course_id, "discussion_topics", topic_id, "entries", entry_id, "replies"] => {
+            numeric_id(course_id) && numeric_id(topic_id) && numeric_id(entry_id)
         }
         ["api", "v1", "announcements"] | ["api", "v1", "conversations"] => true,
         _ => false,
@@ -533,6 +546,10 @@ mod tests {
             Err(CanvasError::InvalidOrigin)
         );
         assert!(is_allowed_api_path("/api/v1/courses/9101/modules"));
+        assert!(is_allowed_api_path("/api/v1/files/501"));
+        assert!(is_allowed_api_path(
+            "/api/v1/courses/9101/discussion_topics/77/entries/5/replies"
+        ));
         assert!(is_allowed_api_path("/api/v1/announcements"));
         assert!(is_allowed_api_path("/api/v1/conversations/77001"));
         assert!(is_allowed_api_path("/api/v1/users/self/profile"));

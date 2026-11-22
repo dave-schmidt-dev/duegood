@@ -250,7 +250,7 @@ const DETAIL_COVERAGE_ENDPOINTS: [&str; 13] = [
     "groupDiscussionReplies",
 ];
 
-const GROUP_COVERAGE_ENDPOINTS: [&str; 7] = [
+const GROUP_COVERAGE_ENDPOINTS: [&str; 8] = [
     "groupFolders",
     "groupFolderFiles",
     "groupPages",
@@ -258,6 +258,7 @@ const GROUP_COVERAGE_ENDPOINTS: [&str; 7] = [
     "groupDiscussions",
     "groupDiscussionEntries",
     "groupDiscussionReplies",
+    "file",
 ];
 const GROUP_RESOURCE_ENDPOINTS: [&str; 8] = [
     "folders",
@@ -300,7 +301,7 @@ fn validate_coverage_scope(
     context_code: Option<&str>,
 ) -> Result<(), BundleError> {
     let is_group_endpoint = GROUP_COVERAGE_ENDPOINTS.contains(&endpoint);
-    if (is_group_endpoint && group_id.is_none())
+    if (is_group_endpoint && group_id.is_none() && endpoint != "file")
         || (!is_group_endpoint && group_id.is_some() && endpoint != "calendarEvents")
         || (group_id.is_some() && course_id.is_some())
         || (context_code.is_some() && endpoint != "calendarEvents")

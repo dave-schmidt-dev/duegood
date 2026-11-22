@@ -2,11 +2,14 @@ const MAX_FILE_DOWNLOADS = 5000;
 const MAX_FILE_BYTES = 256 * 1024 * 1024;
 const OPTIONAL_FILE_BODY_GAP_REASONS = new Set([
   "empty",
+  "forbidden-optional",
   "locked",
+  "not-found",
   "not-applicable",
   "unpublished",
 ]);
 const DOWNLOAD_FAILURE_CODES = new Set([
+  "CANVAS_FILE_LOCKED", "CANVAS_FILE_FORBIDDEN", "CANVAS_FILE_NOT_FOUND",
   "CANCELED", "REQUEST_TIMEOUT", "INVALID_FILE_URL", "UNSAFE_REQUEST", "HTTP_STATUS_REJECTED",
   "RESPONSE_TOO_LARGE", "EMPTY_RESPONSE", "REDIRECT_HANDOFF_UNSUPPORTED", "REDIRECT_WITHOUT_LOCATION",
   "INVALID_REDIRECT_LOCATION", "CANVAS_SESSION_UNAVAILABLE", "CANVAS_NAVIGATION_FAILED",
@@ -106,6 +109,13 @@ function safeDownloadError(error) {
   return typeof error?.code === "string" && DOWNLOAD_FAILURE_CODES.has(error.code)
     ? error.code
     : "DOWNLOAD_FAILED";
+}
+
+function downloadOmissionReason(code) {
+  if (code === "CANVAS_FILE_LOCKED") return "locked";
+  if (code === "CANVAS_FILE_FORBIDDEN") return "forbidden-optional";
+  if (code === "CANVAS_FILE_NOT_FOUND") return "not-found";
+  return undefined;
 }
 
 function revisionEvidence(item) {
@@ -214,7 +224,7 @@ export function createCanvasFileCapture({ downloadFile, progress }) {
       }));
     } catch (error) {
       const code = safeDownloadError(error);
-      gap(candidate.fileId, code);
+      gap(candidate.fileId, downloadOmissionReason(code) ?? code);
       await progress({ phase: "file-download-complete", fileNumber: downloadCount, status: "gap", errorCode: code });
       return;
     }

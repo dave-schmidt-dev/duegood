@@ -139,6 +139,14 @@ button:disabled { opacity: .6; cursor: wait; }
 .event-expand { max-width: 100%; min-width: 44px; min-height: 44px; margin-top: 2px; padding: 0; border: 0; color: var(--navy); background: transparent; cursor: pointer; font-size: 11px; font-weight: 700; overflow-wrap: anywhere; text-align: center; white-space: normal; }
 .event-detail { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 9px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
 .event-detail[hidden] { display: none; }
+.event-detail__content { flex: 1 1 auto; min-width: 0; }
+.event-rubric { margin-top: 12px; }
+.event-rubric h3 { margin: 0 0 6px; color: var(--ink); font-size: 13px; }
+.event-rubric p { margin: 4px 0; }
+.rubric-criteria, .rubric-ratings { display: grid; gap: 8px; margin: 8px 0 0; padding-left: 20px; }
+.rubric-criterion__heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 5px 12px; color: var(--ink); }
+.rubric-ratings { gap: 5px; margin-top: 6px; }
+.rubric-rating strong, .rubric-rating span { margin-right: 8px; color: var(--ink); }
 
 .subpage-heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 20px; }
 .subpage-heading p:not(.eyebrow) { margin: 7px 0 0; color: var(--muted); font-size: 13px; }

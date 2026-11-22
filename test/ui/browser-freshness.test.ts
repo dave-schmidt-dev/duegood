@@ -41,7 +41,7 @@ function nativeBundle(browserFreshness?: unknown, canvasCourseId: unknown = 530)
       items: [
         { id: "canvas-item", course: "it530", kind: "assignment", source: "canvas", title: "Canvas stale item", at: "2026-09-28T20:00:00Z", submissionStatus: "graded", score: 18, grade: "90%", gradedAt: "2026-09-26T20:00:00Z" },
         { id: "ical-item", course: "it530", kind: "assignment", source: "ical", title: "Calendar item", at: "2026-09-29T20:00:00Z", submissionStatus: "unsubmitted", score: 7, grade: "B", gradedAt: "2026-09-25T20:00:00Z" },
-        { id: "canvas-ical-due", course: "it530", kind: "assignment", source: "canvas", title: "Canvas item with selected calendar date", at: "2026-10-01T18:00:00Z", fieldObservations: { at: { selected: { owner: { source: "ical", institution: "synthetic.invalid", course: "it530", id: "assignment:987" }, value: "2026-10-01T18:00:00Z" } } }, submissionStatus: "graded", score: 18, grade: "90%", gradedAt: "2026-09-26T20:00:00Z", done: true, doneAt: "2026-09-25T20:00:00Z", notes: "Keep this note", manualGradeObservation: { version: 1, value: "A-", source: "manual" } },
+        { id: "canvas-ical-due", course: "it530", kind: "assignment", source: "canvas", title: "Canvas item with selected calendar date", at: "2026-10-01T18:00:00Z", fieldObservations: { at: { selected: { owner: { source: "ical", institution: "synthetic.invalid", course: "it530", id: "assignment:987" }, value: "2026-10-01T18:00:00Z" } } }, submissionStatus: "graded", score: 18, grade: "90%", gradedAt: "2026-09-26T20:00:00Z", rubric: { criteria: [{ id: "criterion-1", description: "Synthetic rubric", longDescription: null, points: 5, ratings: [] }], settings: null, useForGrading: true }, done: true, doneAt: "2026-09-25T20:00:00Z", notes: "Keep this note", manualGradeObservation: { version: 1, value: "A-", source: "manual" } },
         { id: "canvas-reference-only", course: "it530", kind: "assignment", source: "canvas", title: "Reference only", at: "2026-10-03T18:00:00Z", sourceReferences: [{ source: "ical", id: "assignment:123" }] },
         { id: "manual-item", course: "it530", kind: "assignment", source: "manual", title: "Personal task", at: "2026-10-02T18:00:00Z", notes: "Keep manual event" },
         { id: "archived-item", course: "archive-42", kind: "assignment", source: "canvas", title: "Archived due date", at: "2026-09-30T20:00:00Z", submissionStatus: "graded", score: 10, grade: "A" },
@@ -184,6 +184,49 @@ describe("browser freshness projection", () => {
     expect(parseDashboard(dashboard).sourceStatus.browserFreshness).toEqual(CURRENT);
   });
 
+  it("shows an archived linked file when the course Files listing is forbidden", () => {
+    const freshness = {
+      ...CURRENT,
+      sections: CURRENT.sections.map((section) => section.endpoint === "courseFiles"
+        ? { ...section, current: false }
+        : section),
+    };
+    const savedReceipt = JSON.stringify([{
+      fileId: 501,
+      status: "saved",
+      sha256: "b".repeat(64),
+      byteCount: 4096,
+      contentType: "application/pdf",
+      sourceAuthenticity: "unverified",
+    }]);
+    const retained = nativeBundle(freshness);
+    const retainedExports = retained.courseExports as Record<string, { downloadManifest: string }>;
+    retainedExports.it530!.downloadManifest = savedReceipt;
+    const retainedBundle = parseDocumentBundle(retained);
+    const retainedDashboard = projectDashboardDocuments(retainedBundle, nativeProjectionOptions(retainedBundle.storeState));
+    expect(retainedDashboard.resources.some((resource) => resource.title === "Current file.pdf")).toBe(false);
+
+    const raw = nativeBundle(freshness);
+    const exports = raw.courseExports as Record<string, { files: string; downloadManifest: string }>;
+    exports.it530!.files = JSON.stringify([{
+      id: 501,
+      display_name: "Current file.pdf",
+      linkedCaptureRunId: CURRENT.runId,
+    }]);
+    exports.it530!.downloadManifest = savedReceipt;
+    const bundle = parseDocumentBundle(raw);
+    const dashboard = projectDashboardDocuments(bundle, nativeProjectionOptions(bundle.storeState));
+
+    expect(dashboard.resources).toContainEqual(expect.objectContaining({
+      title: "Current file.pdf",
+      savedLocally: true,
+      courseId: "it530",
+    }));
+    expect(dashboard.resources.find((resource) => resource.title === "Current file.pdf"))
+      .not.toHaveProperty("linkedCaptureRunId");
+    expect(dashboard.sourceStatus.library).toBe("not_synced");
+  });
+
   it("projects canonical string course IDs like numbers without changing freshness or personal and iCal facts", () => {
     const stale = { current: false, reason: "capture-unverified", runId: null, observedAt: null, sections: [] };
     for (const freshness of [CURRENT, stale]) {
@@ -228,6 +271,11 @@ describe("browser freshness projection", () => {
   });
 
   it("hides stale Canvas grade, Inbox, and active library facts while preserving iCal, personal state, and archives", () => {
+    const currentBundle = parseDocumentBundle(nativeBundle(CURRENT));
+    const current = projectDashboardDocuments(currentBundle, nativeProjectionOptions(currentBundle.storeState));
+    expect(current.events.find((event) => event.sourceItemId === "canvas-ical-due")?.rubric?.criteria[0]?.description)
+      .toBe("Synthetic rubric");
+
     const freshness = { current: false, reason: "capture-unverified", runId: null, observedAt: null, sections: [] };
     const bundle = parseDocumentBundle(nativeBundle(freshness));
     const dashboard = projectDashboardDocuments(bundle, nativeProjectionOptions(bundle.storeState));
@@ -237,6 +285,7 @@ describe("browser freshness projection", () => {
     expect(canvas).toBeUndefined();
     expect(dashboard.events.some((event) => event.sourceItemId === "canvas-reference-only")).toBe(false);
     expect(selectedCalendarDue).toMatchObject({ dueAt: "2026-10-01T18:00:00Z", submissionState: "unknown", score: null, grade: null, gradedAt: null, assignmentGroupId: null, manualGrade: "A-", completed: true, notes: "Keep this note" });
+    expect(selectedCalendarDue?.rubric).toBeUndefined();
     expect(ical).toMatchObject({ dueAt: "2026-09-29T20:00:00Z", score: 7, grade: "B", submissionState: "known_not_submitted" });
     expect(dashboard.events.find((event) => event.sourceItemId === "manual-item")?.notes).toBe("Keep manual event");
     expect(dashboard.events.some((event) => event.sourceItemId === "archived-item")).toBe(false);

@@ -524,3 +524,12 @@ Confirmed the collector and importer currently treat a verified empty download a
 ### External Canvas helper provenance
 
 Confirmed locally that capture uses separate executables and installation verifies only bundled helpers. Bind preparation to the staged candidate tree and full source commit, verify installed bytes, and reject stale helpers before capture. Use synthetic tests only. The reported October installation is not independently verifiable here.
+
+## Assignment rubrics and attached files (offline increment)
+
+Confirmed in b34e38f: the browser assignment query had no rubric include, the generic sanitizer lacked a rubric-specific field allowlist, and file downloads started from listing metadata. The native assignment export and Timeline detail pane provide a place to retain and display rubrics. The separate Canvas-only Rust command also reads assignments and files. Live institution behavior and the missing legacy server are not verifiable offline.
+
+1. Request assignment rubrics, retain only supported fields, and match graded topics by assignment ID.
+2. Discover attachments and same-origin file links, deduplicate against the inventory, and record each bounded metadata read and body result.
+3. Carry those facts through native projection, Library, Timeline, coverage validation, diagnostics, and refresh summaries.
+4. Verify both capture paths with synthetic data, regenerate the checksums, and run the local gates without a commit.

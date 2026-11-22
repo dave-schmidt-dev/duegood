@@ -21,6 +21,7 @@ const SOCKET_PATH = path.join(APP_DIR, "canvas-session.sock");
 const OWNER_PATH = path.join(APP_DIR, "canvas-session.owner");
 const SNAPSHOT_FILENAME = "canvas-capture.json";
 const MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024;
+const MAX_CAPTURE_COUNT = 100_000;
 const PROGRESS_STATES = new Set([
   "SURVEY_POPUP_BLOCKING", "WAITING_FOR_OWNER_SIGN_IN", "SIGNING_IN_AUTOMATICALLY", "CANVAS_SESSION_AVAILABLE", "CHECKING_CANVAS_SESSION",
   "PROBE_RUNNING", "PROBE_HEARTBEAT", "CAPTURE_OPENING", "CAPTURE_RUNNING", "CAPTURE_DOWNLOADING", "CAPTURE_SAVING",
@@ -84,6 +85,37 @@ function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function captureDetailCounts(resources) {
+  const rubricAssignmentIds = new Set();
+  const linkedFileIds = new Set();
+  const listedFileIds = new Set();
+
+  for (const resource of resources) {
+    for (const item of resource.items) {
+      if (resource.endpoint === "assignments" && Number.isSafeInteger(item.id) && item.id > 0) {
+        if (Array.isArray(item.rubric) && item.rubric.length > 0) rubricAssignmentIds.add(item.id);
+      }
+      if (resource.endpoint === "discussions" && isRecord(item.assignment)
+          && Array.isArray(item.assignment.rubric) && item.assignment.rubric.length > 0) {
+        const assignmentId = Number.isSafeInteger(item.assignment.id) && item.assignment.id > 0
+          ? item.assignment.id : item.assignment_id;
+        if (Number.isSafeInteger(assignmentId) && assignmentId > 0) {
+          rubricAssignmentIds.add(assignmentId);
+        }
+      }
+      if (["courseFiles", "personalFiles"].includes(resource.endpoint)
+          && Number.isSafeInteger(item.id) && item.id > 0) listedFileIds.add(item.id);
+      if (["file", "personalFile"].includes(resource.endpoint)
+          && Number.isSafeInteger(item.id) && item.id > 0) linkedFileIds.add(item.id);
+    }
+  }
+
+  return {
+    rubricCount: rubricAssignmentIds.size,
+    linkedFileCount: [...linkedFileIds].filter((fileId) => !listedFileIds.has(fileId)).length,
+  };
+}
+
 function validateCapture(snapshot, expectedUserId) {
   if (!isRecord(snapshot) || snapshot.schemaVersion !== 2 || snapshot.source !== "canvas-browser"
       || !Number.isSafeInteger(snapshot.runId) || snapshot.runId <= 0
@@ -127,6 +159,10 @@ function validateCapture(snapshot, expectedUserId) {
     itemCount += resource.items.length;
     if (!Number.isSafeInteger(itemCount)) throw new Error("CAPTURE_BUDGET_EXCEEDED");
   }
+  const detailCounts = captureDetailCounts(snapshot.resources);
+  if (detailCounts.rubricCount > MAX_CAPTURE_COUNT || detailCounts.linkedFileCount > MAX_CAPTURE_COUNT) {
+    throw new Error("CAPTURE_BUDGET_EXCEEDED");
+  }
   const outcome = summarizeCanvasCaptureOutcome({ ...snapshot, coverage });
   const complete = outcome.requiredGapCount === 0
     && outcome.failureGapCount === 0 && !outcome.fileBodiesIncomplete;
@@ -142,6 +178,7 @@ function validateCapture(snapshot, expectedUserId) {
     gapCount: Math.max(outcome.failureGapCount, outcome.requiredGapCount),
     dailyGapCount: outcome.requiredGapCount,
     omissionCount: outcome.omissionCount,
+    ...detailCounts,
     fileBodiesIncomplete: outcome.fileBodiesIncomplete,
     status: complete ? "COMPLETE" : "PARTIAL",
   };
@@ -433,6 +470,8 @@ export async function startSessionBroker({
               gapCount: validated.gapCount,
               dailyGapCount: validated.dailyGapCount,
               omissionCount: validated.omissionCount,
+              rubricCount: validated.rubricCount,
+              linkedFileCount: validated.linkedFileCount,
               fileBodiesIncomplete: validated.fileBodiesIncomplete,
             });
           }

@@ -4,6 +4,7 @@
  */
 import type { ConversationAttachment, ConversationMessage, NormalizedConversation } from "../canvas/conversations";
 import type { AssignmentListItem } from "../db/types";
+import { parseCanvasRubric } from "./canvas-rubric";
 import type { LocalCourse, LocalSnapshot } from "./coursework-types";
 import { pendingSourceLinks } from "./pending-links";
 import { canvasHistoryOutcome } from "./refresh-daily-scope";
@@ -42,6 +43,8 @@ export interface LocalResource {
   readonly openPath: string | null;
   /** Native mode only: the manifest records a local copy, which opens through a later handler. */
   readonly savedLocally?: true;
+  /** Internal freshness evidence for a file captured through a course content link. */
+  readonly linkedCaptureRunId?: number;
 }
 
 interface LocalRefreshChange {
@@ -474,6 +477,7 @@ function projectCoursework(value: unknown, version: string): ProjectedSnapshot {
       submissionState: submissionState(item),
       completed: item.done === true,
       completedAt: typeof item.doneAt === "string" ? Date.parse(item.doneAt) || null : null,
+      ...(item.rubric === undefined ? {} : { rubric: parseCanvasRubric(item.rubric) }),
       source: stringOrNull(item.source),
       points: numberOrNull(item.points),
       score: numberOrNull(item.score),
@@ -533,12 +537,16 @@ export function projectCourseResources(course: Pick<LocalCourse, "id" | "courseC
     if (title === null) continue;
     const id = resourceId(course.id, "file", item.id);
     const saved = localFilesByCanvasId.has(String(item.id));
+    const linkedCaptureRunId = typeof item.linkedCaptureRunId === "number"
+      && Number.isSafeInteger(item.linkedCaptureRunId) && item.linkedCaptureRunId > 0
+      ? item.linkedCaptureRunId : undefined;
     resources.push({
       id, courseId: course.id, courseCode: course.courseCode, type: "File", title,
       context: typeof item.size === "number" ? `${String(item.size)} bytes` : null,
       updatedAt: text(item.updated_at, 80),
       openPath: saved && resourceOpenPrefix !== null ? `${resourceOpenPrefix}${encodeURIComponent(id)}` : null,
       ...(saved && resourceOpenPrefix === null ? { savedLocally: true as const } : {}),
+      ...(linkedCaptureRunId === undefined ? {} : { linkedCaptureRunId }),
     });
   }
   for (const item of entries(documents.pages)) {
@@ -562,7 +570,14 @@ export function projectCourseResources(course: Pick<LocalCourse, "id" | "courseC
 
 /** Caps the Library at 2,000 items in course order, then sorts newest first and by title. */
 export function finalizeResources(resources: readonly LocalResource[]): readonly LocalResource[] {
-  return resources.slice(0, 2_000).sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? "") || left.title.localeCompare(right.title));
+  return resources
+    .slice(0, 2_000)
+    .map((item) => {
+      const resource = { ...item };
+      delete resource.linkedCaptureRunId;
+      return resource;
+    })
+    .sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? "") || left.title.localeCompare(right.title));
 }
 
 // --- Activity (refresh history plus Inbox changes) --------------------------------------------

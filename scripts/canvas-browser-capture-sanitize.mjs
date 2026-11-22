@@ -1,4 +1,5 @@
 import { extractCanvasHtmlInPage, sanitizeCanvasLink } from "./canvas-browser-links.mjs";
+import { canvasFileReferenceFromLink } from "./canvas-browser-file-references.mjs";
 
 const ORIGIN = "https://marymount.instructure.com";
 const MAX_LINKS_PER_ITEM = 500;
@@ -7,6 +8,10 @@ const CANVAS_FILE_PATH = /^\/(?:api\/v1\/)?(?:courses\/[1-9]\d*\/)?files\/[1-9]\
 const RICH_TEXT_KEYS = /^(?:body|content|description|discussion|html|instructions|message|syllabus(?:_body)?)$/iu;
 const PRIVATE_VALUE_KEYS = /(?:access[_-]?token|verifier|signature|(?:private|signed)[_-]?url|calendar.*(?:feed|ics)|(?:feed|ics).*(?:url|token)|lti[_-]?user[_-]?id|sis[_-]?user[_-]?id)/iu;
 const URL_VALUE_KEYS = /(?:^|_)(?:url|uri|href|src|links?|download|preview|thumbnail|avatar)(?:_|$)/iu;
+const RUBRIC_FIELDS = new Set(["id", "description", "long_description", "points", "ratings"]);
+const RUBRIC_CONTAINER_FIELDS = new Set(["criteria"]);
+const RUBRIC_RATING_FIELDS = new Set(["description", "long_description", "points"]);
+const RUBRIC_SETTINGS_FIELDS = new Set(["title", "points_possible", "free_form_criterion_comments"]);
 
 function captureError(code) {
   const error = new Error(code);
@@ -40,6 +45,59 @@ function stripCanvasFileUrl(link) {
   return { ...link, safeTarget: null, clickable: false, reason: "file-url-removed" };
 }
 
+function rubricFieldsForPath(fieldPath, endpoint) {
+  fieldPath = fieldPath.replace(/^\/+/, "");
+  if (endpoint !== "assignments" && !fieldPath.startsWith("assignment/")) return null;
+  if (/^(?:assignment\/)?rubric$/u.test(fieldPath)) return RUBRIC_CONTAINER_FIELDS;
+  if (/^(?:assignment\/)?rubric_settings$/u.test(fieldPath)) return RUBRIC_SETTINGS_FIELDS;
+  if (/^(?:assignment\/)?rubric\/(?:\d+|criteria\/\d+)$/u.test(fieldPath)) return RUBRIC_FIELDS;
+  if (/^(?:assignment\/)?rubric\/(?:\d+|criteria\/\d+)\/ratings\/\d+$/u.test(fieldPath)) return RUBRIC_RATING_FIELDS;
+  return null;
+}
+
+function validateRubricNode(value, fieldPath, endpoint) {
+  fieldPath = fieldPath.replace(/^\/+/, "");
+  if (endpoint !== "assignments" && !fieldPath.startsWith("assignment/")) return;
+  if (/^(?:assignment\/)?rubric$/u.test(fieldPath) && value !== null && !Array.isArray(value)) {
+    throw captureError("INVALID_RESOURCE_ITEM");
+  }
+  if (/^(?:assignment\/)?rubric_settings$/u.test(fieldPath) && value !== null && !isRecord(value)) {
+    throw captureError("INVALID_RESOURCE_ITEM");
+  }
+  if (/^(?:assignment\/)?rubric\/(?:\d+|criteria\/\d+)$/u.test(fieldPath) && !isRecord(value)) {
+    throw captureError("INVALID_RESOURCE_ITEM");
+  }
+  if (/^(?:assignment\/)?rubric\/(?:\d+|criteria\/\d+)\/ratings$/u.test(fieldPath) && value !== null
+      && !Array.isArray(value)) throw captureError("INVALID_RESOURCE_ITEM");
+  if (/^(?:assignment\/)?rubric\/(?:\d+|criteria\/\d+)\/ratings\/\d+$/u.test(fieldPath) && !isRecord(value)) {
+    throw captureError("INVALID_RESOURCE_ITEM");
+  }
+}
+
+function validateRubricField(parentPath, key, value, endpoint) {
+  parentPath = parentPath.replace(/^\/+/, "");
+  const criterion = /^(?:assignment\/)?rubric\/(?:\d+|criteria\/\d+)$/u.test(parentPath);
+  const rating = /^(?:assignment\/)?rubric\/(?:\d+|criteria\/\d+)\/ratings\/\d+$/u.test(parentPath);
+  const settings = /^(?:assignment\/)?rubric_settings$/u.test(parentPath);
+  const assignment = (endpoint === "assignments" && parentPath === "") || parentPath === "assignment";
+  if (key === "use_rubric_for_grading" && assignment && value !== null && typeof value !== "boolean") {
+    throw captureError("INVALID_RESOURCE_ITEM");
+  }
+  if (!(criterion || rating || settings)) return;
+  if (key === "id" && criterion && typeof value !== "string" && typeof value !== "number") {
+    throw captureError("INVALID_RESOURCE_ITEM");
+  }
+  if (["description", "long_description", "title"].includes(key)
+      && value !== null && typeof value !== "string") throw captureError("INVALID_RESOURCE_ITEM");
+  if (["points", "points_possible"].includes(key)
+      && value !== null && (typeof value !== "number" || !Number.isFinite(value))) {
+    throw captureError("INVALID_RESOURCE_ITEM");
+  }
+  if (key === "free_form_criterion_comments" && value !== null && typeof value !== "boolean") {
+    throw captureError("INVALID_RESOURCE_ITEM");
+  }
+}
+
 /**
  * Remove private values and rich HTML while retaining safe metadata and link descriptions.
  * @param {object} item Reader item.
@@ -57,6 +115,9 @@ export async function sanitizeCanvasCaptureItem(item, {
   itemIndex,
   evaluatePage,
   htmlReader,
+  onFileReference,
+  groupId,
+  allowedCourseIds,
 }) {
   const links = [];
   const seenLinks = new Set();
@@ -68,6 +129,8 @@ export async function sanitizeCanvasCaptureItem(item, {
   const sourcePrefix = `${endpoint}${courseId === null ? "" : `/${courseId}`}/${item.id ?? itemIndex}`;
   const addLink = (link) => {
     if (omitFileUrls) return;
+    const fileReference = canvasFileReferenceFromLink(link, { courseId, groupId, allowedCourseIds });
+    if (fileReference !== undefined) onFileReference?.(fileReference);
     if (endpoint === "course" && link.source === sourcePrefix + "//syllabus_body"
         && typeof link.safeTarget === "string") {
       try {
@@ -93,6 +156,7 @@ export async function sanitizeCanvasCaptureItem(item, {
   const sanitizeValue = async (value, key, fieldPath, depth) => {
     visited += 1;
     if (visited > 100_000 || depth > 32) throw captureError("SANITIZE_BUDGET_EXCEEDED");
+    validateRubricNode(value, fieldPath, endpoint);
     if (Array.isArray(value)) {
       const entries = [];
       for (let index = 0; index < value.length; index += 1) {
@@ -103,8 +167,12 @@ export async function sanitizeCanvasCaptureItem(item, {
     }
     if (isRecord(value)) {
       const clean = {};
+      const rubricFields = rubricFieldsForPath(fieldPath, endpoint);
       for (const [childKey, childValue] of Object.entries(value)) {
+        if (rubricFields && !rubricFields.has(childKey)) continue;
+        if (childKey === "rubric_assessment") continue;
         if (PRIVATE_VALUE_KEYS.test(childKey)) continue;
+        validateRubricField(fieldPath, childKey, childValue, endpoint);
         const child = await sanitizeValue(childValue, childKey, `${fieldPath}/${childKey}`, depth + 1);
         if (child !== undefined) clean[childKey] = child;
       }
@@ -149,6 +217,8 @@ export async function sanitizeCanvasCaptureItem(item, {
 
   const clean = await sanitizeValue(item, "", "", 0);
   if (!isRecord(clean)) throw captureError("INVALID_RESOURCE_ITEM");
+  if (endpoint === "assignments" && (!Object.hasOwn(clean, "rubric")
+      || Array.isArray(clean.rubric) && clean.rubric.length === 0)) clean.rubric = null;
   clean._canvasLinks = links;
   if (endpoint === "course") clean._canvasSyllabusFileIds = [...syllabusFileIds].slice(0, MAX_LINKS_PER_ITEM);
   if (linksTruncated) clean._canvasLinksTruncated = true;

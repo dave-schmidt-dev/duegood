@@ -41,6 +41,8 @@ pub(super) struct FullRefreshResult {
     pub calendar_status: &'static str,
     pub gap_count: u64,
     pub omission_count: u64,
+    pub rubric_count: u64,
+    pub linked_file_count: u64,
     pub calendar_added: u64,
     pub calendar_updated: u64,
     pub calendar_held: u64,
@@ -63,6 +65,8 @@ enum RuntimeMessage {
         item_count: u64,
         gap_count: u64,
         omission_count: u64,
+        rubric_count: u64,
+        linked_file_count: u64,
         imported_courses: u64,
         archived_courses: u64,
         promoted_blobs: u64,
@@ -76,8 +80,8 @@ enum RuntimeMessage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BrowserOutcome {
-    Complete { gaps: u64, omissions: u64 },
-    Incomplete { gaps: u64, omissions: u64 },
+    Complete { gaps: u64, omissions: u64, rubrics: u64, linked_files: u64 },
+    Incomplete { gaps: u64, omissions: u64, rubrics: u64, linked_files: u64 },
     Failed { code: &'static str },
 }
 
@@ -179,10 +183,12 @@ where
 }
 
 fn combine_outcomes(browser: BrowserOutcome, calendar: CalendarOutcome) -> FullRefreshResult {
-    let (browser_status, browser_gaps, omissions, browser_error) = match browser {
-        BrowserOutcome::Complete { gaps, omissions } => ("complete", gaps, omissions, None),
-        BrowserOutcome::Incomplete { gaps, omissions } => ("incomplete", gaps, omissions, None),
-        BrowserOutcome::Failed { code } => ("failed", 0, 0, Some(code)),
+    let (browser_status, browser_gaps, omissions, rubrics, linked_files, browser_error) = match browser {
+        BrowserOutcome::Complete { gaps, omissions, rubrics, linked_files } =>
+            ("complete", gaps, omissions, rubrics, linked_files, None),
+        BrowserOutcome::Incomplete { gaps, omissions, rubrics, linked_files } =>
+            ("incomplete", gaps, omissions, rubrics, linked_files, None),
+        BrowserOutcome::Failed { code } => ("failed", 0, 0, 0, 0, Some(code)),
     };
     let (calendar_status, added, updated, held, updated_at, calendar_error) = match calendar {
         CalendarOutcome::Complete(result) => (
@@ -217,6 +223,8 @@ fn combine_outcomes(browser: BrowserOutcome, calendar: CalendarOutcome) -> FullR
         calendar_status,
         gap_count: browser_gaps,
         omission_count: omissions,
+        rubric_count: rubrics,
+        linked_file_count: linked_files,
         calendar_added: added,
         calendar_updated: updated,
         calendar_held: held,
@@ -356,6 +364,8 @@ fn run_browser_client_with_timeout(
                         item_count,
                         gap_count,
                         omission_count,
+                        rubric_count,
+                        linked_file_count,
                         imported_courses,
                         archived_courses,
                         promoted_blobs,
@@ -369,6 +379,8 @@ fn run_browser_client_with_timeout(
                         && item_count <= 100_000
                         && gap_count <= 100_000
                         && omission_count <= 100_000
+                        && rubric_count <= 100_000
+                        && linked_file_count <= 100_000
                         && imported_courses <= 100_000
                         && archived_courses <= 100_000
                         && promoted_blobs <= 100_000
@@ -381,11 +393,15 @@ fn run_browser_client_with_timeout(
                             ("complete", _) => BrowserOutcome::Complete {
                                 gaps: gap_count,
                                 omissions: omission_count,
+                                rubrics: rubric_count,
+                                linked_files: linked_file_count,
                             },
                             ("incomplete", None | Some("CAPTURE_GAPS")) => {
                                 BrowserOutcome::Incomplete {
                                     gaps: gap_count,
                                     omissions: omission_count,
+                                    rubrics: rubric_count,
+                                    linked_files: linked_file_count,
                                 }
                             }
                             ("incomplete", Some("HELPER_STALE")) => BrowserOutcome::Failed {

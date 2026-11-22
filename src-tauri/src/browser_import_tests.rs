@@ -39,7 +39,11 @@ fn snapshot(run_id: u64, generation_id: &str, user_id: u64) -> Value {
     for course_id in active_ids {
         let assignment = if course_id == COURSE_ID {
             vec![
-                json!({"id":910001,"course_id":COURSE_ID,"name":"Synthetic Updated Assignment","due_at":"2030-02-01T23:59:00Z","points_possible":20,"assignment_group_id":null,"html_url":format!("https://marymount.instructure.com/courses/{COURSE_ID}/assignments/910001")}),
+                json!({"id":910001,"course_id":COURSE_ID,"name":"Synthetic Updated Assignment",
+                    "rubric":[{"id":"reasoning","description":"Use evidence","points":5,
+                        "ratings":[{"description":"Complete","long_description":"Explains the evidence","points":5}]}],
+                    "rubric_settings":{"title":"Reasoning rubric","points_possible":5,"free_form_criterion_comments":false},
+                    "use_rubric_for_grading":true,"due_at":"2030-02-01T23:59:00Z","points_possible":20,"assignment_group_id":null,"html_url":format!("https://marymount.instructure.com/courses/{COURSE_ID}/assignments/910001")}),
             ]
         } else {
             Vec::new()
@@ -144,6 +148,14 @@ fn authoritative_import_preserves_latest_personal_state_and_assigns_stable_folde
         .unwrap()
         .iter()
         .any(|row| row["endpoint"] == "quizzes" && row["status"] == "gap"));
+    let rubric = &coursework["items"][0]["rubric"];
+    assert_eq!(rubric["settings"]["title"], "Reasoning rubric");
+    assert_eq!(rubric["useForGrading"], true);
+    assert_eq!(rubric["criteria"][0]["ratings"][0]["long_description"], "Explains the evidence");
+    let exported: Value = serde_json::from_slice(&fs::read(
+        store.store_dir().join("classes/canvas-900001/canvas-export/api/assignments.json")
+    ).unwrap()).unwrap();
+    assert_eq!(exported[0]["rubric"], rubric["criteria"]);
     let diagnostics = &status["diagnostics"];
     assert!(diagnostics["requiredGapCount"].as_u64().unwrap() > 0);
     assert_eq!(diagnostics["optionalOmissionCount"], 0);
@@ -585,7 +597,9 @@ fn status_coverage_coalesces_duplicate_endpoint_rows_to_gap() {
         .as_array_mut()
         .unwrap()
         .extend([
-            json!({"endpoint":"courseFiles","courseId":COURSE_ID,"items":[{"id":502},{"id":503}]}),
+            json!({"endpoint":"courseFiles","courseId":COURSE_ID,"items":[{"id":502}]}),
+            json!({"endpoint":"file","courseId":COURSE_ID,"items":[{"id":502}]}),
+            json!({"endpoint":"file","courseId":COURSE_ID,"items":[{"id":503}]}),
             json!({
                 "endpoint":"fileBodies", "courseId":null,
                 "items":[
@@ -670,6 +684,8 @@ fn status_coverage_coalesces_duplicate_endpoint_rows_to_gap() {
         .any(|row| {
             row["endpoint"] == "other" && row["reason"] == "other" && row["count"] == 1
         }));
+    assert_eq!(diagnostics["fileReceipts"]["activeFilesListed"], 2);
+    assert_eq!(diagnostics["fileReceipts"]["duplicateListedFiles"], 0);
     assert_eq!(diagnostics["fileReceipts"]["archivedReceipts"], 1);
     assert_eq!(diagnostics["fileReceipts"]["missingReceipts"], 0);
     assert!(diagnostics["fileReceipts"]["reasonCounts"]
@@ -706,6 +722,24 @@ fn status_coverage_coalesces_duplicate_endpoint_rows_to_gap() {
         .as_str()
         .unwrap()
         .contains("not applicable in Canvas; skipped")));
+    for (reason, explanation) in [
+        ("forbidden-optional", "forbidden in Canvas and skipped"),
+        ("not-found", "not found in Canvas and skipped"),
+    ] {
+        {
+            let resources = bundle.snapshot["resources"].as_array_mut().unwrap();
+            let receipts = resources.last_mut().unwrap()["items"].as_array_mut().unwrap();
+            receipts[1]["reason"] = json!(reason);
+        }
+        let receipt_report = diagnostics::import_diagnostics(&bundle, 0, 1);
+        assert_eq!(receipt_report["fileReceipts"]["optionalOmissionReceipts"], 1);
+        assert_eq!(receipt_report["fileReceipts"]["failedReceipts"], 1); // File 503 still failed.
+        let notices = diagnostics::file_history_notices(&bundle);
+        assert!(notices.iter().any(|notice| notice["detail"]
+            .as_str()
+            .unwrap()
+            .contains(explanation)));
+    }
     let encoded = serde_json::to_string(&status).unwrap();
     assert!(!encoded.contains("secretpayload"));
     assert!(!encoded.contains("private-course-token-991"));

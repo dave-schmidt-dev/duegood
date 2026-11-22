@@ -8,6 +8,8 @@ const captureFrame = {
   gapCount: 2,
   dailyGapCount: 1,
   omissionCount: 2,
+  rubricCount: 4,
+  linkedFileCount: 3,
   fileBodiesIncomplete: true,
 };
 const completeCaptureFrame = {
@@ -52,6 +54,8 @@ describe("Canvas refresh client orchestration", () => {
     expect(sanitizeFrame(frame, "capture")).toMatchObject({ status });
     expect(() => sanitizeFrame({ status }, "capture")).toThrow("INVALID_RESPONSE");
     expect(() => sanitizeFrame({ ...frame, privateData: "discard" }, "capture")).toThrow("INVALID_RESPONSE");
+    expect(() => sanitizeFrame({ ...frame, rubricCount: 100_001 }, "capture")).toThrow("INVALID_RESPONSE");
+    expect(() => sanitizeFrame({ ...frame, linkedFileCount: -1 }, "capture")).toThrow("INVALID_RESPONSE");
     if (status === "COMPLETE") {
       expect(() => sanitizeFrame({ ...frame, gapCount: 1 }, "capture")).toThrow("INVALID_RESPONSE");
       expect(() => sanitizeFrame({ ...frame, fileBodiesIncomplete: true }, "capture")).toThrow("INVALID_RESPONSE");

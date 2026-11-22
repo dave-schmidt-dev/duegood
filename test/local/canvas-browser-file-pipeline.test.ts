@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fetchCanvasFileToStagingForTest } from "../../scripts/canvas-browser-auth-download.mjs";
 import { downloadCanvasFile, runCaptureDownloadHelper } from "../../scripts/canvas-browser-file-pipeline.mjs";
 
 const directories: string[] = [];
@@ -16,11 +17,59 @@ async function privateDirectory() {
   return directory;
 }
 
+async function syntheticCanvasStatus(status: number, directory: string) {
+  const origin = "http://127.0.0.1:4189";
+  const listeners = new Map<string, (event: Record<string, unknown>) => void>();
+  const cdp = {
+    on(event: string, listener: (event: Record<string, unknown>) => void) { listeners.set(event, listener); },
+    send: vi.fn(async () => ({})),
+    detach: vi.fn(async () => {}),
+  };
+  const context = { newCDPSession: vi.fn(async () => cdp) };
+  const page = {
+    url: () => `${origin}/courses/88`,
+    context: () => context,
+    isClosed: () => false,
+    evaluate: async (_script: unknown, input: { url: string; marker: string }) => {
+      const request = { url: input.url, method: "GET", headers: { "X-DueGood-Capture-Request": input.marker } };
+      const emit = listeners.get("Fetch.requestPaused");
+      if (!emit) throw new Error("missing synthetic Fetch listener");
+      emit({ requestId: "synthetic-request", request });
+      emit({ requestId: "synthetic-request", request: { ...request, headers: {} }, responseStatusCode: status });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    },
+  };
+  const priorMode = process.env.DUEGOOD_SYNTHETIC_TEST;
+  process.env.DUEGOOD_SYNTHETIC_TEST = "1";
+  try {
+    await fetchCanvasFileToStagingForTest({
+      context,
+      page,
+      fileId: 41,
+      sourceUrl: `${origin}/files/41/download?download_frd=1`,
+      stagingDirectory: directory,
+    }, origin);
+  } finally {
+    if (priorMode === undefined) delete process.env.DUEGOOD_SYNTHETIC_TEST;
+    else process.env.DUEGOOD_SYNTHETIC_TEST = priorMode;
+  }
+}
+
 afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
 describe("private browser-to-native file handoff", () => {
+  it.each([
+    [401, "CANVAS_FILE_LOCKED"],
+    [403, "CANVAS_FILE_FORBIDDEN"],
+    [404, "CANVAS_FILE_NOT_FOUND"],
+    [500, "HTTP_STATUS_REJECTED"],
+  ])("classifies only confirmed Canvas response status %i", async (status, code) => {
+    const directory = await privateDirectory();
+    await expect(syntheticCanvasStatus(status, directory)).rejects.toMatchObject({ code });
+  });
+
   it("returns only an allow-listed native download error code", async () => {
     const directory = await privateDirectory();
     const helperPath = path.join(directory, "failed-helper");

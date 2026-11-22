@@ -158,17 +158,20 @@ fn daily_scope_distinguishes_archive_omissions_from_required_failures() {
             > 0
     );
 
-    let (mut active_locked, active, rows) = complete_daily_fixture();
-    active_locked["resources"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|resource| resource["endpoint"] == "fileBodies")
-        .unwrap()["items"][0] = json!({"fileId":42,"status":"gap","reason":"locked"});
-    assert_eq!(
-        daily_scope::summarize_daily_scope(&active_locked, &active, &rows).unwrap(),
-        (0, 1)
-    );
+    for reason in ["locked", "forbidden-optional", "not-found"] {
+        let (mut active_omitted, active, rows) = complete_daily_fixture();
+        active_omitted["resources"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|resource| resource["endpoint"] == "fileBodies")
+            .unwrap()["items"][0] = json!({"fileId":42,"status":"gap","reason":reason});
+        assert_eq!(
+            daily_scope::summarize_daily_scope(&active_omitted, &active, &rows).unwrap(),
+            (0, 1),
+            "Canvas body omission {reason} should not make daily coverage partial"
+        );
+    }
 
     let (mut archived_locked, active, rows) = complete_daily_fixture();
     archived_locked["resources"]
@@ -186,7 +189,8 @@ fn daily_scope_distinguishes_archive_omissions_from_required_failures() {
         }));
     assert_eq!(
         daily_scope::summarize_daily_scope(&archived_locked, &active, &rows).unwrap(),
-        (0, 1)
+        (0, 0),
+        "inactive course files do not affect the daily scope"
     );
 }
 
@@ -264,6 +268,193 @@ fn complete_capture_allows_calendar_identity_events_and_only_safe_file_omissions
     snapshot["resources"][file_bodies_index]["items"][0] = json!({
         "fileId":42,"status":"gap","reason":"HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH"
     });
+    assert!(daily_scope::has_capture_failures(&snapshot, &rows).unwrap());
+}
+
+#[test]
+fn linked_file_details_require_body_receipts_when_course_files_are_hidden() {
+    let (mut snapshot, active, mut rows) = complete_daily_fixture();
+    snapshot["resources"].as_array_mut().unwrap().push(json!({
+        "endpoint":"calendarEvents", "courseId":null, "contextCode":"user_41",
+        "items":[{"id":1}]
+    }));
+    rows.push(CaptureCoverage {
+        endpoint: "calendarEvents".into(),
+        course_id: None,
+        group_id: None,
+        context_code: Some("user_41".into()),
+        status: "complete".into(),
+        reason: None,
+    });
+    snapshot["resources"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|resource| resource["endpoint"] != "courseFiles");
+    rows.retain(|row| row.endpoint != "courseFiles");
+    rows.push(coverage(
+        "courseFiles",
+        Some(1),
+        "gap",
+        Some("forbidden-optional"),
+    ));
+    snapshot["resources"].as_array_mut().unwrap().push(json!({
+        "endpoint":"file", "courseId":1, "pages":1, "items":[{"id":43}]
+    }));
+    rows.push(coverage("file", Some(1), "complete", None));
+    let file_receipts = snapshot["resources"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|resource| resource["endpoint"] == "fileBodies")
+        .unwrap();
+    file_receipts["items"] = json!([{
+        "fileId":43,"status":"archived","byteCount":12,
+        "sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "contentType":"application/pdf","sourceAuthenticity":"unverified"
+    }]);
+
+    assert_eq!(
+        daily_scope::summarize_daily_scope(&snapshot, &active, &rows).unwrap(),
+        (0, 1)
+    );
+    assert!(!daily_scope::has_capture_failures(&snapshot, &rows).unwrap());
+
+    snapshot["resources"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|resource| resource["endpoint"] == "fileBodies")
+        .unwrap()["items"] = json!([]);
+    assert!(
+        daily_scope::summarize_daily_scope(&snapshot, &active, &rows)
+            .unwrap()
+            .0
+            > 0
+    );
+    assert!(daily_scope::has_capture_failures(&snapshot, &rows).unwrap());
+
+    snapshot["resources"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|resource| resource["endpoint"] != "file");
+    rows.retain(|row| row.endpoint != "file");
+    rows.push(coverage("file", Some(1), "gap", Some("not-found")));
+    assert_eq!(
+        daily_scope::summarize_daily_scope(&snapshot, &active, &rows).unwrap(),
+        (0, 2)
+    );
+    assert!(!daily_scope::has_capture_failures(&snapshot, &rows).unwrap());
+}
+
+#[test]
+fn linked_personal_files_and_optional_metadata_omissions_keep_their_coverage_state() {
+    let (mut snapshot, active, mut rows) = complete_daily_fixture();
+    snapshot["resources"].as_array_mut().unwrap().push(json!({
+        "endpoint":"calendarEvents", "courseId":null, "contextCode":"user_41",
+        "items":[{"id":1}]
+    }));
+    rows.push(CaptureCoverage {
+        endpoint: "calendarEvents".into(),
+        course_id: None,
+        group_id: None,
+        context_code: Some("user_41".into()),
+        status: "complete".into(),
+        reason: None,
+    });
+    snapshot["resources"].as_array_mut().unwrap().push(json!({
+        "endpoint":"personalFile", "courseId":null, "pages":1, "items":[{"id":44}]
+    }));
+    rows.push(coverage("personalFile", None, "complete", None));
+    snapshot["resources"].as_array_mut().unwrap().push(json!({
+        "endpoint":"fileBodies", "courseId":null,
+        "items":[{"fileId":44,"status":"archived","byteCount":12,
+            "sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "contentType":"application/pdf","sourceAuthenticity":"unverified"}]
+    }));
+    assert_eq!(
+        daily_scope::summarize_daily_scope(&snapshot, &active, &rows).unwrap(),
+        (0, 0)
+    );
+    assert!(!daily_scope::has_capture_failures(&snapshot, &rows).unwrap());
+
+    snapshot["resources"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|resource| resource["endpoint"] != "personalFile");
+    rows.retain(|row| row.endpoint != "personalFile");
+    rows.push(coverage("personalFile", None, "gap", Some("not-found")));
+    snapshot["resources"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|resource| {
+            resource["endpoint"] != "fileBodies" || resource["items"][0]["fileId"] != 44
+        });
+    assert_eq!(
+        daily_scope::summarize_daily_scope(&snapshot, &active, &rows).unwrap(),
+        (0, 0)
+    );
+    assert!(!daily_scope::has_capture_failures(&snapshot, &rows).unwrap());
+
+    rows.retain(|row| row.endpoint != "personalFile");
+    rows.push(coverage(
+        "personalFile",
+        None,
+        "incomplete",
+        Some("request-failed"),
+    ));
+    assert_eq!(
+        daily_scope::summarize_daily_scope(&snapshot, &active, &rows).unwrap(),
+        (0, 0)
+    );
+    assert!(daily_scope::has_capture_failures(&snapshot, &rows).unwrap());
+
+    rows.retain(|row| row.endpoint != "personalFile");
+    rows.push(coverage("personalFile", None, "gap", Some("detail-budget")));
+    assert_eq!(
+        daily_scope::summarize_daily_scope(&snapshot, &active, &rows).unwrap(),
+        (0, 0)
+    );
+    assert!(daily_scope::has_capture_failures(&snapshot, &rows).unwrap());
+}
+
+#[test]
+fn non_course_file_failures_do_not_change_daily_scope() {
+    let (mut snapshot, active, mut rows) = complete_daily_fixture();
+    snapshot["resources"].as_array_mut().unwrap().push(json!({
+        "endpoint":"file", "courseId":null, "groupId":91, "pages":1,
+        "items":[{"id":45}]
+    }));
+    snapshot["resources"].as_array_mut().unwrap().push(json!({
+        "endpoint":"fileBodies", "courseId":null,
+        "items":[{"fileId":45,"status":"gap","reason":"request-failed"}]
+    }));
+    snapshot["resources"].as_array_mut().unwrap().push(json!({
+        "endpoint":"personalFile", "courseId":null, "pages":1,
+        "items":[{"id":46}]
+    }));
+    snapshot["resources"].as_array_mut().unwrap().push(json!({
+        "endpoint":"fileBodies", "courseId":null,
+        "items":[{"fileId":46,"status":"gap","reason":"request-failed"}]
+    }));
+    rows.push(CaptureCoverage {
+        endpoint: "file".into(),
+        course_id: None,
+        group_id: Some(91),
+        context_code: None,
+        status: "incomplete".into(),
+        reason: Some("request-failed".into()),
+    });
+    rows.push(coverage(
+        "personalFile",
+        None,
+        "incomplete",
+        Some("request-failed"),
+    ));
+
+    assert_eq!(
+        daily_scope::summarize_daily_scope(&snapshot, &active, &rows).unwrap(),
+        (0, 0)
+    );
     assert!(daily_scope::has_capture_failures(&snapshot, &rows).unwrap());
 }
 

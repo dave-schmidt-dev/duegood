@@ -318,6 +318,45 @@ fn retains_repeated_child_detail_coverage_and_each_optional_gap() {
 }
 
 #[test]
+fn group_file_detail_coverage_uses_the_group_file_scope() {
+    let mut fixture = ArchiveFixture::new();
+    fixture.snapshot["resources"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "endpoint":"file",
+            "courseId":null,
+            "groupId":900,
+            "items":[{"id":702}],
+            "pages":1
+        }));
+    fixture.snapshot["coverage"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "endpoint":"file",
+            "courseId":null,
+            "groupId":900,
+            "status":"complete"
+        }));
+    fixture.manifest["resourceCount"] =
+        json!(fixture.snapshot["resources"].as_array().unwrap().len());
+    fixture.manifest["itemCount"] = json!(fixture.snapshot["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|resource| resource["items"].as_array().unwrap().len())
+        .sum::<usize>());
+    fixture.rewrite_snapshot();
+
+    let bundle = validate_current_bundle(&fixture.app_root, &fixture.expected())
+        .expect("group file detail is a supported capture scope");
+    assert!(bundle.coverage.iter().any(|row| {
+        row.endpoint == "file" && row.group_id == Some(900) && row.status == "complete"
+    }));
+}
+
+#[test]
 fn coverage_reason_allowlist_rejects_unrecognized_capture_causes() {
     let mut fixture = ArchiveFixture::new();
     let row = fixture.snapshot["coverage"]

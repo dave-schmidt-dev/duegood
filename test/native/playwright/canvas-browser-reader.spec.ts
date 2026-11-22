@@ -2,6 +2,9 @@ import { expect, test } from "@playwright/test";
 import { readCanvasBrowserApi } from "../../../scripts/canvas-browser-reader.mjs";
 import { runCanvasBrowserProbe } from "../../../scripts/canvas-browser-probe.mjs";
 
+import { sanitizeCanvasCaptureItem } from "../../../scripts/canvas-browser-capture-sanitize.mjs";
+import { extractCanvasHtmlInPage } from "../../../scripts/canvas-browser-links.mjs";
+
 const ORIGIN = "https://marymount.instructure.com";
 
 test("browser probe stays content-free, preserves unread state, and withholds cookies from ranged downloads", async ({ page, context }) => {
@@ -228,4 +231,35 @@ test("attended probe closes its browser context when sign-in never completes", a
 
   expect(result).toMatchObject({ status: "SESSION_UNAVAILABLE" });
   expect(closed).toBe(true);
+});
+
+test("reads assignment rubrics and sanitizes rich criterion descriptions in the browser", async ({ page }) => {
+  const seen: string[] = [];
+  await page.route("**/*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.origin !== ORIGIN) return route.abort();
+    if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: "<title>Synthetic</title>" });
+    if (url.pathname === "/api/v1/users/self/profile") return route.fulfill({ json: { id: 41 } });
+    if (url.pathname !== "/api/v1/courses/88/assignments") return route.abort();
+    seen.push(...url.searchParams.getAll("include[]"));
+    return route.fulfill({ json: [
+      { id: 10, course_id: 88, rubric: [{ id: "criterion", description: "<b>Reasoning</b>",
+        long_description: "<p>Support the claim.</p>", points: 3, internal_comment: "discard",
+        ratings: [{ description: "Complete", points: 3, hidden: "discard" }] }] },
+      { id: 11, course_id: 88 },
+    ] });
+  });
+  await page.goto(ORIGIN);
+  const read = await page.evaluate(readCanvasBrowserApi, {
+    mode: "read", expectedUserId: 41, endpoint: "assignments", courseId: 88,
+  });
+  expect(seen).toContain("rubric");
+  if (!("items" in read)) throw new Error("Expected an assignment list");
+  const sanitized = await Promise.all(read.items.map((item: object, itemIndex: number) =>
+    sanitizeCanvasCaptureItem(item, { endpoint: "assignments", courseId: 88, itemIndex,
+      evaluatePage: page.evaluate.bind(page), htmlReader: extractCanvasHtmlInPage })));
+  expect(sanitized[0]).toMatchObject({ rubric: [{ id: "criterion", description: "Reasoning",
+    long_description: "Support the claim.", points: 3, ratings: [{ description: "Complete", points: 3 }] }] });
+  expect(JSON.stringify(sanitized)).not.toContain("discard");
+  expect(sanitized[1]).toMatchObject({ rubric: null });
 });

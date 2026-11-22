@@ -6,6 +6,48 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "source", "runId", "generationId", "capturedAt", "identity", "complete", "activeCourses", "coverageRequirements", "resources", "coverage"],
+  "$defs": {
+    "rubricRating": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": ["string", "null"] },
+        "long_description": { "type": ["string", "null"] },
+        "points": { "type": ["number", "null"] }
+      }
+    },
+    "rubricCriterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": ["integer", "string"] },
+        "description": { "type": ["string", "null"] },
+        "long_description": { "type": ["string", "null"] },
+        "points": { "type": ["number", "null"] },
+        "ratings": { "type": ["array", "null"], "items": { "$ref": "#/$defs/rubricRating" } }
+      }
+    },
+    "assignmentRubricFields": {
+      "type": "object",
+      "properties": {
+        "rubric": {
+          "description": "New assignment captures explicitly record null when Canvas returns no rubric. Older archives may lack this field.",
+          "type": ["array", "null"],
+          "items": { "$ref": "#/$defs/rubricCriterion" }
+        },
+        "rubric_settings": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "title": { "type": ["string", "null"] },
+            "points_possible": { "type": ["number", "null"] },
+            "free_form_criterion_comments": { "type": ["boolean", "null"] }
+          }
+        },
+        "use_rubric_for_grading": { "type": ["boolean", "null"] }
+      }
+    }
+  },
   "properties": {
     "schemaVersion": { "const": 2 },
     "source": { "const": "canvas-browser" },
@@ -57,6 +99,16 @@
         "type": "object",
         "additionalProperties": false,
         "required": ["endpoint", "courseId", "items", "pages"],
+        "allOf": [
+          {
+            "if": { "properties": { "endpoint": { "const": "assignments" } } },
+            "then": { "properties": { "items": { "items": { "$ref": "#/$defs/assignmentRubricFields" } } } }
+          },
+          {
+            "if": { "properties": { "endpoint": { "const": "discussions" } } },
+            "then": { "properties": { "items": { "items": { "properties": { "assignment": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/assignmentRubricFields" }] } } } } } }
+          }
+        ],
         "properties": {
           "endpoint": {
             "enum": ["profile", "coursesActive", "coursesCompleted", "course", "syllabus", "courseTabs", "assignments", "assignmentGroups", "submissions", "submission", "pages", "page", "modules", "moduleItems", "discussions", "discussionEntries", "discussionReplies", "announcements", "quizzes", "quiz", "courseFiles", "folders", "groups", "personalFiles", "personalFolders", "personalFile", "inbox", "inboxAll", "conversationsSent", "conversationsArchived", "conversation", "file", "fileBodies", "calendarEvents"]
@@ -64,7 +116,7 @@
           "courseId": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
           "groupId": { "type": "integer", "minimum": 1 },
           "contextCode": { "type": "string", "pattern": "^(user|course|group|account)_[1-9][0-9]*$" },
-          "items": { "type": "array", "description": "For fileBodies, a gap receipt with reason empty records an explicitly zero-size Canvas file whose successful download yielded zero bytes. It has no archived blob.", "items": { "type": "object" } },
+          "items": { "type": "array", "description": "File metadata can come from listings or an individual lookup for an attachment or same-origin file link in an assignment, discussion topic, entry, reply, page or announcement. For fileBodies, a gap receipt with reason empty records an explicitly zero-size Canvas file whose successful download yielded zero bytes. It has no archived blob.", "items": { "type": "object" } },
           "pages": { "type": "integer", "minimum": 1 }
         }
       }

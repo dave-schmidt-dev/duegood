@@ -4,6 +4,8 @@
 
 ### Added
 
+- Capture assignment and graded-discussion rubrics and retrieve files referenced in coursework, including individually accessible files omitted from the course Files list.
+
 - Dismiss the Canvas course-evaluation reminder before capture and report a blocking reminder when dismissal fails.
 
 - Sign in to Marymount Okta automatically when the Canvas capture session has expired, using a password and Google Authenticator code from a pinned broker consumer. Push, number match, FastPass, enrollment, CAPTCHA, unknown pages, and other hosts fail closed, and visible mode keeps the attended sign-in as the fallback.

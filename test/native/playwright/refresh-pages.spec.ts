@@ -192,7 +192,7 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
           phase("browser-import"); phase("calendar"); phase("complete"); callback?.({ index, end: true });
           return {
             status: "incomplete", browserStatus: "failed", calendarStatus: "complete",
-            gapCount: 0, omissionCount: 0, calendarAdded: 0, calendarUpdated: 0, calendarHeld: 0,
+            gapCount: 0, omissionCount: 0, rubricCount: 0, linkedFileCount: 0, calendarAdded: 0, calendarUpdated: 0, calendarHeld: 0,
             updatedAt: null, errorCode: setup.fullErrorCode,
           };
         }
@@ -238,7 +238,7 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
           status: gapCount > 0 || heldCount > 0 ? "incomplete" : "complete",
           browserStatus: gapCount > 0 ? "incomplete" : "complete",
           calendarStatus: heldCount > 0 ? "incomplete" : "complete",
-          gapCount, omissionCount: setup.fullOmissionCount ?? 0,
+          gapCount, omissionCount: setup.fullOmissionCount ?? 0, rubricCount: 1, linkedFileCount: 2,
           calendarAdded: 1, calendarUpdated: 1, calendarHeld: heldCount,
           updatedAt: new Date(Date.now() + 3_000).toISOString(), ...(gapCount > 0 ? { errorCode: "coverage-gap" } : {}),
         };

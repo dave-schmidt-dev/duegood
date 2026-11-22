@@ -336,13 +336,15 @@ function safeImportErrorCode(error) {
 }
 
 function captureSummary(frame, invalidResponse = "INVALID_CAPTURE_RESPONSE") {
-  const keys = ["status", "resourceCount", "itemCount", "gapCount", "dailyGapCount", "omissionCount", "fileBodiesIncomplete"];
+  const keys = ["status", "resourceCount", "itemCount", "gapCount", "dailyGapCount", "omissionCount",
+    "rubricCount", "linkedFileCount", "fileBodiesIncomplete"];
   if (!frame || typeof frame !== "object" || Array.isArray(frame)
       || Object.keys(frame).length !== keys.length || keys.some((key) => !Object.hasOwn(frame, key))
       || !["COMPLETE", "PARTIAL"].includes(frame.status) || typeof frame.fileBodiesIncomplete !== "boolean"
       || (frame.status === "COMPLETE"
         && (frame.gapCount !== 0 || frame.dailyGapCount !== 0 || frame.fileBodiesIncomplete))
-      || !["resourceCount", "itemCount", "gapCount", "dailyGapCount", "omissionCount"].every((key) =>
+      || !["resourceCount", "itemCount", "gapCount", "dailyGapCount", "omissionCount",
+        "rubricCount", "linkedFileCount"].every((key) =>
         Number.isSafeInteger(frame[key]) && frame[key] >= 0 && frame[key] <= 100_000)) {
     throw new Error(invalidResponse);
   }
@@ -353,6 +355,8 @@ function captureSummary(frame, invalidResponse = "INVALID_CAPTURE_RESPONSE") {
     gapCount: frame.gapCount,
     dailyGapCount: frame.dailyGapCount,
     omissionCount: frame.omissionCount,
+    rubricCount: frame.rubricCount,
+    linkedFileCount: frame.linkedFileCount,
     fileBodiesIncomplete: frame.fileBodiesIncomplete,
   };
 }

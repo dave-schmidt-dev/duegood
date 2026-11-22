@@ -209,7 +209,8 @@ export function summarizeCanvasRefreshScope(snapshot) {
   ));
 
   for (const row of coverage) {
-    if (row.status === "complete" || row.endpoint === "fileBodies") continue;
+    if (row.status === "complete" || row.endpoint === "fileBodies" || row.groupId != null
+        || row.endpoint === "personalFile" && row.courseId == null) continue;
     const activeScope = row.courseId == null || activeCourseIds.has(row.courseId);
     if (!activeScope) continue;
     if (requiredListRows.has(row) || row.endpoint === "conversation") continue;
@@ -232,6 +233,34 @@ export function summarizeCanvasRefreshScope(snapshot) {
     && resource.groupId == null && resource.contextCode == null);
   const activeFileIds = new Set(courseFiles.flatMap((resource) => resource.items
     .map((file) => file?.id).filter(positiveId)));
+  const linkedFileIds = new Set();
+  for (const courseId of activeCourseIds) {
+    const fileResources = resourcesAtScope(resources, "file", { courseId });
+    const completeRows = rowsAtScope(coverage, "file", { courseId })
+      .filter((row) => row.status === "complete");
+    addGap(Math.abs(completeRows.length - fileResources.length));
+
+    for (const resource of fileResources) {
+      if (!Array.isArray(resource.items) || resource.items.length !== 1
+          || !positiveId(resource.items[0]?.id)) {
+        addGap();
+        continue;
+      }
+      const fileId = resource.items[0].id;
+      if (activeFileIds.has(fileId)) continue;
+      if (linkedFileIds.has(fileId)) {
+        addGap();
+        continue;
+      }
+      linkedFileIds.add(fileId);
+    }
+  }
+  for (const fileId of linkedFileIds) activeFileIds.add(fileId);
+  const omissionFileIds = new Set(activeFileIds);
+  for (const resource of resources.filter((candidate) => candidate.endpoint === "personalFiles"
+      && candidate.courseId == null && candidate.groupId == null && candidate.contextCode == null)) {
+    for (const item of resource.items) if (positiveId(item?.id)) omissionFileIds.add(item.id);
+  }
   const fileReceipts = new Map();
   const fileBodyResources = resources.filter((resource) => resource.endpoint === "fileBodies");
   for (const resource of fileBodyResources) {
@@ -242,7 +271,6 @@ export function summarizeCanvasRefreshScope(snapshot) {
         continue;
       }
       fileReceipts.set(receipt.fileId, receipt);
-      if (activeFileIds.has(receipt.fileId) && isCanvasFileBodyOmission(receipt)) omissionCount += 1;
     }
   }
   for (const resource of courseFiles) {
@@ -253,14 +281,24 @@ export function summarizeCanvasRefreshScope(snapshot) {
         continue;
       }
       seen.add(file.id);
-      const receipt = fileReceipts.get(file.id);
-      if (!receipt) {
-        addGap();
-        continue;
-      }
-      if (isCanvasFileBodyOmission(receipt)) continue;
-      if (!validArchivedFileReceipt(receipt, file.id)) addGap();
     }
+  }
+  for (const fileId of activeFileIds) {
+    const receipt = fileReceipts.get(fileId);
+    if (!receipt) {
+      addGap();
+      continue;
+    }
+    if (isCanvasFileBodyOmission(receipt)) {
+      omissionCount += 1;
+      continue;
+    }
+    if (!validArchivedFileReceipt(receipt, fileId)) addGap();
+  }
+  for (const fileId of omissionFileIds) {
+    if (activeFileIds.has(fileId)) continue;
+    const receipt = fileReceipts.get(fileId);
+    if (receipt && isCanvasFileBodyOmission(receipt)) omissionCount += 1;
   }
 
   return {

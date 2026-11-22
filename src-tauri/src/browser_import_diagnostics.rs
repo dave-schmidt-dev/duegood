@@ -204,7 +204,9 @@ fn file_notice_explanation(reason: &str) -> &'static str {
         "HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH" => "could not be verified: the downloaded contents did not match a supported file type. Existing copies were kept",
         "HELPER_DOWNLOAD_SIGN_IN_RESPONSE" => "returned a sign-in page instead of a file. Sign in to Canvas and refresh again",
         "empty" => "confirmed empty in Canvas and skipped",
+        "forbidden-optional" => "forbidden in Canvas and skipped",
         "locked" => "locked in Canvas; skipped",
+        "not-found" => "not found in Canvas and skipped",
         "unpublished" => "unpublished in Canvas; skipped",
         "not-applicable" => "not applicable in Canvas; skipped",
         "unsupported" => "unsupported formats; skipped",
@@ -275,11 +277,12 @@ fn file_receipt_diagnostics(bundle: &ValidatedCaptureBundle) -> Value {
         }
     }
     let mut listed_ids = BTreeSet::new();
+    let mut active_file_ids = BTreeSet::new();
     let mut invalid_listed_files = 0usize;
     let mut duplicate_listed_files = 0usize;
     let mut inspected = 0usize;
     for resource in resources.iter().filter(|resource| {
-        resource.get("endpoint").and_then(Value::as_str) == Some("courseFiles")
+        matches!(resource["endpoint"].as_str(), Some("courseFiles" | "file"))
             && resource
                 .get("courseId")
                 .and_then(Value::as_u64)
@@ -299,7 +302,8 @@ fn file_receipt_diagnostics(bundle: &ValidatedCaptureBundle) -> Value {
                 bounded_increment(&mut invalid_listed_files);
                 continue;
             };
-            if !listed_ids.insert(id) {
+            active_file_ids.insert(id);
+            if resource["endpoint"] == "courseFiles" && !listed_ids.insert(id) {
                 bounded_increment(&mut duplicate_listed_files);
             }
         }
@@ -334,7 +338,7 @@ fn file_receipt_diagnostics(bundle: &ValidatedCaptureBundle) -> Value {
             };
             let status = receipt.get("status").and_then(Value::as_str).unwrap_or("");
             let reason = receipt.get("reason").and_then(Value::as_str);
-            if status == "gap" && listed_ids.contains(&file_id) {
+            if status == "gap" && active_file_ids.contains(&file_id) {
                 let bucket = file_receipt_reason(reason);
                 let count = reason_counts.entry(bucket).or_default();
                 *count = count.saturating_add(1).min(MAX_DIAGNOSTIC_COUNT);
@@ -352,7 +356,7 @@ fn file_receipt_diagnostics(bundle: &ValidatedCaptureBundle) -> Value {
                 "gap" => ReceiptKind::Failed,
                 _ => ReceiptKind::Other,
             };
-            if listed_ids.contains(&file_id) {
+            if active_file_ids.contains(&file_id) {
                 if let std::collections::hash_map::Entry::Vacant(entry) = receipts.entry(file_id) {
                     entry.insert(kind);
                 } else {
@@ -379,7 +383,7 @@ fn file_receipt_diagnostics(bundle: &ValidatedCaptureBundle) -> Value {
     let mut failed = 0usize;
     let mut other = 0usize;
     let mut missing = 0usize;
-    for file_id in &listed_ids {
+    for file_id in &active_file_ids {
         match receipts.get(file_id) {
             Some(ReceiptKind::Archived) => bounded_increment(&mut archived),
             Some(ReceiptKind::OptionalOmission) => bounded_increment(&mut optional_omissions),

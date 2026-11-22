@@ -89,6 +89,8 @@ describe("Canvas file body capture", () => {
       verifiedReceipt(1, "staged"),
       verifiedReceipt(2, "archived"),
       { fileId: 3, status: "gap", reason: "locked" },
+      { fileId: 8, status: "gap", reason: "forbidden-optional" },
+      { fileId: 9, status: "gap", reason: "not-found" },
       { fileId: 4, status: "gap", reason: "not-applicable" },
       { fileId: 6, status: "gap", reason: "unpublished" },
       { fileId: 7, status: "gap", reason: "empty" },
@@ -185,6 +187,34 @@ describe("Canvas file body capture", () => {
       errorCode: "HELPER_DOWNLOAD_REQUEST_FAILED",
     }));
     expect(JSON.stringify(capture)).not.toContain("synthetic private transfer detail");
+  });
+
+  it.each([
+    ["CANVAS_FILE_LOCKED", "locked"],
+    ["CANVAS_FILE_FORBIDDEN", "forbidden-optional"],
+    ["CANVAS_FILE_NOT_FOUND", "not-found"],
+  ])("records a confirmed Canvas body status %s as an optional omission", async (code, reason) => {
+    const capture = createCanvasFileCapture({
+      progress: async () => {},
+      downloadFile: async () => { throw Object.assign(new Error("private response detail"), { code }); },
+    });
+    await capture.capture({ id: FILE_ID, url: FILE_URL, size: 27 });
+    const receipts = capture.finish();
+    expect(receipts).toEqual([{ fileId: FILE_ID, status: "gap", reason }]);
+    expect(canvasFileBodiesComplete(receipts)).toBe(true);
+  });
+
+  it("keeps ambiguous and CDN download status errors as failures", async () => {
+    const capture = createCanvasFileCapture({
+      progress: async () => {},
+      downloadFile: async () => {
+        throw Object.assign(new Error("private CDN response detail"), { code: "HELPER_DOWNLOAD_HTTP_STATUS" });
+      },
+    });
+    await capture.capture({ id: FILE_ID, url: FILE_URL, size: 27 });
+    const receipts = capture.finish();
+    expect(receipts).toEqual([{ fileId: FILE_ID, status: "gap", reason: "HELPER_DOWNLOAD_HTTP_STATUS" }]);
+    expect(canvasFileBodiesComplete(receipts)).toBe(false);
   });
 
   it("treats only rejected macOS companions of one archived same-folder document as optional", async () => {

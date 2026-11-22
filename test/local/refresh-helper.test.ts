@@ -67,8 +67,8 @@ async function createTestRoot(state: "authoritative" | "preview" = "authoritativ
   return { parent, dataRoot, storeDir };
 }
 
-async function startMock(options: RefreshMockOptions = {}): Promise<RefreshMockServer> {
-  const server = await new RefreshMockServer(FIXTURE, options).listen();
+async function startMock(options: RefreshMockOptions = {}, fixture: RefreshContractFixture = FIXTURE): Promise<RefreshMockServer> {
+  const server = await new RefreshMockServer(fixture, options).listen();
   servers.push(server);
   return server;
 }
@@ -258,6 +258,57 @@ async function cleanUp(): Promise<void> {
 afterEach(cleanUp);
 
 describe("test-overrides duegood-refresh helper", () => {
+  it("downloads a discussion file once when its course Files listing is forbidden", async () => {
+    const root = await createTestRoot();
+    const fixture = structuredClone(FIXTURE);
+    const alpha = fixture.apiResponses["demo-alpha"]!;
+    alpha.files = { status: 403, body: {} };
+    const assignment = objectArray(alpha.assignments.body)[0]!;
+    assignment["rubric"] = [{ id: "criterion", description: "Explain the evidence", points: 3 }];
+    alpha.discussions = { body: [{ id: 97, title: "Synthetic discussion", assignment_id: assignment["id"] }] };
+    const server = await startMock({ linkedDiscussion: true }, fixture);
+    const result = await runHelper(root.dataRoot, server.origin);
+    expect(result.code).toBe(0);
+    expect(server.requests.filter((request) => request.path === "/api/v1/files/678")).toHaveLength(1);
+    expect(server.requests.filter((request) => request.path === "/files/678/download")).toHaveLength(1);
+    const discussions = await readStoreJson(root.storeDir, "classes/demo-alpha/canvas-export/api/discussions.json");
+    expect(discussions).toMatchObject([{ assignment: { id: assignment["id"],
+      rubric: [{ id: "criterion", description: "Explain the evidence", points: 3 }] } }]);
+    const material = path.join(root.storeDir, "classes/demo-alpha/materials/678-notes.txt");
+    expect(await readFile(material, "utf8")).toBe("Synthetic notes");
+    if (process.platform === "darwin") {
+      const attribute = await runFile("/usr/bin/xattr", ["-p", "com.apple.quarantine", material]);
+      expect(attribute.stdout).toContain("DueGood");
+    }
+    assertNoMutationsOrDownloadCredentials(server);
+  });
+
+  it.each([403, 404, 503])("records linked metadata HTTP %i from the native refresh", async (status) => {
+    const root = await createTestRoot();
+    const fixture = structuredClone(FIXTURE);
+    const alpha = fixture.apiResponses["demo-alpha"]!;
+    const assignment = objectArray(alpha.assignments.body)[0]!;
+    assignment["attachments"] = [{ id: 678 }, { id: 678 }];
+    assignment["rubric"] = [{ id: "c", description: "Synthetic criterion", long_description: null, points: 4, ratings: [] }];
+    alpha.files = { status: 403, body: {} };
+    const server = await startMock({ failPath: "/api/v1/files/678", failStatus: status }, fixture);
+    const result = await runHelper(root.dataRoot, server.origin);
+    expect(result.code, server.requests.map((request) => request.path.split("?")[0]).join(" ")).toBe(0);
+    const final = parseJsonLines(result.stdout).findLast((message) => message.type === "result");
+    if (status === 503) expect(final?.status).toBe("incomplete");
+    else expect(final?.status).not.toBe("incomplete");
+    expect(server.requests.filter((request) => request.path === "/api/v1/files/678")).toHaveLength(status === 503 ? 2 : 1);
+    const base = "classes/demo-alpha/canvas-export";
+    expect(await readStoreJson(root.storeDir, base + "/file-detail-omissions.json")).toEqual([
+      expect.objectContaining({ fileId: 678, reason: status === 403 ? "forbidden-optional" : status === 404 ? "not-found" : "request-failed" }),
+    ]);
+    expect(await readStoreJson(root.storeDir, base + "/api/assignments.json")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: assignment["id"], rubric: assignment["rubric"] }),
+      expect.objectContaining({ rubric: null }),
+    ]));
+    assertNoMutationsOrDownloadCredentials(server);
+  });
+
   it("captures and commits the synthetic expected coursework and local documents", async () => {
     const root = await createTestRoot();
     const server = await startMock();

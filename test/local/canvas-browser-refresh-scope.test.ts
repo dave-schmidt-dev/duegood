@@ -168,6 +168,77 @@ describe("Canvas daily refresh scope", () => {
     expect(summarizeCanvasRefreshScope(archivedLocked)).toEqual({ requiredGapCount: 0, omissionCount: 0 });
   });
 
+  it("requires active linked file bodies and ignores group or completed-course failures", () => {
+    const linked = completeSnapshot();
+    linked.coverage.find((row) => row.endpoint === "courseFiles")!.status = "gap";
+    linked.coverage.find((row) => row.endpoint === "courseFiles")!.reason = "forbidden-optional";
+    linked.resources = linked.resources.filter((row) => row.endpoint !== "courseFiles");
+    linked.resources.push(
+      { endpoint: "file", courseId: COURSE_ID, items: [{ id: 62 }] },
+      { endpoint: "fileBodies", courseId: null, items: [{
+        fileId: 62, status: "archived", byteCount: 12, sha256: "b".repeat(64),
+        contentType: "application/pdf", sourceAuthenticity: "unverified",
+      }] },
+    );
+    linked.coverage.push({ endpoint: "file", courseId: COURSE_ID, status: "complete" });
+    expect(summarizeCanvasRefreshScope(linked)).toEqual({ requiredGapCount: 0, omissionCount: 1 });
+
+    const missingBody = structuredClone(linked);
+    for (const resource of missingBody.resources.filter((row) => row.endpoint === "fileBodies")) {
+      resource.items = resource.items.filter((item) => item.fileId !== 62);
+    }
+    expect(summarizeCanvasRefreshScope(missingBody).requiredGapCount).toBe(1);
+
+    const inaccessible = completeSnapshot();
+    inaccessible.coverage.push(
+      { endpoint: "file", courseId: COURSE_ID, status: "gap", reason: "forbidden-optional" },
+      { endpoint: "file", courseId: COURSE_ID, status: "gap", reason: "not-found" },
+    );
+    expect(summarizeCanvasRefreshScope(inaccessible)).toEqual({ requiredGapCount: 0, omissionCount: 2 });
+
+    const failed = completeSnapshot();
+    failed.coverage.push({ endpoint: "file", courseId: COURSE_ID, status: "incomplete", reason: "request-failed" });
+    failed.coverage.push({ endpoint: "file", courseId: COURSE_ID, status: "gap", reason: "detail-budget" });
+    expect(summarizeCanvasRefreshScope(failed).requiredGapCount).toBe(2);
+
+    const outsideDaily = completeSnapshot();
+    outsideDaily.resources.push(
+      { endpoint: "file", courseId: 99, items: [{ id: 63 }] },
+      { endpoint: "file", courseId: null, groupId: 91, items: [{ id: 64 }] },
+      { endpoint: "personalFile", courseId: null, items: [{ id: 65 }] },
+      { endpoint: "fileBodies", courseId: null, items: [
+        { fileId: 63, status: "gap", reason: "request-failed" },
+        { fileId: 64, status: "gap", reason: "request-failed" },
+        { fileId: 65, status: "gap", reason: "request-failed" },
+      ] },
+    );
+    outsideDaily.coverage.push(
+      { endpoint: "file", courseId: 99, status: "incomplete", reason: "request-failed" },
+      { endpoint: "file", courseId: null, groupId: 91, status: "incomplete", reason: "request-failed" },
+      { endpoint: "personalFile", courseId: null, status: "incomplete", reason: "request-failed" },
+    );
+    expect(summarizeCanvasRefreshScope(outsideDaily)).toEqual({ requiredGapCount: 0, omissionCount: 0 });
+  });
+
+  it("flags duplicate linked metadata and receipt IDs instead of counting one successful detail", () => {
+    const duplicate = completeSnapshot();
+    duplicate.resources.push(
+      { endpoint: "file", courseId: COURSE_ID, items: [{ id: 62 }] },
+      { endpoint: "file", courseId: COURSE_ID, items: [{ id: 62 }] },
+      { endpoint: "fileBodies", courseId: null, items: [
+        { fileId: 62, status: "archived", byteCount: 12, sha256: "b".repeat(64),
+          contentType: "application/pdf", sourceAuthenticity: "unverified" },
+        { fileId: 62, status: "archived", byteCount: 12, sha256: "b".repeat(64),
+          contentType: "application/pdf", sourceAuthenticity: "unverified" },
+      ] },
+    );
+    duplicate.coverage.push(
+      { endpoint: "file", courseId: COURSE_ID, status: "complete" },
+      { endpoint: "file", courseId: COURSE_ID, status: "complete" },
+    );
+    expect(summarizeCanvasRefreshScope(duplicate).requiredGapCount).toBeGreaterThan(0);
+  });
+
   it("rejects an unattempted daily detail caused by a request cap", () => {
     const snapshot = completeSnapshot();
     snapshot.coverage.push({ endpoint: "conversation", courseId: null, status: "gap", reason: "detail-budget" });

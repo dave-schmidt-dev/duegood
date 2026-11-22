@@ -220,7 +220,14 @@ async function fetchFromOrigin({
       settle(undefined, { kind: "redirect", fileId, location, sourceAuthenticity: "unverified" });
       return;
     }
-    if (status !== 200) throw failure("HTTP_STATUS_REJECTED");
+    if (status !== 200) {
+      if (url.origin === origin && url.href === request.url.href && event.requestId === activeRequestId) {
+        if (status === 401) throw failure("CANVAS_FILE_LOCKED");
+        if (status === 403) throw failure("CANVAS_FILE_FORBIDDEN");
+        if (status === 404) throw failure("CANVAS_FILE_NOT_FOUND");
+      }
+      throw failure("HTTP_STATUS_REJECTED");
+    }
 
     const contentLength = responseHeader(event.responseHeaders, "content-length");
     if (contentLength !== undefined) {

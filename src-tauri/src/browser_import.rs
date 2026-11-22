@@ -24,7 +24,14 @@ use crate::export::{copy_tree, ExportProgress};
 use crate::history::{self, HISTORY_FILE};
 use crate::store::{utc_stamp, Store, StoreError};
 
-const OPTIONAL_FILE_BODY_REASONS: &[&str] = &["empty", "locked", "not-applicable", "unpublished"];
+const OPTIONAL_FILE_BODY_REASONS: &[&str] = &[
+    "empty",
+    "forbidden-optional",
+    "locked",
+    "not-applicable",
+    "not-found",
+    "unpublished",
+];
 
 #[path = "browser_import_capture_evidence.rs"]
 mod capture_evidence;

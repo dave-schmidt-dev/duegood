@@ -227,6 +227,27 @@ function syntheticCompleteSnapshot(userId: number) {
   };
 }
 
+function syntheticDetailSnapshot(userId: number) {
+  const snapshot = syntheticSnapshot(userId);
+  return {
+    ...snapshot,
+    resources: [...snapshot.resources,
+    { endpoint: "assignments", courseId: 17, pages: 1, items: [
+      { id: 101, rubric: [{ id: "r1" }] },
+      { id: 102, rubric: null },
+    ] },
+    { endpoint: "discussions", courseId: 17, pages: 1, items: [
+      { id: 201, assignment: { id: 101, rubric: [{ id: "r1" }] } },
+      { id: 202, assignment: { id: 103, rubric: [{ id: "r2" }] } },
+      { id: 203, assignment_id: 103, assignment: { rubric: [{ id: "r2" }] } },
+    ] },
+    { endpoint: "personalFiles", courseId: null, pages: 1, items: [{ id: 301 }] },
+    { endpoint: "personalFile", courseId: null, pages: 1, items: [{ id: 301 }] },
+    { endpoint: "file", courseId: null, pages: 1, items: [{ id: 302 }] },
+    ],
+  };
+}
+
 async function syntheticRunLease({ run }: { run: (runId: number) => Promise<{
   terminal?: Record<string, unknown>; value?: unknown;
 }> }) {
@@ -266,6 +287,7 @@ function captureBrokerProgram() {
           { endpoint: "fileBodies", courseId: null, status: "gap", reason: "not-attempted" },
         ] };
         if (expectedUserId === 45) return ${JSON.stringify(syntheticCompleteSnapshot(45))};
+        if (expectedUserId === 46) return ${JSON.stringify(syntheticDetailSnapshot(46))};
         return ${JSON.stringify(syntheticSnapshot(41))};
       },
     });
@@ -532,8 +554,12 @@ describe("Canvas session broker process protocol", () => {
       expect((JSON.parse(await readFile(snapshotPath, "utf8")) as { complete: boolean }).complete).toBe(true);
 
       await waitForReady(socketPath);
+      const detailCounts = await sendCommand(socketPath, { command: "capture", expectedUserId: 46 });
+      expect(detailCounts.final).toMatchObject({ status: "PARTIAL", rubricCount: 2, linkedFileCount: 1 });
+
+      await waitForReady(socketPath);
       expect((await sendCommand(socketPath, "stop")).final).toEqual({ status: "STOPPING" });
-      await waitForLine(child, "CLOSED:6");
+      await waitForLine(child, "CLOSED:7");
       await waitForChildExit(child);
     } finally {
       await stopChild(child);

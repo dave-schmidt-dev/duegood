@@ -60,7 +60,7 @@ pub(super) fn project_document_item(
             "context_code",
             "links",
         ],
-        "courseFiles" => &[
+        "courseFiles" | "file" => &[
             "id",
             "display_name",
             "filename",
@@ -81,7 +81,7 @@ pub(super) fn project_document_item(
         _ => return Err(ProjectionError::InvalidResource),
     };
     let mut projected = project_fields(item, fields)?;
-    if endpoint == "courseFiles" && item.get("url").is_some() {
+    if matches!(endpoint, "courseFiles" | "file") && item.get("url").is_some() {
         projected.insert("url".into(), Value::Null);
     }
     if endpoint == "modules" {
@@ -108,11 +108,8 @@ pub(super) fn project_document_item(
 
 pub(super) fn project_file_receipts(
     file_bodies: Option<&Value>,
-    course_files: Option<&Value>,
+    files: &[Value],
 ) -> Result<Vec<Value>, ProjectionError> {
-    let Some(course_files) = course_files else {
-        return Ok(Vec::new());
-    };
     let mut receipt_by_id = HashMap::new();
     if let Some(file_bodies) = file_bodies {
         for receipt in items(file_bodies)? {
@@ -126,11 +123,19 @@ pub(super) fn project_file_receipts(
         }
     }
     let mut output = Vec::new();
-    for file in items(course_files)? {
+    let mut seen = HashMap::<u64, &Value>::new();
+    for file in files {
         let id = file
             .get("id")
             .and_then(positive_id)
             .ok_or(ProjectionError::InvalidResource)?;
+        if let Some(previous) = seen.get(&id) {
+            if *previous != file {
+                return Err(ProjectionError::InvalidResource);
+            }
+            continue;
+        }
+        seen.insert(id, file);
         let mut reference = Map::new();
         reference.insert("fileId".into(), Value::from(id));
         if let Some(name) = file

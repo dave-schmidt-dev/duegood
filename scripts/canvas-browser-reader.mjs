@@ -17,6 +17,7 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
     incomplete: "INCOMPLETE_REQUIRED_AREA",
     identity: "IDENTITY_MISMATCH",
     identityUnavailable: "IDENTITY_UNAVAILABLE",
+    fileLocked: "FILE_LOCKED",
     budget: "BUDGET_EXCEEDED",
     transport: "REQUEST_FAILED",
   });
@@ -109,7 +110,11 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
         if (!positiveId(values.courseId)) fail(codes.invalid);
         return { path: `/api/v1/courses/${values.courseId}`, list: false, courseId: values.courseId, expectedContextCode: `course_${values.courseId}`, expectedId: values.courseId, fixed: { "include[]": "syllabus_body" } };
       case "courseTabs": return courseRoute(values, "/tabs", true, true);
-      case "assignments": return courseRoute(values, "/assignments");
+      case "assignments": {
+        const route = courseRoute(values, "/assignments");
+        route.fixed = { "include[]": "rubric" };
+        return route;
+      }
       case "assignmentGroups": return courseRoute(values, "/assignment_groups", true, true);
       case "submissions": {
         const route = courseRoute(values, "/students/submissions");
@@ -205,7 +210,7 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
       case "file":
         if (!positiveId(values.fileId)) fail(codes.invalid);
         if (values.groupId !== undefined) {
-          if (!positiveId(values.groupId)) fail(codes.invalid);
+          if (!positiveId(values.groupId) || values.courseId !== undefined) fail(codes.invalid);
           return {
             path: `/api/v1/groups/${values.groupId}/files/${values.fileId}`,
             list: false,
@@ -217,7 +222,19 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
             fixed: {},
           };
         }
-        return { path: `/api/v1/files/${values.fileId}`, list: false, fileId: values.fileId, expectedId: values.fileId, optionalDenied: true, fixed: {} };
+        if (values.courseId !== undefined && !positiveId(values.courseId)) fail(codes.invalid);
+        return {
+          path: `/api/v1/files/${values.fileId}`,
+          list: false,
+          ...(values.courseId === undefined ? {} : {
+            courseId: values.courseId,
+            expectedContextCode: `course_${values.courseId}`,
+          }),
+          fileId: values.fileId,
+          expectedId: values.fileId,
+          optionalDenied: true,
+          fixed: {},
+        };
       case "calendarEvents": {
         if (!positiveId(values.expectedUserId) || (values.allEvents !== undefined && values.allEvents !== true)) fail(codes.invalid);
         const allEvents = values.allEvents === true;
@@ -254,9 +271,9 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
         || url.hash || url.pathname !== route.path) fail(codes.unsafe);
     const allowed = new Set([...Object.keys(route.fixed), ...(route.list ? ["per_page", "page"] : [])]);
     for (const key of url.searchParams.keys()) if (!allowed.has(key)) fail(codes.unsafe);
-    for (const [key, value] of Object.entries(route.fixed)) {
+    for (const [key, expectedValue] of Object.entries(route.fixed)) {
       const values = url.searchParams.getAll(key);
-      if (values.length !== 1 || values[0] !== value) fail(codes.unsafe);
+      if (values.length !== 1 || values[0] !== expectedValue) fail(codes.unsafe);
     }
     if (route.list) {
       const perPage = url.searchParams.getAll("per_page");
@@ -379,7 +396,9 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
       finally { reportProgress("CANVAS_GET_FINISHED"); }
       // A later page cannot establish that an already accessible list is disabled.
       if (pages > 0 && (response.status === 403 || response.status === 404)) fail(codes.transport);
-      if (response.status === 401) fail(codes.session);
+      if (response.status === 401) {
+        fail(endpoint === "file" || endpoint === "personalFile" ? codes.fileLocked : codes.session);
+      }
       if (response.status === 403) {
         if (route.optionalDenied === true) return { status: "gap", reason: "FORBIDDEN_OPTIONAL", items: [], pages };
         fail(codes.incomplete);

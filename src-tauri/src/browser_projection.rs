@@ -20,7 +20,7 @@ mod calendar;
 #[path = "browser_projection_documents.rs"]
 mod documents;
 #[path = "browser_projection_sanitize.rs"]
-mod sanitize;
+pub(crate) mod sanitize;
 
 use documents::{project_course, project_document_item, project_file_receipts, put_json};
 use sanitize::{project_fields, sanitize_value};
@@ -127,6 +127,7 @@ pub fn project_snapshot(
         .chain(REQUIRED_ENDPOINTS)
         .collect();
     let mut by_course: HashMap<(u64, String), &Value> = HashMap::new();
+    let mut linked_file_resources: HashMap<u64, Vec<&Value>> = HashMap::new();
     let mut file_receipts: Option<&Value> = None;
     for resource in resources {
         let endpoint = resource
@@ -139,6 +140,19 @@ pub fn project_snapshot(
         if endpoint == "fileBodies" && course_id_value.is_null() {
             if file_receipts.replace(resource).is_some() {
                 return Err(ProjectionError::DuplicateResource);
+            }
+            continue;
+        }
+        if endpoint == "file" {
+            if let Some(course_id) = positive_id(course_id_value) {
+                if scope_by_id.contains_key(&course_id) {
+                    linked_file_resources
+                        .entry(course_id)
+                        .or_default()
+                        .push(resource);
+                }
+            } else if !course_id_value.is_null() {
+                return Err(ProjectionError::InvalidResource);
             }
             continue;
         }
@@ -210,6 +224,16 @@ pub fn project_snapshot(
             Value::Array(capture_truncation_gaps(scope, &by_course)?),
         );
         let export_root = format!("{}/canvas-export", scope.folder);
+        let listed_files = by_course
+            .get(&(scope.canvas_course_id, "courseFiles".to_owned()))
+            .copied();
+        let linked_files = linked_file_resources.get(&scope.canvas_course_id);
+        let projected_files = project_course_files(
+            listed_files,
+            linked_files,
+            scope.canvas_course_id,
+            snapshot.get("runId").and_then(positive_id),
+        )?;
         for (endpoint, document_name) in COURSE_DOCS {
             let value = if endpoint == "course" {
                 Value::Object(project_course(&course[0])?)
@@ -217,6 +241,11 @@ pub fn project_snapshot(
                 Value::Array(groups.clone())
             } else if endpoint == "assignments" {
                 Value::Array(assignments.clone())
+            } else if endpoint == "courseFiles" {
+                let Some(files) = projected_files.as_ref() else {
+                    continue;
+                };
+                Value::Array(files.clone())
             } else if let Some(resource) = by_course
                 .get(&(scope.canvas_course_id, endpoint.to_owned()))
                 .copied()
@@ -250,16 +279,17 @@ pub fn project_snapshot(
             &format!("{export_root}/course-inventory.json"),
             &Value::Object(inventory),
         )?;
-        if let Some(course_files) = by_course
-            .get(&(scope.canvas_course_id, "courseFiles".to_owned()))
-            .copied()
-        {
-            let download_manifest = project_file_receipts(file_receipts, Some(course_files))?;
-            put_json(
-                &mut documents,
-                &format!("{export_root}/download-manifest.json"),
-                &Value::Array(download_manifest),
-            )?;
+        if let Some(files) = projected_files {
+            let has_listing = listed_files.is_some();
+            let has_details = linked_files.is_some_and(|resources| !resources.is_empty());
+            if has_listing || has_details {
+                let download_manifest = project_file_receipts(file_receipts, &files)?;
+                put_json(
+                    &mut documents,
+                    &format!("{export_root}/download-manifest.json"),
+                    &Value::Array(download_manifest),
+                )?;
+            }
         }
         put_json(
             &mut documents,
@@ -272,6 +302,76 @@ pub fn project_snapshot(
         coursework,
         documents,
     })
+}
+
+fn project_course_files(
+    listed_files: Option<&Value>,
+    linked_files: Option<&Vec<&Value>>,
+    course_id: u64,
+    run_id: Option<u64>,
+) -> Result<Option<Vec<Value>>, ProjectionError> {
+    if listed_files.is_none() && linked_files.is_none() {
+        return Ok(None);
+    }
+    let mut files = Vec::new();
+    let mut indexes = HashMap::new();
+    if let Some(resource) = listed_files {
+        for item in items(resource)? {
+            validate_course_identity(item, course_id)?;
+            insert_projected_file(
+                &mut files,
+                &mut indexes,
+                project_document_item("courseFiles", item)?,
+            )?;
+        }
+    }
+    if let Some(resources) = linked_files {
+        for resource in resources {
+            for item in items(resource)? {
+                validate_course_identity(item, course_id)?;
+                let mut projected = project_document_item("file", item)?;
+                if let (Some(run_id), Some(object)) = (run_id, projected.as_object_mut()) {
+                    object.insert("linkedCaptureRunId".into(), Value::from(run_id));
+                }
+                insert_projected_file(
+                    &mut files,
+                    &mut indexes,
+                    projected,
+                )?;
+            }
+        }
+    }
+    Ok(Some(files))
+}
+
+fn insert_projected_file(
+    files: &mut Vec<Value>,
+    indexes: &mut HashMap<u64, usize>,
+    file: Value,
+) -> Result<(), ProjectionError> {
+    let id = file
+        .get("id")
+        .and_then(positive_id)
+        .ok_or(ProjectionError::InvalidResource)?;
+    if let Some(index) = indexes.get(&id).copied() {
+        let mut previous = files[index]
+            .as_object()
+            .cloned()
+            .ok_or(ProjectionError::InvalidResource)?;
+        let mut candidate = file
+            .as_object()
+            .cloned()
+            .ok_or(ProjectionError::InvalidResource)?;
+        previous.remove("linkedCaptureRunId");
+        candidate.remove("linkedCaptureRunId");
+        if previous != candidate {
+            return Err(ProjectionError::InvalidResource);
+        }
+        return Ok(());
+    }
+    indexes.insert(id, files.len());
+    files.push(file);
+    Ok(())
 }
 
 fn capture_truncation_gaps(
@@ -439,6 +539,7 @@ fn project_assignments(
                 "links",
             ],
         )?;
+        projected.extend(crate::canvas_rubric::assignment_rubric_fields(assignment)?);
         if let Some(nested) = assignment.get("submission") {
             projected.insert(
                 "submission".into(),

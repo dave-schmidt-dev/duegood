@@ -19,6 +19,14 @@ function installDashboardMock(): void {
       id: `assignment-${String(index)}`, course: index % 2 === 0 ? "101" : "102", kind: "assignment",
       title: `Synthetic assignment ${String(index)}`, at: new Date(now + (index + 1) * 86_400_000).toISOString(),
       submissionStatus: "unsubmitted", points: 10, score: 8, grade: "80%", done: false,
+      ...(index === 0 ? { rubric: {
+        criteria: [{
+          id: "criterion-1", description: "Evidence", long_description: "Use two sources.", points: 5,
+          ratings: [{ description: "Strong", long_description: "Clear and relevant", points: 5 }],
+        }],
+        settings: { title: "Synthetic rubric", pointsPossible: 5, freeFormCriterionComments: true },
+        useForGrading: true,
+      } } : {}),
     })),
   });
   const conversations = JSON.stringify({ complete: true, conversations: [
@@ -59,6 +67,18 @@ async function openDashboard(page: Page): Promise<void> {
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
 }
+
+test("shows captured rubric details for an assignment", async ({ page }) => {
+  await openDashboard(page);
+  const firstCard = page.locator(".timeline .event-card").first();
+  await firstCard.getByRole("button", { name: "Details", exact: true }).click();
+  const rubric = firstCard.locator(".event-rubric");
+  await expect(rubric.getByRole("heading", { name: "Rubric", exact: true })).toBeVisible();
+  await expect(rubric).toContainText("Synthetic rubric");
+  await expect(rubric).toContainText("Evidence");
+  await expect(rubric).toContainText("Strong");
+  await expect(rubric).toContainText("Clear and relevant");
+});
 
 test("retains per-page scroll, filters, draft, and non-default selections across navigation, refresh, and reload", async ({ page }) => {
   await openDashboard(page);
@@ -157,11 +177,10 @@ test("restores deep Timeline scroll in the first normal-motion frame after refre
 
   await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Grades", exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
-  const savedTimelinePosition = await page.evaluate(() => {
+  await expect.poll(() => page.evaluate(() => {
     const stored = JSON.parse(localStorage.getItem("com.zerodelta.duegood.dashboard-view-state.v1:~%2FLibrary%2FApplication%20Support%2Fcom.zerodelta.duegood") ?? "{}");
     return stored.scrollPositions?.timeline;
-  });
-  expect(savedTimelinePosition).toBeCloseTo(refreshTarget, 1);
+  })).toBeCloseTo(refreshTarget, 1);
   const navigationFrame = await page.evaluate(async () => {
     const timeline = document.querySelector<HTMLAnchorElement>("nav a[href='#timeline']");
     if (timeline === null) throw new Error("Timeline navigation was not rendered");
@@ -169,7 +188,7 @@ test("restores deep Timeline scroll in the first normal-motion frame after refre
     return await new Promise<number>((resolve) => requestAnimationFrame(() => resolve(window.scrollY)));
   });
   expect(navigationFrame).toBeGreaterThan(2000);
-  expect(Math.abs(navigationFrame - savedTimelinePosition)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(navigationFrame - refreshTarget)).toBeLessThanOrEqual(0.5);
 });
 
 

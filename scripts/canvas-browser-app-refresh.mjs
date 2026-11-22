@@ -55,6 +55,8 @@ function sanitizedResult(result) {
     && validCount(result.gapCount, MAX_CAPTURE_COUNT)
     && validCount(result.dailyGapCount, MAX_CAPTURE_COUNT)
     && validCount(result.omissionCount, MAX_CAPTURE_COUNT)
+    && validCount(result.rubricCount, MAX_CAPTURE_COUNT)
+    && validCount(result.linkedFileCount, MAX_CAPTURE_COUNT)
     && (result.status !== "COMPLETE"
       || result.gapCount === 0 && result.dailyGapCount === 0 && result.fileBodiesIncomplete === false);
   const importValid = native?.status === "IMPORTED"
@@ -77,6 +79,8 @@ function sanitizedResult(result) {
     itemCount: countOrZero(result?.itemCount, MAX_CAPTURE_COUNT),
     gapCount: countOrZero(result?.gapCount, MAX_CAPTURE_COUNT),
     omissionCount: countOrZero(result?.omissionCount, MAX_CAPTURE_COUNT),
+    rubricCount: countOrZero(result?.rubricCount, MAX_CAPTURE_COUNT),
+    linkedFileCount: countOrZero(result?.linkedFileCount, MAX_CAPTURE_COUNT),
     importedCourses: countOrZero(native?.importedCourses, MAX_IMPORT_COUNT),
     archivedCourses: countOrZero(native?.archivedCourses, MAX_IMPORT_COUNT),
     promotedBlobs: countOrZero(native?.promotedBlobs, MAX_IMPORT_COUNT),
@@ -157,7 +161,7 @@ export async function main(args = process.argv.slice(2)) {
     const writeFrame = frameWriter((line) => process.stdout.write(line));
     writeFrame({
       type: "result", status: "incomplete", resourceCount: 0, itemCount: 0, gapCount: 0,
-      omissionCount: 0,
+      omissionCount: 0, rubricCount: 0, linkedFileCount: 0,
       importedCourses: 0, archivedCourses: 0, promotedBlobs: 0, reusedBlobs: 0,
       bytesVerified: 0, alreadyCurrent: false, errorCode: "BROWSER_REFRESH_FAILED",
     });
@@ -173,7 +177,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const writeFrame = frameWriter((line) => process.stdout.write(line));
     writeFrame({
       type: "result", status: "incomplete", resourceCount: 0, itemCount: 0, gapCount: 0,
-      omissionCount: 0,
+      omissionCount: 0, rubricCount: 0, linkedFileCount: 0,
       importedCourses: 0, archivedCourses: 0, promotedBlobs: 0, reusedBlobs: 0,
       bytesVerified: 0, alreadyCurrent: false, errorCode: "BROWSER_REFRESH_FAILED",
     });
