@@ -6,7 +6,7 @@ import type { ConversationAttachment, ConversationMessage, NormalizedConversatio
 import type { AssignmentListItem } from "../db/types";
 import type { LocalCourse, LocalSnapshot } from "./coursework-types";
 import { pendingSourceLinks } from "./pending-links";
-import { dailyScopeReadiness } from "./refresh-daily-scope";
+import { canvasHistoryOutcome } from "./refresh-daily-scope";
 import {
   areActiveBrowserCoursesCurrent,
   hasIndependentIcalDue,
@@ -574,16 +574,14 @@ export function projectRefreshes(historyDocument: unknown, inboxDocument: unknow
   const refreshes = raw.map((event, index): LocalRefresh => {
     const source = event.source === "calendar" || event.source === "ical" || event.sourceLabel === "calendar" ? "calendar" : "canvas";
     const isCalendar = source === "calendar";
-    const dailyScope = !isCalendar ? dailyScopeReadiness(event) : null;
-    const explicitFailure = event.status === "failed";
-    const complete = !explicitFailure && (dailyScope !== null || (event.dailyScopeStatus !== "incomplete" && event.status === "succeeded" && (isCalendar || event.sourceComplete === true)));
+    const historyOutcome = canvasHistoryOutcome(event, isCalendar);
     const changes = entries(event.changes, 500).map((change): LocalRefreshChange => {
       const kind = change.kind === "added" ? "added" : change.kind === "removed" ? "removed" : change.kind === "notice" ? "notice" : "changed";
       const detail = changedFieldsDetail(change);
       return { kind, title: text(change.title) ?? (isCalendar ? "Calendar item" : "Canvas item"), detail: detail ?? text(change.detail, 1_000) ?? text(change.course, 80) ?? "" };
     });
     const summary = object(event.summary);
-    const status: LocalRefresh["status"] = explicitFailure ? "failed" : complete ? "complete" : event.status === "incomplete" || event.sourceComplete === false ? "partial" : "failed";
+    const status: LocalRefresh["status"] = historyOutcome.status;
     if (status !== "complete" && changes.length === 0) {
       const label = isCalendar ? "Calendar" : "Canvas";
       const title = status === "failed" ? `${label} refresh failed` : "Refresh incomplete";
@@ -594,17 +592,13 @@ export function projectRefreshes(historyDocument: unknown, inboxDocument: unknow
     const changed = number(summary?.updated ?? summary?.changed);
     const removed = number(summary?.removed);
     const held = number(summary?.held);
-    const summaryText = dailyScope !== null
-      ? `Daily Canvas pages refreshed${dailyScope.omissionCount > 0 ? `; ${String(dailyScope.omissionCount)} optional capture omission${dailyScope.omissionCount === 1 ? "" : "s"} recorded` : ""}. Existing data was preserved.`
-      : isCalendar
+    const summaryText = historyOutcome.summaryText
+      ?? (isCalendar
       ? status === "failed" ? "Calendar refresh failed; prior deadlines were kept." : status === "partial" ? `Calendar deadlines only · incomplete · ${String(added)} added · ${String(changed)} updated · ${String(held)} held` : `Calendar deadlines only · ${String(added)} added · ${String(changed)} updated · ${String(held)} held`
-      : status === "failed" ? "Canvas refresh failed; existing data was kept." : status === "partial" ? "Canvas refresh was incomplete; existing data was kept." : "Canvas refresh completed.";
-    if (dailyScope !== null && !changes.some((change) => change.kind === "notice" && change.title === "Daily Canvas pages refreshed")) {
-      changes.push({
-        kind: "notice",
-        title: "Daily Canvas pages refreshed",
-        detail: `${dailyScope.omissionCount > 0 ? `${String(dailyScope.omissionCount)} optional capture omission${dailyScope.omissionCount === 1 ? "" : "s"} recorded. ` : ""}Existing data was preserved.`,
-      });
+      : status === "failed" ? "Canvas refresh failed; existing data was kept." : status === "partial" ? "Canvas refresh was incomplete; existing data was kept." : "Canvas refresh completed.");
+    if (historyOutcome.notice !== null
+        && !changes.some((change) => change.kind === "notice" && change.title === historyOutcome.notice?.title)) {
+      changes.push({ kind: "notice", ...historyOutcome.notice });
     }
     if (isCalendar && held > 0 && !changes.some((change) => change.kind === "notice")) {
       changes.push({ kind: "notice", title: "Calendar items held", detail: `${String(held)} calendar change${held === 1 ? " was" : "s were"} held for review.` });

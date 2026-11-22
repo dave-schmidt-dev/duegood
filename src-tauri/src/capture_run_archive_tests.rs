@@ -45,7 +45,7 @@ fn publish(root: &Path, snapshot: &Value, blobs: Vec<Value>) -> (String, String)
     let manifest = json!({
         "format":"duegood-canvas-capture-generation", "version":2,
         "runId":run_id, "generationId":generation_id, "capturedAt":"2026-09-27T12:00:00Z",
-        "complete":false, "identity":{"origin":CANVAS_ORIGIN,"userId":41},
+        "complete":snapshot["complete"], "identity":{"origin":CANVAS_ORIGIN,"userId":41},
         "snapshotBytes":bytes.len(), "snapshotSha256":digest,
         "resourceCount":snapshot["resources"].as_array().unwrap().len(), "itemCount":item_count,
         "blobCount":blobs.len(), "blobBytes":blobs.iter().map(|blob| blob["byteCount"].as_u64().unwrap()).sum::<u64>(),
@@ -129,4 +129,25 @@ fn summary_rejects_missing_or_mismatched_blob_links() {
     let item = json!({"status":"archived","fileId":99,"byteCount":5,"sha256":hash,"contentType":"application/pdf","sourceAuthenticity":"unverified"});
     let (generation_id, digest) = publish(&archive.0, &snapshot(Some(item)), vec![receipt]);
     assert!(summarize_published_generation(&archive.0, 4, &generation_id, &digest, 41).is_err());
+}
+
+#[test]
+fn terminal_receipt_requires_matching_completion_flags() {
+    let archive = TempArchive::new();
+    let mut snapshot = snapshot(None);
+    snapshot["complete"] = json!(true);
+    let (generation, digest) = publish(&archive.0, &snapshot, vec![]);
+    let summarize = || summarize_published_generation(&archive.0, 4, &generation, &digest, 41);
+    assert!(summarize().is_ok());
+    let path = archive
+        .0
+        .join("generations")
+        .join(&generation)
+        .join("manifest.json");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    for invalid in [json!(false), Value::Null, json!("true")] {
+        manifest["complete"] = invalid;
+        fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(summarize().is_err());
+    }
 }

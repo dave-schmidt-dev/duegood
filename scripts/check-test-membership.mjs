@@ -120,6 +120,8 @@ let tauriTestCount = 0;
     ["commands::browser_commands", "commands_browser_tests.rs"],
     ["commands::full_refresh_commands", "commands_full_refresh_tests.rs"],
     ["browser_bundle::tests", "browser_bundle_tests.rs"],
+    ["browser_import::completion_tests", "browser_import_completion_tests.rs"],
+    ["browser_import::end_to_end_tests", "browser_import_end_to_end_tests.rs"],
     ["browser_import::tests", "browser_import_tests.rs"],
     ["browser_import::daily_scope_tests", "browser_import_daily_scope_tests.rs"],
     ["browser_import::course_metadata", "browser_import_course_metadata.rs"],

@@ -204,18 +204,21 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
           if (first !== undefined) first.latestMessagePreview = "Full refresh Inbox preview";
           coursework.generated = new Date(Date.now() + 1_000).toISOString();
         } else fullCaptureStale = true;
+        const dailyOmissionCount = setup.fullOmissionCount ?? 0;
         documents.history = [{
-          id: "full-run-after", source: "canvas", sourceLabel: "canvas", status: "incomplete", sourceComplete: false,
+          id: "full-run-after", source: "canvas", sourceLabel: "canvas",
+          status: gapCount > 0 ? "incomplete" : "succeeded", sourceComplete: gapCount === 0,
           dailyScopeStatus: gapCount > 0 ? "incomplete" : "complete",
           dailyGapCount: gapCount,
-          dailyOmissionCount: setup.fullOmissionCount ?? 0,
+          dailyOmissionCount,
           startedAt: new Date(Date.now() + 2_000).toISOString(), finishedAt: new Date(Date.now() + 3_000).toISOString(),
           summary: { added: 1, updated: 2, removed: 0 }, changes: [
             { kind: "changed", title: "Synthetic Canvas changes", detail: "Full refresh completed its available sections." },
             ...(gapCount > 0
-              ? [{ kind: "notice", title: "Daily Canvas pages incomplete", detail: `${String(gapCount)} required daily sections were incomplete; existing data was preserved.` },
-                { kind: "notice", title: "Canvas file check", detail: "1 file: could not be verified because its contents did not match a supported file type. Existing copies were kept." }]
-              : [{ kind: "notice", title: "Daily Canvas pages refreshed", detail: `${setup.fullOmissionCount ?? 0} optional capture omissions recorded. Existing data was preserved.` }]),
+              ? [{ kind: "notice", title: "Canvas refresh was incomplete", detail: `${String(gapCount)} required daily sections were incomplete; ${String(dailyOmissionCount)} optional capture omissions recorded. Existing data was kept.` },
+                { kind: "notice", title: "Canvas file check", detail: "1 file: could not be verified because its contents did not match a supported file type. Existing copies were kept." },
+                { kind: "notice", title: "Personal Canvas file check", detail: "1 personal file could not be verified." }]
+              : [{ kind: "notice", title: "Canvas refresh completed", detail: `${String(dailyOmissionCount)} optional capture omissions recorded. Existing data was preserved.` }]),
           ],
         }, ...(documents.history as Record<string, unknown>[])];
         persistDocuments();
@@ -372,8 +375,8 @@ test("full refresh uses the bundled browser command and updates every page witho
   await expect(refresh).toBeDisabled();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __refreshCalls: { command: string }[] }).__refreshCalls.filter((call) => call.command === "start_full_refresh").length)).toBe(1);
   await page.evaluate(() => (window as unknown as { __releaseFullRefresh?: () => void }).__releaseFullRefresh?.());
-  await expect(page.locator(".sync-note")).toContainText("Canvas and calendar updated.");
-  await expect(page.locator(".sync-note")).toContainText("2 optional items were unavailable or skipped");
+  await expect(page.locator(".sync-note")).toContainText("Complete. Canvas and calendar updated.");
+  await expect(page.locator(".sync-note")).toContainText("2 omissions recorded.");
   await expect(page.locator(".topbar .term-label")).toContainText("2 courses");
 
   await expect(page.getByRole("button", { name: "All courses", exact: true })).toHaveClass(/active/);
@@ -397,8 +400,8 @@ test("full refresh uses the bundled browser command and updates every page witho
   await expect(page.getByRole("heading", { name: "Full refresh Canvas page" })).toBeVisible();
   await visit(page, "Activity");
   await selectNewestRefresh(page);
-  await expect(page.locator("#main").getByText(/Daily Canvas pages refreshed; 2 optional capture omissions recorded\. Existing data was preserved\./)).toBeVisible();
-  await expect(page.locator("#main").getByText("Daily Canvas pages refreshed", { exact: true })).toBeVisible();
+  await expect(page.locator("#main").getByText(/Canvas refresh completed; 2 optional capture omissions recorded\. Existing data was preserved\./)).toBeVisible();
+  await expect(page.locator("#main").getByText("Canvas refresh completed", { exact: true })).toBeVisible();
   await visit(page, "More");
   await expect(store).toContainText("Full refresh is available.");
   await expect(store.getByRole("checkbox", { name: "Enable Canvas refresh" })).toHaveCount(0);
@@ -441,8 +444,10 @@ test("full refresh reports coverage gaps, reloads freshness, and rereads after c
   await openDashboard(page, { mode: "full", fullGap: true });
   await page.locator(".top-actions").getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(page.locator(".sync-note")).toContainText("Refresh finished with items needing attention. 2 Canvas sections or files could not refresh.");
+  await expect(page.locator(".sync-note")).toContainText("0 omissions recorded.");
   await expect(page.locator(".sync-note")).toContainText("1 calendar item was left unchanged");
   await expect(page.locator(".sync-note")).toContainText("contents did not match a supported file type");
+  await expect(page.locator(".sync-note")).toContainText("1 personal file could not be verified.");
   await expect(page.locator(".sync-note")).toContainText("See Activity for details.");
   await page.screenshot({ path: testInfo.outputPath("refresh-attention.png") });
   await expect(page.locator("[data-source-freshness=stale]")).toContainText("could not be verified from the latest refresh.");
@@ -451,7 +456,7 @@ test("full refresh reports coverage gaps, reloads freshness, and rereads after c
   await visit(page, "Activity");
   await selectNewestRefresh(page);
   await expect(page.locator("#main").getByText("partial", { exact: true }).first()).toBeVisible();
-  await expect(page.locator("#main").getByText("Daily Canvas pages incomplete", { exact: true })).toBeVisible();
+  await expect(page.locator("#main").getByText("Canvas refresh was incomplete", { exact: true })).toBeVisible();
   let commands = await page.evaluate(() => (window as unknown as { __refreshCalls: { command: string }[] }).__refreshCalls.map((call) => call.command));
   expect(commands.filter((command) => command === "read_dashboard_documents")).toHaveLength(2);
   expect(commands.filter((command) => command === "start_full_refresh")).toHaveLength(1);
@@ -489,7 +494,7 @@ test("full refresh banner keeps 125 Canvas gaps separate from a held calendar it
 
   const note = page.locator(".sync-note");
   await expect(note).toContainText("125 Canvas sections or files could not refresh");
-  await expect(note).toContainText("9 optional items were unavailable or skipped");
+  await expect(note).toContainText("9 omissions recorded.");
   await expect(note).toContainText("calendar item was left unchanged");
   await expect(note).toContainText("1 calendar item was left unchanged");
   await expect(note).not.toContainText("126");

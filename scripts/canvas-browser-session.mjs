@@ -9,7 +9,7 @@ import { sessionLaunchOptions } from "./canvas-browser-launch.mjs";
 import { runCanvasBrowserProbe } from "./canvas-browser-probe.mjs";
 import { readCanvasIdentity } from "./canvas-browser-identity.mjs";
 import { loadCurrentCanvasCapture } from "./canvas-browser-runtime-loader.mjs";
-import { isCanvasCoverageEntry, summarizeCanvasRefreshScope } from "./canvas-browser-refresh-scope.mjs";
+import { isCanvasCoverageEntry, summarizeCanvasCaptureOutcome } from "./canvas-browser-refresh-scope.mjs";
 import { readCommand } from "./canvas-browser-command.mjs";
 import { isSignInReason, parseSessionMode } from "./canvas-sign-in-recovery.mjs";
 export { runCanvasCapture } from "./canvas-browser-session-capture.mjs";
@@ -34,7 +34,8 @@ const PUBLIC_CAPTURE_FAILURES = new Set([
   "CAPTURE_BUDGET_EXCEEDED", "CAPTURE_ITEM_BUDGET_EXCEEDED", "COURSE_BUDGET_EXCEEDED",
   "DETAIL_BUDGET_EXCEEDED", "REQUEST_FAILED", "HELPER_UNAVAILABLE", "PRIVATE_DIRECTORY_REJECTED",
   "ARCHIVE_RECEIPT_REJECTED", "CAPTURE_DISK_BUDGET_EXCEEDED", "CAPTURE_COVERAGE_INCOMPLETE",
-  "CAPTURE_IDENTITY_OR_SHAPE_REJECTED", "CAPTURE_RESOURCE_SHAPE_REJECTED",
+  "CAPTURE_IDENTITY_OR_SHAPE_REJECTED", "CAPTURE_RESOURCE_SHAPE_REJECTED", "COMPLETE_COVERAGE_INCOMPLETE",
+  "CAPTURE_COMPLETION_MISMATCH",
   "FILE_BODY_COVERAGE_UNVERIFIED", "PROGRESS_CALLBACK_FAILED", "READER_PROGRESS_BINDING_UNAVAILABLE",
 ]);
 
@@ -89,6 +90,7 @@ function validateCapture(snapshot, expectedUserId) {
       || typeof snapshot.generationId !== "string" || !/^[a-f0-9]{32}$/u.test(snapshot.generationId)
       || !isRecord(snapshot.identity) || snapshot.identity.origin !== ORIGIN
       || snapshot.identity.userId !== expectedUserId
+      || typeof snapshot.complete !== "boolean"
       || !isRecord(snapshot.activeCourses) || snapshot.activeCourses.complete !== true
       || !Array.isArray(snapshot.activeCourses.courseIds)
       || snapshot.activeCourses.courseIds.some((id) => !Number.isSafeInteger(id) || id <= 0)
@@ -119,29 +121,29 @@ function validateCapture(snapshot, expectedUserId) {
     throw new Error("REQUIRED_COURSE_COVERAGE_INCOMPLETE");
   }
   const coverage = snapshot.coverage.map((entry) => ({ ...entry }));
-  const fileBodyEntries = coverage.filter((entry) => entry.endpoint === "fileBodies");
-  if (fileBodyEntries.some((entry) => entry.status !== "gap")) throw new Error("FILE_BODY_COVERAGE_UNVERIFIED");
-  if (fileBodyEntries.length === 0) {
-    coverage.push({ endpoint: "fileBodies", courseId: null, status: "gap", reason: "not-attempted" });
-  }
   let itemCount = 0;
   for (const resource of snapshot.resources) {
     if (!isRecord(resource) || !Array.isArray(resource.items)) throw new Error("CAPTURE_RESOURCE_SHAPE_REJECTED");
     itemCount += resource.items.length;
     if (!Number.isSafeInteger(itemCount)) throw new Error("CAPTURE_BUDGET_EXCEEDED");
   }
-  const partial = { ...snapshot, complete: false, coverage };
-  const dailyScope = summarizeCanvasRefreshScope(partial);
-  const serialized = `${JSON.stringify(partial)}\n`;
+  const outcome = summarizeCanvasCaptureOutcome({ ...snapshot, coverage });
+  const complete = outcome.requiredGapCount === 0
+    && outcome.failureGapCount === 0 && !outcome.fileBodiesIncomplete;
+  if (snapshot.complete !== complete) throw new Error("CAPTURE_COMPLETION_MISMATCH");
+  const capture = { ...snapshot, complete, coverage };
+  const serialized = `${JSON.stringify(capture)}\n`;
   if (Buffer.byteLength(serialized) > MAX_SNAPSHOT_BYTES) throw new Error("CAPTURE_BUDGET_EXCEEDED");
   return {
-    partial,
+    capture,
     serialized,
     resourceCount: snapshot.resources.length,
     itemCount,
-    gapCount: coverage.filter((entry) => entry.status !== "complete").length,
-    dailyGapCount: dailyScope.requiredGapCount,
-    omissionCount: dailyScope.omissionCount,
+    gapCount: Math.max(outcome.failureGapCount, outcome.requiredGapCount),
+    dailyGapCount: outcome.requiredGapCount,
+    omissionCount: outcome.omissionCount,
+    fileBodiesIncomplete: outcome.fileBodiesIncomplete,
+    status: complete ? "COMPLETE" : "PARTIAL",
   };
 }
 
@@ -425,13 +427,13 @@ export async function startSessionBroker({
             reportProgress("CAPTURE_SAVING");
             await writePrivateSnapshot(appDirectory, validated.serialized);
             return respond({
-              status: "PARTIAL",
+              status: validated.status,
               resourceCount: validated.resourceCount,
               itemCount: validated.itemCount,
               gapCount: validated.gapCount,
               dailyGapCount: validated.dailyGapCount,
               omissionCount: validated.omissionCount,
-              fileBodiesIncomplete: true,
+              fileBodiesIncomplete: validated.fileBodiesIncomplete,
             });
           }
           if (request.command === "stop") {

@@ -23,9 +23,9 @@ export function fullRefreshFeedback(result: FullRefreshResult, fileNotices: read
     : calendarStatus === "unavailable" ? "Calendar refresh is unavailable; previous deadlines were kept."
     : `Calendar: ${String(result.calendarAdded)} added, ${String(result.calendarUpdated)} updated.${result.calendarHeld > 0
       ? ` ${String(result.calendarHeld)} calendar item${result.calendarHeld === 1 ? " was" : "s were"} left unchanged because ${result.calendarHeld === 1 ? "it could" : "they could"} not be safely matched or dated.` : ""}`;
-  const omissions = result.omissionCount > 0 ? ` ${String(result.omissionCount)} optional items were unavailable or skipped.` : "";
+  const omissions = ` ${String(result.omissionCount)} omission${result.omissionCount === 1 ? "" : "s"} recorded.`;
   const reasons = result.gapCount > 0 && fileNotices.length > 0 ? ` ${fileNotices.slice(0, 3).join(" ")}` : "";
-  const headline = complete ? "Canvas and calendar updated." : failed ? "Refresh could not finish." : "Refresh finished with items needing attention.";
+  const headline = complete ? "Complete. Canvas and calendar updated." : failed ? "Refresh could not finish." : "Refresh finished with items needing attention.";
   const detail = `${headline} ${complete ? "" : `${canvas} `}${calendar}${reasons}${omissions}${state === "complete" ? "" : " See Activity for details."}`;
   return { state, detail };
 }

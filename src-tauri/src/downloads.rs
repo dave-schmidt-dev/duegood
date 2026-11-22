@@ -56,6 +56,7 @@ pub enum DownloadError {
     ConcurrencyLockPoisoned,
     SignInResponse,
     MimeSignatureMismatch,
+    CanvasConfirmedEmpty,
     SizeMismatch,
     UnsafeStagingDirectory,
     StagingFailed,
@@ -75,6 +76,7 @@ impl DownloadError {
             DownloadError::ConcurrencyLockPoisoned => "concurrency-lock-poisoned",
             DownloadError::SignInResponse => "sign-in-response",
             DownloadError::MimeSignatureMismatch => "mime-signature-mismatch",
+            DownloadError::CanvasConfirmedEmpty => "canvas-confirmed-empty",
             DownloadError::SizeMismatch => "size-mismatch",
             DownloadError::UnsafeStagingDirectory => "unsafe-staging-directory",
             DownloadError::StagingFailed => "staging-failed",
@@ -161,13 +163,14 @@ impl DownloadClient {
         url: &str,
         file_id: u64,
         expected_size: Option<u64>,
+        declared_content_type: Option<&str>,
         staging: &StagingDirectory,
     ) -> Result<StagedDownload, DownloadError> {
         if expected_size.is_some_and(|size| size > MAX_CAPTURE_FILE_BYTES) {
             return Err(DownloadError::ResponseTooLarge);
         }
         self.validate_initial_file_url(url, file_id)?;
-        self.stream_file_to_staging(url, file_id, expected_size, staging)
+        self.stream_file_to_staging(url, file_id, expected_size, declared_content_type, staging)
     }
 
     /// Streams a browser-observed Canvas download redirect without contacting the initial route.
@@ -179,13 +182,20 @@ impl DownloadClient {
         location: &str,
         file_id: u64,
         expected_size: Option<u64>,
+        declared_content_type: Option<&str>,
         staging: &StagingDirectory,
     ) -> Result<StagedDownload, DownloadError> {
         if expected_size.is_some_and(|size| size > MAX_CAPTURE_FILE_BYTES) {
             return Err(DownloadError::ResponseTooLarge);
         }
         let target = self.resolve_browser_location(source_url, location, file_id)?;
-        self.stream_file_to_staging(target.as_str(), file_id, expected_size, staging)
+        self.stream_file_to_staging(
+            target.as_str(),
+            file_id,
+            expected_size,
+            declared_content_type,
+            staging,
+        )
     }
 
     /// Adopts an owner-only `.part` file produced by the authenticated browser transfer helper.
@@ -198,6 +208,7 @@ impl DownloadClient {
         browser_byte_count: u64,
         expected_size: Option<u64>,
         browser_content_type: Option<&str>,
+        declared_content_type: Option<&str>,
         staging: &StagingDirectory,
     ) -> Result<StagedDownload, DownloadError> {
         if file_id == 0 {
@@ -264,13 +275,14 @@ impl DownloadClient {
         {
             return Err(DownloadError::SizeMismatch);
         }
-        let content_type = crate::capture_archive::verify_content_type(
+        let content_type = crate::capture_media::verify_content_type_with_declared_type(
             browser_content_type,
+            declared_content_type,
             &prefix,
         )
         .map_err(|error| match error {
-            crate::capture_archive::MediaError::SignInResponse => DownloadError::SignInResponse,
-            crate::capture_archive::MediaError::MimeSignatureMismatch => {
+            crate::capture_media::MediaError::SignInResponse => DownloadError::SignInResponse,
+            crate::capture_media::MediaError::MimeSignatureMismatch => {
                 DownloadError::MimeSignatureMismatch
             }
         })?;
@@ -297,6 +309,7 @@ impl DownloadClient {
         url: &str,
         file_id: u64,
         expected_size: Option<u64>,
+        declared_content_type: Option<&str>,
         staging: &StagingDirectory,
     ) -> Result<StagedDownload, DownloadError> {
         let _guard = self
@@ -355,16 +368,20 @@ impl DownloadClient {
         if expected_size.is_some_and(|size| size != byte_count) {
             return Err(DownloadError::SizeMismatch);
         }
-        let content_type =
-            crate::capture_archive::verify_content_type(response_type.as_deref(), &prefix)
-                .map_err(|error| match error {
-                    crate::capture_archive::MediaError::SignInResponse => {
-                        DownloadError::SignInResponse
-                    }
-                    crate::capture_archive::MediaError::MimeSignatureMismatch => {
-                        DownloadError::MimeSignatureMismatch
-                    }
-                })?;
+        if expected_size == Some(0) && byte_count == 0 {
+            return Err(DownloadError::CanvasConfirmedEmpty);
+        }
+        let content_type = crate::capture_media::verify_content_type_with_declared_type(
+            response_type.as_deref(),
+            declared_content_type,
+            &prefix,
+        )
+        .map_err(|error| match error {
+            crate::capture_media::MediaError::SignInResponse => DownloadError::SignInResponse,
+            crate::capture_media::MediaError::MimeSignatureMismatch => {
+                DownloadError::MimeSignatureMismatch
+            }
+        })?;
         let sha256 = format!("{:x}", hasher.finalize());
         let blob = staged
             .commit(byte_count, sha256)

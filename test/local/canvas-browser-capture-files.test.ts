@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { collectCanvasBrowserCapture } from "../../scripts/canvas-browser-capture.mjs";
-import { createCanvasFileCapture } from "../../scripts/canvas-browser-capture-files.mjs";
+import { canvasFileBodiesComplete, createCanvasFileCapture } from "../../scripts/canvas-browser-capture-files.mjs";
 
 const USER_ID = 41;
 const COURSE_ID = 88;
@@ -75,6 +75,44 @@ function testCollector(options: { downloadFile?: (input: { fileId: number; sourc
 }
 
 describe("Canvas file body capture", () => {
+  it("counts verified bodies and explicit Canvas omissions as complete", () => {
+    const verifiedReceipt = (fileId: number, status: "staged" | "archived") => ({
+      fileId,
+      status,
+      byteCount: 12,
+      sha256: "a".repeat(64),
+      contentType: "application/pdf",
+      sourceAuthenticity: "unverified",
+      ...(status === "staged" ? { stagedFile: "b".repeat(32) + ".blob", expectedSize: 12 } : {}),
+    });
+    expect(canvasFileBodiesComplete([
+      verifiedReceipt(1, "staged"),
+      verifiedReceipt(2, "archived"),
+      { fileId: 3, status: "gap", reason: "locked" },
+      { fileId: 4, status: "gap", reason: "not-applicable" },
+      { fileId: 6, status: "gap", reason: "unpublished" },
+      { fileId: 7, status: "gap", reason: "empty" },
+    ])).toBe(true);
+    expect(canvasFileBodiesComplete([])).toBe(true);
+  });
+
+  it("keeps failed, unverified, malformed and unattempted body receipts incomplete", () => {
+    for (const receipt of [
+      { fileId: 1, status: "gap", reason: "HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH" },
+      { fileId: 1, status: "gap", reason: "HELPER_DOWNLOAD_REQUEST_FAILED" },
+      { fileId: 1, status: "gap", reason: "file-count-limit" },
+      { fileId: 1, status: "gap", reason: "not-attempted" },
+      { fileId: 1, status: "gap", reason: "parent-unavailable" },
+      { fileId: 1, status: "gap", reason: "unsupported" },
+      { status: "staged" },
+      { fileId: 1, status: "staged", byteCount: 1 },
+      { fileId: 1, status: "unknown" },
+      null,
+    ]) {
+      expect(canvasFileBodiesComplete([receipt as Record<string, unknown>])).toBe(false);
+    }
+  });
+
   it("downloads a globally unique file before sanitizing and stores only an opaque receipt", async () => {
     const test = testCollector({});
     const capture = await test.capture;
@@ -114,6 +152,21 @@ describe("Canvas file body capture", () => {
       { fileId: FILE_ID, status: "gap", reason: "HTTP_STATUS_REJECTED" },
     ]);
     expect(JSON.stringify(capture)).not.toMatch(/private\.invalid|synthetic-secret/u);
+  });
+
+  it("omits an empty body only when Canvas metadata confirms size zero", async () => {
+    const empty = { kind: "empty", fileId: FILE_ID, byteCount: 0, sourceAuthenticity: "unverified" };
+    const zeroSize = testCollector({ fileItem: { size: 0 }, downloadFile: async () => empty });
+    const zeroCapture = await zeroSize.capture;
+    const zeroReceipt = zeroCapture.resources.find((resource) => resource.endpoint === "fileBodies")?.items;
+    expect(zeroReceipt).toEqual([{ fileId: FILE_ID, status: "gap", reason: "empty" }]);
+    expect(canvasFileBodiesComplete(zeroReceipt ?? [])).toBe(true);
+
+    const nonzeroSize = testCollector({ fileItem: { size: 1 }, downloadFile: async () => empty });
+    const nonzeroCapture = await nonzeroSize.capture;
+    const nonzeroReceipt = nonzeroCapture.resources.find((resource) => resource.endpoint === "fileBodies")?.items;
+    expect(nonzeroReceipt).toEqual([{ fileId: FILE_ID, status: "gap", reason: "EMPTY_RESPONSE" }]);
+    expect(canvasFileBodiesComplete(nonzeroReceipt ?? [])).toBe(false);
   });
 
   it("preserves the fixed native download error code as the per-file gap reason", async () => {
@@ -205,8 +258,12 @@ describe("Canvas detail gap aggregation", () => {
       { id: 902, url: "unsafe/page", published: true, locked_for_user: false },
     ] });
     const capture = await test.capture;
-    expect(capture.coverage.find((row) => row.endpoint === "page" && row.courseId === COURSE_ID))
-      .toMatchObject({ status: "gap", reason: "invalid-slug" });
+    expect(capture.coverage).toContainEqual({
+      endpoint: "page", courseId: COURSE_ID, status: "gap", reason: "locked",
+    });
+    expect(capture.coverage).toContainEqual({
+      endpoint: "page", courseId: COURSE_ID, status: "gap", reason: "invalid-slug",
+    });
   });
 });
 
@@ -254,6 +311,39 @@ describe("Canvas file revision conflicts", () => {
       stagedFile: stagedName(1), sourceAuthenticity: "unverified" }]);
   });
 
+  it("keeps a raster declaration through metadata conflicts and rejects non-raster staged bytes", async () => {
+    const downloads: Array<Record<string, unknown>> = [];
+    const capture = createCanvasFileCapture({
+      downloadFile: async (input: Record<string, unknown>) => {
+        downloads.push(input);
+        return { kind: "staged", fileId: 900, stagedFile: stagedName(downloads.length), byteCount: 27,
+          sha256: stagedHash(downloads.length), contentType: "application/pdf", sourceAuthenticity: "unverified" };
+      },
+      progress: async () => {},
+    });
+    await capture.capture({ ...file(T1), url: undefined, "content-type": "image/jpeg" });
+    await capture.capture({ ...file(T1), "content-type": "application/pdf" });
+    expect(downloads).toHaveLength(1);
+    expect(downloads[0]?.contentType).toBe("image/jpeg");
+    expect(capture.finish()).toEqual([{ fileId: 900, status: "gap", reason: "HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH" }]);
+  });
+
+  it("fails a fresh non-raster receipt when a later duplicate declares an image", async () => {
+    const direct = directCapture();
+    direct.downloadFile.mockImplementation(async (input: { fileId: number }) => ({
+      kind: "staged" as const,
+      fileId: input.fileId,
+      stagedFile: stagedName(1),
+      byteCount: 27,
+      sha256: stagedHash(1),
+      contentType: "application/pdf",
+      sourceAuthenticity: "unverified" as const,
+    }));
+    await direct.capture.capture({ ...file(T1), "content-type": "application/pdf" });
+    await direct.capture.capture({ ...file(T1), "content-type": "image/jpeg" });
+    expect(direct.capture.finish()).toEqual([{ fileId: 900, status: "gap", reason: "HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH" }]);
+  });
+
   it("re-downloads instead of keeping reused bytes when a duplicate record conflicts", async () => {
     const direct = directCapture({ reusedFirst: true });
     await direct.capture.capture(file(T1));
@@ -295,6 +385,20 @@ describe("Canvas file revision conflicts", () => {
     expect(direct.capture.finish()).toEqual([{ fileId: 900, status: "staged", expectedSize: 27,
       byteCount: 27, sha256: stagedHash(1), contentType: "application/pdf",
       stagedFile: stagedName(1), sourceAuthenticity: "unverified" }]);
+  });
+
+  it("fails an empty omission when a later duplicate contradicts the zero size", async () => {
+    const capture = createCanvasFileCapture({ downloadFile: async (input: { fileId: number }) => ({
+      kind: "empty" as const,
+      fileId: input.fileId,
+      byteCount: 0,
+      sourceAuthenticity: "unverified" as const,
+    }), progress: async () => {} });
+    await capture.capture({ ...file(T1), size: 0 });
+    await capture.capture({ ...file(T1), size: 27 });
+    const receipts = capture.finish();
+    expect(receipts).toEqual([{ fileId: 900, status: "gap", reason: "invalid-or-oversized-file-size" }]);
+    expect(canvasFileBodiesComplete(receipts)).toBe(false);
   });
 
   it("does not pass stale revision evidence to reuse after conflicting metadata arrives before a URL", async () => {

@@ -377,6 +377,8 @@ export async function readCanvasBrowserApi(input, fetchAdapter = globalThis.fetc
         });
       } catch { fail(controller.signal.aborted ? codes.budget : codes.transport); }
       finally { reportProgress("CANVAS_GET_FINISHED"); }
+      // A later page cannot establish that an already accessible list is disabled.
+      if (pages > 0 && (response.status === 403 || response.status === 404)) fail(codes.transport);
       if (response.status === 401) fail(codes.session);
       if (response.status === 403) {
         if (route.optionalDenied === true) return { status: "gap", reason: "FORBIDDEN_OPTIONAL", items: [], pages };

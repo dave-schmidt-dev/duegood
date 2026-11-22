@@ -52,7 +52,7 @@ async function verifySocketPath() {
   return true;
 }
 
-function sanitizeFrame(frame, command) {
+export function sanitizeFrame(frame, command) {
   if (frame?.progress !== undefined) {
     if (Object.keys(frame).length !== 1 || !PROGRESS_STATES.has(frame.progress)) throw new Error("INVALID_PROGRESS");
     const prefix = ["capture", "refresh"].includes(command) ? "CANVAS_CAPTURE_PROGRESS" : "PROBE_PROGRESS";
@@ -68,20 +68,9 @@ function sanitizeFrame(frame, command) {
   }
   if (typeof frame?.status !== "string" || !/^[A-Z0-9_]+$/.test(frame.status)) throw new Error("INVALID_RESPONSE");
   const keys = Object.keys(frame);
-  if ((command === "capture" || command === "refresh") && keys.includes("resourceCount")) {
-    if (frame.status !== "PARTIAL" || keys.length !== 7
-        || !["resourceCount", "itemCount", "gapCount", "dailyGapCount", "omissionCount"]
-          .every((key) => Number.isSafeInteger(frame[key]) && frame[key] >= 0 && frame[key] <= 100_000)
-        || frame.fileBodiesIncomplete !== true) throw new Error("INVALID_RESPONSE");
-    return {
-      status: frame.status,
-      resourceCount: frame.resourceCount,
-      itemCount: frame.itemCount,
-      gapCount: frame.gapCount,
-      dailyGapCount: frame.dailyGapCount,
-      omissionCount: frame.omissionCount,
-      fileBodiesIncomplete: true,
-    };
+  if ((command === "capture" || command === "refresh")
+      && (keys.includes("resourceCount") || ["COMPLETE", "PARTIAL"].includes(frame.status))) {
+    return captureSummary(frame, "INVALID_RESPONSE");
   }
   if ((command === "capture" || command === "refresh") && frame.status === "REQUEST_FAILED"
       && keys.length === 2 && typeof frame.errorCode === "string"
@@ -334,23 +323,25 @@ function safeImportErrorCode(error) {
     ? error.code : "NATIVE_IMPORT_FAILED";
 }
 
-function captureSummary(frame) {
+function captureSummary(frame, invalidResponse = "INVALID_CAPTURE_RESPONSE") {
   const keys = ["status", "resourceCount", "itemCount", "gapCount", "dailyGapCount", "omissionCount", "fileBodiesIncomplete"];
   if (!frame || typeof frame !== "object" || Array.isArray(frame)
       || Object.keys(frame).length !== keys.length || keys.some((key) => !Object.hasOwn(frame, key))
-      || frame.status !== "PARTIAL" || frame.fileBodiesIncomplete !== true
+      || !["COMPLETE", "PARTIAL"].includes(frame.status) || typeof frame.fileBodiesIncomplete !== "boolean"
+      || (frame.status === "COMPLETE"
+        && (frame.gapCount !== 0 || frame.dailyGapCount !== 0 || frame.fileBodiesIncomplete))
       || !["resourceCount", "itemCount", "gapCount", "dailyGapCount", "omissionCount"].every((key) =>
         Number.isSafeInteger(frame[key]) && frame[key] >= 0 && frame[key] <= 100_000)) {
-    throw new Error("INVALID_CAPTURE_RESPONSE");
+    throw new Error(invalidResponse);
   }
   return {
-    status: "PARTIAL",
+    status: frame.status,
     resourceCount: frame.resourceCount,
     itemCount: frame.itemCount,
     gapCount: frame.gapCount,
     dailyGapCount: frame.dailyGapCount,
     omissionCount: frame.omissionCount,
-    fileBodiesIncomplete: true,
+    fileBodiesIncomplete: frame.fileBodiesIncomplete,
   };
 }
 
@@ -369,7 +360,7 @@ function captureSummary(frame) {
  * @property {(status: string) => void} [reportImportProgress]
  */
 
-/** Captures and imports one owner-bound Canvas session while retaining PARTIAL capture semantics.
+/** Captures and imports one owner-bound Canvas session with a bounded completion summary.
  * @param {CanvasRefreshOptions} options
  */
 export async function runCanvasBrowserRefresh({
@@ -414,7 +405,7 @@ export async function runCanvasBrowserRefresh({
   try {
     captured = await captureWithSignInWindow({ ready, capture: () => capture(boundId), start, stop, reportSignInWindow });
   } catch { captured = undefined; }
-  if (captured?.status !== "PARTIAL") {
+  if (!["COMPLETE", "PARTIAL"].includes(captured?.status)) {
     await invalidatePreCaptureAttempt();
     return captureFailureSummary(captured ?? { status: "NOT_RUNNING" });
   }
@@ -469,7 +460,7 @@ async function main() {
   else if (command === "capture") {
     result = await sendCommand(command, CAPTURE_TIMEOUT_MS, captureUserId).catch(() => undefined)
       ?? { status: "NOT_RUNNING" };
-    if (result.status === "PARTIAL") result.snapshotPath = snapshotPath;
+    if (["COMPLETE", "PARTIAL"].includes(result.status)) result.snapshotPath = snapshotPath;
   } else {
     result = await sendCommand(command, command === "probe" ? PROBE_TIMEOUT_MS : 5_000).catch(() => undefined)
       ?? { status: "NOT_RUNNING" };

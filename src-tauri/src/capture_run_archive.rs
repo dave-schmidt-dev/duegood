@@ -111,7 +111,7 @@ fn validate_generation(
         || manifest["snapshotSha256"] != snapshot_sha256
         || manifest["identity"]["origin"] != CANVAS_ORIGIN
         || manifest["identity"]["userId"] != user_id
-        || manifest["complete"] != false
+        || !manifest["complete"].is_boolean()
     {
         return Err(invalid_data(
             "archive manifest does not match terminal receipt",
@@ -132,7 +132,7 @@ fn validate_generation(
         || snapshot["generationId"] != generation_id
         || snapshot["identity"]["origin"] != CANVAS_ORIGIN
         || snapshot["identity"]["userId"] != user_id
-        || snapshot["complete"] != false
+        || snapshot["complete"] != manifest["complete"]
     {
         return Err(invalid_data(
             "archived snapshot does not match terminal receipt",

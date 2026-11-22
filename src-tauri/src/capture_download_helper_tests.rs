@@ -59,6 +59,7 @@ fn download_error_codes_are_fixed_and_do_not_include_response_details() {
         downloads::DownloadError::ConcurrencyLockPoisoned,
         downloads::DownloadError::SignInResponse,
         downloads::DownloadError::MimeSignatureMismatch,
+        downloads::DownloadError::CanvasConfirmedEmpty,
         downloads::DownloadError::SizeMismatch,
         downloads::DownloadError::UnsafeStagingDirectory,
         downloads::DownloadError::StagingFailed,
@@ -75,6 +76,31 @@ fn download_error_codes_are_fixed_and_do_not_include_response_details() {
         downloads::DownloadError::HttpStatus(403).code(),
         "http-status"
     );
+}
+
+#[test]
+fn empty_download_is_canvas_confirmed_only_when_metadata_size_is_zero() {
+    for (expected_size, expected_error) in [
+        (Some(0), downloads::DownloadError::CanvasConfirmedEmpty),
+        (Some(1), downloads::DownloadError::SizeMismatch),
+    ] {
+        let (origin, requests, server) = mock_server(vec![("200 OK\r\nContent-Type: image/jpeg\r\n".into(), Vec::new())]);
+        let client = downloads::DownloadClient::with_test_origin(&origin).unwrap();
+        let (root, staging) = staging("capture-empty-download");
+        let source = format!("{origin}/files/41/download?download_frd=1");
+
+        assert_eq!(
+            client
+                .download_file_to_staging(&source, 41, expected_size, None, &staging)
+                .err(),
+            Some(expected_error)
+        );
+        let request = requests.recv().unwrap().to_ascii_lowercase();
+        assert!(!request.contains("authorization:"));
+        assert!(!request.contains("cookie:"));
+        server.join().unwrap();
+        assert_eq!(std::fs::read_dir(root.path().join("staging")).unwrap().count(), 0);
+    }
 }
 
 #[test]
@@ -99,7 +125,7 @@ fn downloads_request_protocol_accepts_legacy_and_browser_redirect_shapes() {
     assert!(browser.browser_staged_path.is_none());
 
     let browser_body: CaptureDownloadRequest = serde_json::from_str(
-        r#"{"fileId":41,"browserStagedPath":"/tmp/staging/.duegood-browser-550e8400-e29b-41d4-a716-446655440000.part","browserByteCount":18,"browserContentType":"application/pdf","stagingDirectory":"/tmp/staging"}"#,
+        r#"{"fileId":41,"browserStagedPath":"/tmp/staging/.duegood-browser-550e8400-e29b-41d4-a716-446655440000.part","browserByteCount":18,"browserContentType":"application/pdf","declaredContentType":"image/jpeg","stagingDirectory":"/tmp/staging"}"#,
     )
     .unwrap();
     assert!(browser_body.verifier_url.is_none());
@@ -110,6 +136,10 @@ fn downloads_request_protocol_accepts_legacy_and_browser_redirect_shapes() {
     assert_eq!(
         browser_body.browser_content_type.as_deref(),
         Some("application/pdf")
+    );
+    assert_eq!(
+        browser_body.declared_content_type.as_deref(),
+        Some("image/jpeg")
     );
 }
 
@@ -139,6 +169,7 @@ fn adopts_browser_staged_file_into_opaque_native_blob() {
             pdf.len() as u64,
             Some(pdf.len() as u64),
             Some("application/pdf"),
+            None,
             &staging,
         )
         .unwrap();
@@ -172,7 +203,7 @@ fn browser_stage_adoption_rejects_symlinks_public_modes_and_foreign_directories(
     std::os::unix::fs::symlink(&source_path, &alias).unwrap();
     assert_eq!(
         client
-            .adopt_browser_staged_file(&alias, 41, pdf.len() as u64, None, None, &staging)
+            .adopt_browser_staged_file(&alias, 41, pdf.len() as u64, None, None, None, &staging)
             .err(),
         Some(downloads::DownloadError::UnsafeStagingDirectory)
     );
@@ -183,7 +214,7 @@ fn browser_stage_adoption_rejects_symlinks_public_modes_and_foreign_directories(
     let foreign = write_browser_stage(&outside, "550e8400-e29b-41d4-a716-446655440002", pdf);
     assert_eq!(
         client
-            .adopt_browser_staged_file(&foreign, 41, pdf.len() as u64, None, None, &staging)
+            .adopt_browser_staged_file(&foreign, 41, pdf.len() as u64, None, None, None, &staging)
             .err(),
         Some(downloads::DownloadError::UnsafeStagingDirectory)
     );
@@ -193,7 +224,7 @@ fn browser_stage_adoption_rejects_symlinks_public_modes_and_foreign_directories(
     arbitrary_file.write_all(pdf).unwrap();
     assert_eq!(
         client
-            .adopt_browser_staged_file(&arbitrary, 41, pdf.len() as u64, None, None, &staging)
+            .adopt_browser_staged_file(&arbitrary, 41, pdf.len() as u64, None, None, None, &staging)
             .err(),
         Some(downloads::DownloadError::UnsafeStagingDirectory)
     );
@@ -204,7 +235,7 @@ fn browser_stage_adoption_rejects_symlinks_public_modes_and_foreign_directories(
         std::fs::set_permissions(&source_path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert_eq!(
             client
-                .adopt_browser_staged_file(&source_path, 41, pdf.len() as u64, None, None, &staging)
+                .adopt_browser_staged_file(&source_path, 41, pdf.len() as u64, None, None, None, &staging)
                 .err(),
             Some(downloads::DownloadError::UnsafeStagingDirectory)
         );
@@ -221,7 +252,7 @@ fn browser_stage_adoption_checks_lengths_and_sniffed_mime_before_publishing() {
         write_browser_stage(&staging_path, "550e8400-e29b-41d4-a716-446655440003", pdf);
     assert_eq!(
         client
-            .adopt_browser_staged_file(&source_path, 41, pdf.len() as u64 + 1, None, None, &staging)
+            .adopt_browser_staged_file(&source_path, 41, pdf.len() as u64 + 1, None, None, None, &staging)
             .err(),
         Some(downloads::DownloadError::SizeMismatch)
     );
@@ -233,12 +264,72 @@ fn browser_stage_adoption_checks_lengths_and_sniffed_mime_before_publishing() {
                 pdf.len() as u64,
                 None,
                 Some("image/png"),
+                None,
                 &staging,
             )
             .err(),
         Some(downloads::DownloadError::MimeSignatureMismatch)
     );
     assert_eq!(std::fs::read_dir(&staging_path).unwrap().count(), 1);
+}
+
+#[test]
+fn browser_stage_enforces_declared_raster_type_and_records_detected_image_type() {
+    let client = downloads::DownloadClient::with_test_origin("http://127.0.0.1:9").unwrap();
+    let (root, staging) = staging("capture-declared-image-type");
+    let staging_path = root.path().join("staging");
+    let png = b"\x89PNG\r\n\x1a\nsynthetic";
+    let png_path = write_browser_stage(
+        &staging_path,
+        "550e8400-e29b-41d4-a716-446655440010",
+        png,
+    );
+    let receipt = client
+        .adopt_browser_staged_file(
+            &png_path,
+            41,
+            png.len() as u64,
+            None,
+            Some("image/jpeg"),
+            Some("image/jpeg"),
+            &staging,
+        )
+        .unwrap();
+    assert_eq!(receipt.content_type, "image/png");
+
+    for (source_id, body, response_type) in [
+        (
+            "550e8400-e29b-41d4-a716-446655440011",
+            b"\0\0\0\x14ftypisom\0\0\0\0isom".as_slice(),
+            Some("image/jpeg"),
+        ),
+        (
+            "550e8400-e29b-41d4-a716-446655440012",
+            b"PK\x03\x04synthetic ZIP".as_slice(),
+            Some("application/octet-stream"),
+        ),
+        (
+            "550e8400-e29b-41d4-a716-446655440013",
+            b"MZ synthetic executable".as_slice(),
+            None,
+        ),
+    ] {
+        let path = write_browser_stage(&staging_path, source_id, body);
+        assert_eq!(
+            client
+                .adopt_browser_staged_file(
+                    &path,
+                    41,
+                    body.len() as u64,
+                    None,
+                    response_type,
+                    Some("image/jpeg"),
+                    &staging,
+                )
+                .err(),
+            Some(downloads::DownloadError::MimeSignatureMismatch)
+        );
+    }
 }
 
 #[test]
@@ -260,6 +351,7 @@ fn browser_location_downloads_staged_bytes_without_credentials() {
             &format!("{origin}/first"),
             41,
             Some(pdf.len() as u64),
+            None,
             &staging,
         )
         .unwrap();
@@ -296,6 +388,7 @@ fn browser_location_downloads_reject_unsafe_redirect_before_following() {
                 &source,
                 &format!("{origin}/first"),
                 41,
+                None,
                 None,
                 &staging,
             )

@@ -11,6 +11,7 @@ import {
   verifyStagedCanvasBlob,
   verifyStoredCanvasBlob,
 } from "./canvas-browser-archive-blobs.mjs";
+import { summarizeCanvasCaptureOutcome } from "./canvas-browser-refresh-scope.mjs";
 
 const ORIGIN = "https://marymount.instructure.com";
 const ARCHIVE_NAME = "canvas-capture-archive";
@@ -133,7 +134,7 @@ function validateSnapshot(snapshot) {
   if (!isRecord(snapshot) || snapshot.schemaVersion !== 2 || snapshot.source !== "canvas-browser"
       || !Number.isSafeInteger(snapshot.runId) || snapshot.runId <= 0
       || typeof snapshot.generationId !== "string" || !/^[a-f0-9]{32}$/u.test(snapshot.generationId)
-      || snapshot.complete !== false || !isRecord(snapshot.identity) || snapshot.identity.origin !== ORIGIN
+      || typeof snapshot.complete !== "boolean" || !isRecord(snapshot.identity) || snapshot.identity.origin !== ORIGIN
       || !Number.isSafeInteger(snapshot.identity.userId) || snapshot.identity.userId <= 0
       || !isRecord(snapshot.activeCourses) || snapshot.activeCourses.complete !== true
       || !Array.isArray(snapshot.activeCourses.courseIds)
@@ -144,6 +145,17 @@ function validateSnapshot(snapshot) {
         !== JSON.stringify(["course", "assignments", "assignmentGroups", "submissions"])
       || typeof snapshot.capturedAt !== "string" || Number.isNaN(Date.parse(snapshot.capturedAt))
       || !Array.isArray(snapshot.resources) || !Array.isArray(snapshot.coverage)) throw archiveError("INVALID_SNAPSHOT");
+  if (snapshot.complete) {
+    let outcome;
+    try {
+      outcome = summarizeCanvasCaptureOutcome(snapshot);
+    } catch {
+      throw archiveError("COMPLETE_COVERAGE_INCOMPLETE");
+    }
+    if (outcome.requiredGapCount !== 0 || outcome.failureGapCount !== 0 || outcome.fileBodiesIncomplete) {
+      throw archiveError("COMPLETE_COVERAGE_INCOMPLETE");
+    }
+  }
   const activeResource = snapshot.resources.find((resource) => resource?.endpoint === "coursesActive" && resource.courseId === null);
   if (!activeResource || !Array.isArray(activeResource.items)
       || JSON.stringify(activeResource.items.map((item) => item?.id).sort((a, b) => a - b))
@@ -400,7 +412,7 @@ async function atomicPointer(root, generationId, runId, snapshotSha256) {
 }
 
 /**
- * Stores a private partial capture as an immutable generation. Blobs are promoted only when a
+ * Stores a private capture as an immutable generation. Blobs are promoted only when a
  * native fileBodies receipt binds their owner-only staging file, byte count and SHA-256.
  *
  * @param {object} options Capture values.
@@ -408,7 +420,7 @@ async function atomicPointer(root, generationId, runId, snapshotSha256) {
  * @param {object} options.snapshot Sanitized schema-v2 Canvas capture linked to its allocated run and generation.
  * @param {string} options.stagingDirectory Existing owner-only 0700 native blob staging directory.
  * @param {AbortSignal} [options.signal] Cancellation; pending output is removed before return.
- * @returns {Promise<{generationId: string, capturedAt: string, complete: false, resourceCount: number, itemCount: number, blobCount: number, blobBytes: number, archivedSnapshot: object}>} Receipt and archive-referenced snapshot for private local persistence.
+ * @returns {Promise<{generationId: string, capturedAt: string, complete: boolean, resourceCount: number, itemCount: number, blobCount: number, blobBytes: number, archivedSnapshot: object}>} Receipt and archive-referenced snapshot for private local persistence.
  */
 export async function saveCanvasCaptureGeneration({ appDirectory, snapshot, stagingDirectory, signal = undefined } = {}) {
   throwIfAborted(signal);
@@ -488,7 +500,7 @@ export async function saveCanvasCaptureGeneration({ appDirectory, snapshot, stag
       runId: snapshot.runId,
       generationId,
       capturedAt: snapshot.capturedAt,
-      complete: false,
+      complete: snapshot.complete,
       identity: { origin: ORIGIN, userId: snapshot.identity.userId },
       snapshotBytes: snapshotBytes.length,
       snapshotSha256,
@@ -514,7 +526,7 @@ export async function saveCanvasCaptureGeneration({ appDirectory, snapshot, stag
       runId: snapshot.runId,
       snapshotSha256,
       capturedAt: snapshot.capturedAt,
-      complete: false,
+      complete: snapshot.complete,
       resourceCount: manifest.resourceCount,
       itemCount,
       blobCount: manifest.blobCount,

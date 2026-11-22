@@ -208,8 +208,11 @@ pub(super) fn validate_active_coverage(
                 .get("reason")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
+            let empty_bodies =
+                endpoint == "fileBodies" && status == "gap" && reason.as_deref() == Some("empty");
             if (status == "complete" && reason.is_some())
                 || (status != "complete"
+                    && !empty_bodies
                     && !reason
                         .as_deref()
                         .is_some_and(|value| COVERAGE_GAP_REASONS.contains(&value)))

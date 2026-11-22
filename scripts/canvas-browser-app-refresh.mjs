@@ -41,19 +41,21 @@ function errorCodeFor(result) {
   if (result?.status === "IDENTITY_MISMATCH") return "IDENTITY_MISMATCH";
   if (result?.errorCode === "SURVEY_POPUP_BLOCKING") return "SURVEY_POPUP_BLOCKING";
   if (result?.errorCode === "CAPTURE_STATE_UNAVAILABLE") return "CAPTURE_STATE_UNAVAILABLE";
-  if (result?.status === "PARTIAL" && Number.isSafeInteger(result?.dailyGapCount) && result.dailyGapCount > 0) return "CAPTURE_GAPS";
+  if (result?.status === "PARTIAL") return "CAPTURE_GAPS";
   return "BROWSER_REFRESH_FAILED";
 }
 
 function sanitizedResult(result) {
   const native = result?.nativeImport;
-  const captureValid = result?.status === "PARTIAL"
-    && result?.fileBodiesIncomplete === true
+  const captureValid = ["COMPLETE", "PARTIAL"].includes(result?.status)
+    && typeof result?.fileBodiesIncomplete === "boolean"
     && validCount(result.resourceCount, MAX_CAPTURE_COUNT)
     && validCount(result.itemCount, MAX_CAPTURE_COUNT)
     && validCount(result.gapCount, MAX_CAPTURE_COUNT)
     && validCount(result.dailyGapCount, MAX_CAPTURE_COUNT)
-    && validCount(result.omissionCount, MAX_CAPTURE_COUNT);
+    && validCount(result.omissionCount, MAX_CAPTURE_COUNT)
+    && (result.status !== "COMPLETE"
+      || result.gapCount === 0 && result.dailyGapCount === 0 && result.fileBodiesIncomplete === false);
   const importValid = native?.status === "IMPORTED"
     && validCount(native.importedCourses, MAX_IMPORT_COUNT)
     && validCount(native.archivedCourses, MAX_IMPORT_COUNT)
@@ -61,15 +63,18 @@ function sanitizedResult(result) {
     && validCount(native.reusedBlobs, MAX_IMPORT_COUNT)
     && validCount(native.bytesVerified, MAX_VERIFIED_BYTES)
     && typeof native.alreadyCurrent === "boolean";
-  const successfulDailyRefresh = captureValid && importValid && result.dailyGapCount === 0;
-  const errorCode = successfulDailyRefresh ? undefined
-    : ERROR_CODES.has(errorCodeFor(result)) ? errorCodeFor(result) : "BROWSER_REFRESH_FAILED";
+  const completeRefresh = captureValid && importValid && result.status === "COMPLETE"
+    && result.gapCount === 0 && result.dailyGapCount === 0 && result.fileBodiesIncomplete === false;
+  const inferredErrorCode = errorCodeFor(result);
+  const errorCode = completeRefresh ? undefined
+    : ERROR_CODES.has(inferredErrorCode) && (inferredErrorCode !== "CAPTURE_GAPS" || captureValid)
+      ? inferredErrorCode : "BROWSER_REFRESH_FAILED";
   return {
     type: "result",
-    status: successfulDailyRefresh ? "complete" : "incomplete",
+    status: completeRefresh ? "complete" : "incomplete",
     resourceCount: countOrZero(result?.resourceCount, MAX_CAPTURE_COUNT),
     itemCount: countOrZero(result?.itemCount, MAX_CAPTURE_COUNT),
-    gapCount: countOrZero(result?.dailyGapCount, MAX_CAPTURE_COUNT),
+    gapCount: countOrZero(result?.gapCount, MAX_CAPTURE_COUNT),
     omissionCount: countOrZero(result?.omissionCount, MAX_CAPTURE_COUNT),
     importedCourses: countOrZero(native?.importedCourses, MAX_IMPORT_COUNT),
     archivedCourses: countOrZero(native?.archivedCourses, MAX_IMPORT_COUNT),

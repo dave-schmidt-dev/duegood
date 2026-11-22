@@ -323,7 +323,8 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
         if (reloaded) data = state.data;
         const fileNotices = reloaded ? data.refreshes
           .filter((refresh) => refresh.source === "canvas" && !previousRefreshIds.has(refresh.id))
-          .flatMap((refresh) => refresh.changes.filter((change) => change.kind === "notice" && change.title === "Canvas file check").map((change) => change.detail)) : [];
+          .flatMap((refresh) => refresh.changes.filter((change) => change.kind === "notice"
+            && (change.title === "Canvas file check" || change.title === "Personal Canvas file check")).map((change) => change.detail)) : [];
         const feedback = fullRefreshFeedback(result, fileNotices);
         refreshState = feedback.state;
         refreshDetail = feedback.detail;

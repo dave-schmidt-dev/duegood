@@ -145,6 +145,14 @@ fn hash_mismatch_and_media_mismatch_remove_pending_file() {
         Some(ResourceArchiveError::UnsupportedMedia)
     );
     assert_eq!(fs::read_dir(archive_root(&second_root)).unwrap().count(), 0);
+
+    let image_root = TempRoot::new("browser-resource-raster");
+    let wrong_label = fixture(&image_root, b"\x89PNG\r\n\x1a\n", "image/jpeg");
+    assert_eq!(
+        promote_capture_blobs(image_root.path(), &wrong_label, |_, _| {}).err(),
+        Some(ResourceArchiveError::UnsupportedMedia)
+    );
+    assert_eq!(fs::read_dir(archive_root(&image_root)).unwrap().count(), 0);
 }
 
 #[test]

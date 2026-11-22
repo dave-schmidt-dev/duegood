@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde_json::{json, Value};
 
+use super::OPTIONAL_FILE_BODY_REASONS;
 use crate::browser_bundle::ValidatedCaptureBundle;
 
 const MAX_DIAGNOSTIC_COUNT: usize = 100_000;
@@ -54,6 +55,7 @@ const DIAGNOSTIC_ENDPOINTS: &[&str] = &[
 const DIAGNOSTIC_REASONS: &[&str] = &[
     "capture-budget",
     "detail-budget",
+    "empty",
     "disabled",
     "forbidden-optional",
     "invalid-slug",
@@ -67,7 +69,6 @@ const DIAGNOSTIC_REASONS: &[&str] = &[
     "unsupported",
     "unpublished",
 ];
-const OPTIONAL_FILE_REASONS: &[&str] = &["locked", "unpublished", "not-applicable", "unsupported"];
 const FILE_RECEIPT_REASONS: &[&str] = &[
     "CANCELED",
     "REQUEST_TIMEOUT",
@@ -111,6 +112,7 @@ const FILE_RECEIPT_REASONS: &[&str] = &[
     "HELPER_DOWNLOAD_STAGING_FAILED",
     "redirect-handoff-pending",
     "invalid-download-result",
+    "invalid-empty-response",
     "file-id-mismatch",
     "invalid-staged-size",
     "file-size-mismatch",
@@ -171,20 +173,44 @@ pub(super) fn import_diagnostics(
 /// Adds bounded plain-language reasons to the same Activity entry as the imported data.
 pub(super) fn file_history_notices(bundle: &ValidatedCaptureBundle) -> Vec<Value> {
     let diagnostics = file_receipt_diagnostics(bundle);
-    diagnostics["reasonCounts"].as_array().into_iter().flatten().map(|row| {
-        let count = row["count"].as_u64().unwrap_or(0);
-        let explanation = match row["reason"].as_str().unwrap_or("other") {
-            "HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH" => "could not be verified: the downloaded contents did not match a supported file type. Existing copies were kept",
-            "HELPER_DOWNLOAD_SIGN_IN_RESPONSE" => "returned a sign-in page instead of a file. Sign in to Canvas and refresh again",
-            "locked" => "locked in Canvas; skipped",
-            "unpublished" => "unpublished in Canvas; skipped",
-            "not-applicable" => "macOS metadata companions skipped; the matching documents were archived",
-            "unsupported" => "unsupported formats; skipped",
-            "HELPER_DOWNLOAD_SIZE_MISMATCH" | "file-size-mismatch" => "had an unexpected download size. Existing copies were kept; try refreshing again",
-            _ => "could not be downloaded. Existing copies were kept; try refreshing again",
-        };
-        json!({"kind": "notice", "title": "Canvas file check", "detail": format!("{count} {}: {explanation}.", if count == 1 { "file" } else { "files" })})
-    }).collect()
+    let mut notices = Vec::new();
+    for (counts, label, title) in [
+        (&diagnostics["reasonCounts"], "file", "Canvas file check"),
+        (
+            &diagnostics["personalFileReceipts"]["reasonCounts"],
+            "personal file",
+            "Personal Canvas file check",
+        ),
+    ] {
+        for row in counts.as_array().into_iter().flatten() {
+            let count = row["count"].as_u64().unwrap_or(0);
+            let reason = row["reason"].as_str().unwrap_or("other");
+            let explanation = file_notice_explanation(reason);
+            notices.push(json!({
+                "kind": "notice",
+                "title": title,
+                "detail": format!(
+                    "{count} {}: {explanation}.",
+                    if count == 1 { label.to_owned() } else { format!("{label}s") }
+                )
+            }));
+        }
+    }
+    notices
+}
+
+fn file_notice_explanation(reason: &str) -> &'static str {
+    match reason {
+        "HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH" => "could not be verified: the downloaded contents did not match a supported file type. Existing copies were kept",
+        "HELPER_DOWNLOAD_SIGN_IN_RESPONSE" => "returned a sign-in page instead of a file. Sign in to Canvas and refresh again",
+        "empty" => "confirmed empty in Canvas and skipped",
+        "locked" => "locked in Canvas; skipped",
+        "unpublished" => "unpublished in Canvas; skipped",
+        "not-applicable" => "not applicable in Canvas; skipped",
+        "unsupported" => "unsupported formats; skipped",
+        "HELPER_DOWNLOAD_SIZE_MISMATCH" | "file-size-mismatch" => "had an unexpected download size. Existing copies were kept; try refreshing again",
+        _ => "could not be downloaded. Existing copies were kept; try refreshing again",
+    }
 }
 
 fn diagnostic_endpoint(value: &str) -> &'static str {
@@ -226,6 +252,28 @@ fn file_receipt_diagnostics(bundle: &ValidatedCaptureBundle) -> Value {
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or_default();
+    let mut personal_file_ids = BTreeSet::new();
+    let mut invalid_personal_files = 0usize;
+    for resource in resources.iter().filter(|resource| {
+        matches!(
+            resource.get("endpoint").and_then(Value::as_str),
+            Some("personalFiles" | "personalFile")
+        ) && resource.get("courseId").is_none_or(Value::is_null)
+            && resource.get("groupId").is_none_or(Value::is_null)
+            && resource.get("contextCode").is_none_or(Value::is_null)
+    }) {
+        let Some(items) = resource.get("items").and_then(Value::as_array) else {
+            bounded_increment(&mut invalid_personal_files);
+            continue;
+        };
+        for item in items {
+            let Some(id) = positive_id(item.get("id")) else {
+                bounded_increment(&mut invalid_personal_files);
+                continue;
+            };
+            personal_file_ids.insert(id);
+        }
+    }
     let mut listed_ids = BTreeSet::new();
     let mut invalid_listed_files = 0usize;
     let mut duplicate_listed_files = 0usize;
@@ -261,9 +309,12 @@ fn file_receipt_diagnostics(bundle: &ValidatedCaptureBundle) -> Value {
     }
 
     let mut receipts = HashMap::<u64, ReceiptKind>::new();
+    let mut personal_receipts = HashMap::<u64, ReceiptKind>::new();
+    let mut personal_duplicate_receipts = 0usize;
     let mut duplicate_receipts = 0usize;
     let mut invalid_receipts = 0usize;
     let mut reason_counts = BTreeMap::<&'static str, usize>::new();
+    let mut personal_reason_counts = BTreeMap::<&'static str, usize>::new();
     inspected = 0;
     for resource in resources
         .iter()
@@ -288,9 +339,14 @@ fn file_receipt_diagnostics(bundle: &ValidatedCaptureBundle) -> Value {
                 let count = reason_counts.entry(bucket).or_default();
                 *count = count.saturating_add(1).min(MAX_DIAGNOSTIC_COUNT);
             }
+            if status == "gap" && personal_file_ids.contains(&file_id) {
+                let bucket = file_receipt_reason(reason);
+                let count = personal_reason_counts.entry(bucket).or_default();
+                *count = count.saturating_add(1).min(MAX_DIAGNOSTIC_COUNT);
+            }
             let kind = match status {
                 "archived" | "staged" => ReceiptKind::Archived,
-                "gap" if reason.is_some_and(|value| OPTIONAL_FILE_REASONS.contains(&value)) => {
+                "gap" if reason.is_some_and(|value| OPTIONAL_FILE_BODY_REASONS.contains(&value)) => {
                     ReceiptKind::OptionalOmission
                 }
                 "gap" => ReceiptKind::Failed,
@@ -301,6 +357,15 @@ fn file_receipt_diagnostics(bundle: &ValidatedCaptureBundle) -> Value {
                     entry.insert(kind);
                 } else {
                     bounded_increment(&mut duplicate_receipts);
+                }
+            }
+            if personal_file_ids.contains(&file_id) {
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    personal_receipts.entry(file_id)
+                {
+                    entry.insert(kind);
+                } else {
+                    bounded_increment(&mut personal_duplicate_receipts);
                 }
             }
         }
@@ -323,6 +388,20 @@ fn file_receipt_diagnostics(bundle: &ValidatedCaptureBundle) -> Value {
             None => bounded_increment(&mut missing),
         }
     }
+    let mut personal_archived = 0usize;
+    let mut personal_omissions = 0usize;
+    let mut personal_failed = 0usize;
+    let mut personal_other = 0usize;
+    let mut personal_missing = 0usize;
+    for file_id in &personal_file_ids {
+        match personal_receipts.get(file_id) {
+            Some(ReceiptKind::Archived) => bounded_increment(&mut personal_archived),
+            Some(ReceiptKind::OptionalOmission) => bounded_increment(&mut personal_omissions),
+            Some(ReceiptKind::Failed) => bounded_increment(&mut personal_failed),
+            Some(ReceiptKind::Other) => bounded_increment(&mut personal_other),
+            None => bounded_increment(&mut personal_missing),
+        }
+    }
     json!({
         "activeFilesListed": listed_ids.len().min(MAX_DIAGNOSTIC_COUNT),
         "archivedReceipts": archived,
@@ -338,6 +417,20 @@ fn file_receipt_diagnostics(bundle: &ValidatedCaptureBundle) -> Value {
             .into_iter()
             .map(|(reason, count)| json!({"reason": reason, "count": count}))
             .collect::<Vec<_>>(),
+        "personalFileReceipts": {
+            "listed": personal_file_ids.len().min(MAX_DIAGNOSTIC_COUNT),
+            "archivedReceipts": personal_archived,
+            "optionalOmissionReceipts": personal_omissions,
+            "failedReceipts": personal_failed,
+            "otherReceipts": personal_other,
+            "missingReceipts": personal_missing,
+            "invalidListedFiles": invalid_personal_files,
+            "duplicateReceipts": personal_duplicate_receipts,
+            "reasonCounts": personal_reason_counts
+                .into_iter()
+                .map(|(reason, count)| json!({"reason": reason, "count": count}))
+                .collect::<Vec<_>>(),
+        },
     })
 }
 
@@ -345,7 +438,7 @@ fn file_receipt_reason(value: Option<&str>) -> &'static str {
     match value {
         Some(reason) => FILE_RECEIPT_REASONS
             .iter()
-            .chain(OPTIONAL_FILE_REASONS.iter())
+            .chain(OPTIONAL_FILE_BODY_REASONS.iter())
             .copied()
             .find(|allowed| *allowed == reason)
             .unwrap_or("other"),

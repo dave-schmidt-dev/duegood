@@ -1,5 +1,11 @@
 const MAX_FILE_DOWNLOADS = 5000;
 const MAX_FILE_BYTES = 256 * 1024 * 1024;
+const OPTIONAL_FILE_BODY_GAP_REASONS = new Set([
+  "empty",
+  "locked",
+  "not-applicable",
+  "unpublished",
+]);
 const DOWNLOAD_FAILURE_CODES = new Set([
   "CANCELED", "REQUEST_TIMEOUT", "INVALID_FILE_URL", "UNSAFE_REQUEST", "HTTP_STATUS_REJECTED",
   "RESPONSE_TOO_LARGE", "EMPTY_RESPONSE", "REDIRECT_HANDOFF_UNSUPPORTED", "REDIRECT_WITHOUT_LOCATION",
@@ -17,12 +23,62 @@ const DOWNLOAD_FAILURE_CODES = new Set([
   "HELPER_DOWNLOAD_SIZE_MISMATCH", "HELPER_DOWNLOAD_UNSAFE_STAGING_DIRECTORY",
   "HELPER_DOWNLOAD_STAGING_FAILED",
 ]);
+const RASTER_IMAGE_TYPES = new Set([
+  "image/jpeg", "image/png", "image/gif", "image/webp", "image/heic", "image/avif",
+]);
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function canonicalRasterImageType(value) {
+  if (typeof value !== "string") return null;
+  const contentType = value.split(";", 1)[0].trim().toLowerCase();
+  const canonical = contentType === "image/jpg" ? "image/jpeg"
+    : contentType === "image/heif" ? "image/heic" : contentType;
+  return RASTER_IMAGE_TYPES.has(canonical) ? canonical : null;
+}
+
+/** Reports whether a MIME type is one of the supported raster image types. */
+export function isRasterImageContentType(value) {
+  return canonicalRasterImageType(value) !== null;
+}
+
+/** Returns whether a file-body gap is a recognized Canvas omission. */
+export function isCanvasFileBodyOmission(receipt) {
+  return receipt?.status === "gap" && OPTIONAL_FILE_BODY_GAP_REASONS.has(receipt.reason);
+}
+
+/**
+ * Reports whether every captured file body was staged or explicitly omitted by Canvas.
+ *
+ * @param {Array<object>} receipts File body receipts from the capture collector.
+ * @returns {boolean} True when no body is missing or failed verification/download.
+ */
+export function canvasFileBodiesComplete(receipts) {
+  return Array.isArray(receipts) && receipts.every((receipt) => {
+    if (!isRecord(receipt) || !Number.isSafeInteger(receipt.fileId) || receipt.fileId <= 0) return false;
+    if (receipt.status === "gap") return isCanvasFileBodyOmission(receipt);
+    const validBytes = (receipt.status === "staged" || receipt.status === "archived")
+      && Number.isSafeInteger(receipt.byteCount) && receipt.byteCount > 0
+      && receipt.byteCount <= MAX_FILE_BYTES
+      && typeof receipt.sha256 === "string" && /^[a-f0-9]{64}$/u.test(receipt.sha256)
+      && typeof receipt.contentType === "string"
+      && /^[a-z0-9.+-]{1,64}\/[a-z0-9.+-]{1,64}$/u.test(receipt.contentType)
+      && receipt.sourceAuthenticity === "unverified";
+    if (!validBytes || receipt.status === "archived") return validBytes;
+    return typeof receipt.stagedFile === "string" && /^[a-f0-9]{32}\.blob$/u.test(receipt.stagedFile)
+      && (receipt.expectedSize === null || Number.isSafeInteger(receipt.expectedSize)
+        && receipt.expectedSize >= 0 && receipt.expectedSize === receipt.byteCount);
+  });
+}
+
 function validateStagedFileResult(result, candidate) {
+  if (isRecord(result) && result.kind === "empty") {
+    if (result.fileId !== candidate.fileId) return "file-id-mismatch";
+    if (result.byteCount !== 0 || result.sourceAuthenticity !== "unverified") return "invalid-empty-response";
+    return candidate.expectedSize === 0 ? "empty" : "EMPTY_RESPONSE";
+  }
   if (!isRecord(result) || result.kind !== "staged") {
     return isRecord(result) && result.kind === "redirect" ? "redirect-handoff-pending" : "invalid-download-result";
   }
@@ -40,6 +96,9 @@ function validateStagedFileResult(result, candidate) {
     return "invalid-content-type";
   }
   if (result.sourceAuthenticity !== "unverified") return "invalid-source-authenticity";
+  if (candidate.rasterContentType !== undefined && !isRasterImageContentType(result.contentType)) {
+    return "HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH";
+  }
   return undefined;
 }
 
@@ -91,7 +150,8 @@ export function createCanvasFileCapture({ downloadFile, progress }) {
     let candidate = candidates.get(item.id);
     if (candidate === undefined) {
       candidate = { fileId: item.id, sourceUrl: undefined, expectedSize: null, invalidSize: false,
-        revision: undefined, revisionConflict: false, conflictRetried: false };
+        revision: undefined, revisionConflict: false, conflictRetried: false,
+        rasterContentType: undefined };
       candidates.set(item.id, candidate);
     }
     if (typeof item.url === "string" && item.url.length > 0 && candidate.sourceUrl === undefined) {
@@ -112,6 +172,9 @@ export function createCanvasFileCapture({ downloadFile, progress }) {
       else if (JSON.stringify(candidate.identity) !== JSON.stringify(identity)) candidate.identityConflict = true;
     }
     const revision = revisionEvidence(item);
+    if (candidate.rasterContentType === undefined && isRasterImageContentType(revision.contentType)) {
+      candidate.rasterContentType = revision.contentType;
+    }
     if (candidate.revision === undefined) candidate.revision = revision;
     else if (JSON.stringify(candidate.revision) !== JSON.stringify(revision)) candidate.revisionConflict = true;
     return candidate;
@@ -143,7 +206,7 @@ export function createCanvasFileCapture({ downloadFile, progress }) {
         expectedSize: candidate.expectedSize,
         modifiedAt: revision?.modifiedAt ?? null,
         updatedAt: revision?.updatedAt ?? null,
-        contentType: revision?.contentType ?? null,
+        contentType: candidate.rasterContentType ?? revision?.contentType ?? null,
         locked: revision?.locked ?? null,
         hidden: revision?.hidden ?? null,
         lockedForUser: revision?.lockedForUser ?? null,
@@ -222,8 +285,20 @@ export function createCanvasFileCapture({ downloadFile, progress }) {
     // A rejected macOS companion is optional only when its one real document in the same
     // folder was actually archived. Orphans, conflicting metadata, and all other failures
     // stay required gaps. Valid files (even with a ._ name) keep their validated receipts.
-    const stagedIds = new Set(receipts.filter((receipt) => receipt.status === "staged").map((receipt) => receipt.fileId));
-    return receipts.map((receipt) => {
+    const validatedReceipts = receipts.map((receipt) => {
+      const candidate = candidates.get(receipt.fileId);
+      if (receipt.reason === "empty" && candidate?.invalidSize) {
+        return { fileId: receipt.fileId, status: "gap", reason: "invalid-or-oversized-file-size" };
+      }
+      if (receipt.status === "staged" && candidate?.rasterContentType !== undefined
+          && !isRasterImageContentType(receipt.contentType)) {
+        return { fileId: receipt.fileId, status: "gap", reason: "HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH" };
+      }
+      return receipt;
+    });
+    const stagedIds = new Set(validatedReceipts
+      .filter((receipt) => receipt.status === "staged").map((receipt) => receipt.fileId));
+    return validatedReceipts.map((receipt) => {
       const candidate = candidates.get(receipt.fileId);
       const identity = candidate?.identity;
       if (receipt.reason !== "HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH"

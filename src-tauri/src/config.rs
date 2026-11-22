@@ -117,7 +117,12 @@ pub fn resolve_data_root(app_data_dir: Option<PathBuf>) -> Result<PathBuf, Strin
             .ok_or_else(|| "test build requires an explicit data root".to_string())?;
         explicit_data_root(Path::new(&value))
     }
-    #[cfg(not(feature = "test-overrides"))]
+    #[cfg(all(test, not(feature = "test-overrides")))]
+    {
+        let _ = app_data_dir;
+        Err("tests require the test-overrides feature to resolve an app data folder".into())
+    }
+    #[cfg(all(not(test), not(feature = "test-overrides")))]
     {
         let folder =
             app_data_dir.ok_or_else(|| "application data folder is unavailable".to_string())?;
@@ -138,7 +143,11 @@ pub fn resolve_helper_data_root() -> Result<PathBuf, String> {
             .ok_or_else(|| "test build requires an explicit data root".to_string())?;
         explicit_data_root(Path::new(&value))
     }
-    #[cfg(all(not(feature = "test-overrides"), target_os = "macos"))]
+    #[cfg(all(test, not(feature = "test-overrides")))]
+    {
+        Err("tests require the test-overrides feature to resolve an app data folder".into())
+    }
+    #[cfg(all(not(test), not(feature = "test-overrides"), target_os = "macos"))]
     {
         let home = current_account_home()
             .ok_or_else(|| "the application data folder is unavailable".to_string())?;
@@ -147,7 +156,7 @@ pub fn resolve_helper_data_root() -> Result<PathBuf, String> {
             .join("Application Support")
             .join(PRODUCTION_BUNDLE_IDENTIFIER))
     }
-    #[cfg(all(not(feature = "test-overrides"), not(target_os = "macos")))]
+    #[cfg(all(not(test), not(feature = "test-overrides"), not(target_os = "macos")))]
     {
         Err("Canvas refresh is available only on macOS".into())
     }
@@ -261,12 +270,15 @@ pub fn canvas_capture_state_lock_path(data_root: &Path) -> PathBuf {
 /// Resolves the immutable browser archive root. Production derives this from the OS account home;
 /// test builds keep it below their explicit `.test` data root.
 pub fn canvas_capture_archive_root(data_root: &Path) -> Result<PathBuf, String> {
-    #[cfg(feature = "test-overrides")]
+    #[cfg(test)]
     {
-        let _ = data_root;
+        Ok(test_data_root(data_root)?.join(CANVAS_CAPTURE_ARCHIVE_DIR))
+    }
+    #[cfg(all(not(test), feature = "test-overrides"))]
+    {
         Ok(data_root.join(CANVAS_CAPTURE_ARCHIVE_DIR))
     }
-    #[cfg(all(not(feature = "test-overrides"), target_os = "macos"))]
+    #[cfg(all(not(test), not(feature = "test-overrides"), target_os = "macos"))]
     {
         let home = current_account_home()
             .ok_or_else(|| "the Canvas archive folder is unavailable".to_string())?;
@@ -276,7 +288,7 @@ pub fn canvas_capture_archive_root(data_root: &Path) -> Result<PathBuf, String> 
             .join("DueGood")
             .join(CANVAS_CAPTURE_ARCHIVE_DIR))
     }
-    #[cfg(all(not(feature = "test-overrides"), not(target_os = "macos")))]
+    #[cfg(all(not(test), not(feature = "test-overrides"), not(target_os = "macos")))]
     {
         let _ = data_root;
         Err("Canvas capture is available only on macOS".into())
@@ -299,7 +311,56 @@ pub fn explicit_data_root(path: &Path) -> Result<PathBuf, String> {
     {
         return Err("explicit data root must not be inside the production data folder".into());
     }
+    #[cfg(test)]
+    {
+        return test_data_root(path);
+    }
+    #[cfg(not(test))]
     Ok(path.to_path_buf())
+}
+
+/// Validates and canonicalizes a test data root without resolving paths outside the system temp
+/// directory. The lexical check comes first so a test cannot probe an owner-data path.
+#[cfg(test)]
+fn test_data_root(path: &Path) -> Result<PathBuf, String> {
+    use std::path::Component;
+
+    let temporary_root = std::env::temp_dir();
+    let canonical_temporary_root = temporary_root
+        .canonicalize()
+        .map_err(|_| "test temporary directory is unavailable")?;
+    let relative = path
+        .strip_prefix(&temporary_root)
+        .or_else(|_| path.strip_prefix(&canonical_temporary_root))
+        .map_err(|_| "test data root must be inside the temporary directory")?;
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err("test data root contains an unsafe path component".into());
+    }
+
+    let mut candidate = canonical_temporary_root;
+    let mut components = relative.components().peekable();
+    while let Some(Component::Normal(name)) = components.next() {
+        candidate.push(name);
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err("test data root must not contain symbolic links".into());
+            }
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => return Err("test data root must contain only directories".into()),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound && components.peek().is_none() =>
+            {
+                return Ok(candidate);
+            }
+            Err(_) => return Err("test data root is unavailable".into()),
+        }
+    }
+    Ok(candidate)
 }
 
 /// Formats a folder for display, replacing the home prefix with `~` so screenshots of the
@@ -416,7 +477,9 @@ mod tests {
     #[test]
     fn test_data_root_is_explicit_and_uses_test_identifier() {
         let base = std::env::temp_dir().join(TEST_BUNDLE_IDENTIFIER);
-        assert_eq!(explicit_data_root(&base).expect("absolute"), base);
+        assert!(explicit_data_root(&base)
+            .expect("absolute test path")
+            .starts_with(std::env::temp_dir().canonicalize().unwrap()));
         assert!(explicit_data_root(Path::new("relative/com.zerodelta.duegood.test")).is_err());
         assert!(
             explicit_data_root(&std::env::temp_dir().join("other-root")).is_err(),
@@ -429,9 +492,37 @@ mod tests {
             explicit_data_root(&inside_production).is_err(),
             "never inside the production folder"
         );
+        assert!(
+            explicit_data_root(Path::new(
+                "/synthetic-home/Library/Application Support/com.zerodelta.duegood.test"
+            ))
+            .is_err(),
+            "test overrides must remain under the system temp directory"
+        );
         // With the feature on, resolution never falls back to the application-data folder.
         if std::env::var_os(TEST_DATA_ROOT_ENV).is_none() {
             assert!(resolve_data_root(Some(PathBuf::from("/nonexistent/app-data"))).is_err());
+        }
+    }
+
+    #[test]
+    fn test_archive_resolution_is_temp_scoped() {
+        let temporary_root = std::env::temp_dir().canonicalize().unwrap();
+        assert_eq!(
+            canvas_capture_archive_root(&temporary_root).unwrap(),
+            temporary_root.join(CANVAS_CAPTURE_ARCHIVE_DIR)
+        );
+        assert!(canvas_capture_archive_root(Path::new(
+            "/synthetic-home/Library/Application Support/DueGood"
+        ))
+        .is_err());
+        #[cfg(not(feature = "test-overrides"))]
+        {
+            assert!(resolve_data_root(Some(PathBuf::from(
+                "/synthetic/Library/Application Support/com.zerodelta.duegood"
+            )))
+            .is_err());
+            assert!(resolve_helper_data_root().is_err());
         }
     }
 

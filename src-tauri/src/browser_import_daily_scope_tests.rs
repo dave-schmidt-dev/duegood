@@ -111,7 +111,14 @@ fn daily_scope_distinguishes_archive_omissions_from_required_failures() {
         (0, 1)
     );
 
-    for reason in ["invalid-slug", "detail-budget", "request-failed"] {
+    for reason in [
+        "invalid-slug",
+        "detail-budget",
+        "request-failed",
+        "capture-budget",
+        "pagination-budget",
+        "unsupported",
+    ] {
         let mut active_failure = rows.clone();
         active_failure.push(coverage("discussions", Some(1), "gap", Some(reason)));
         assert!(
@@ -179,6 +186,111 @@ fn daily_scope_distinguishes_archive_omissions_from_required_failures() {
         }));
     assert_eq!(
         daily_scope::summarize_daily_scope(&archived_locked, &active, &rows).unwrap(),
-        (0, 0)
+        (0, 1)
     );
+}
+
+#[test]
+fn disabled_required_lists_and_children_of_omissions_are_counted_as_omissions() {
+    for (endpoint, reason, child) in [
+        ("courseFiles", "forbidden-optional", "file"),
+        ("pages", "not-found", "page"),
+    ] {
+        let (mut snapshot, active, mut rows) = complete_daily_fixture();
+        snapshot["resources"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|resource| resource["endpoint"] != endpoint);
+        rows.retain(|row| row.endpoint != endpoint);
+        rows.push(coverage(endpoint, Some(1), "gap", Some(reason)));
+        rows.push(coverage(child, Some(1), "gap", Some("parent-unavailable")));
+
+        assert_eq!(
+            daily_scope::summarize_daily_scope(&snapshot, &active, &rows).unwrap(),
+            (0, 2),
+            "{endpoint} omission and its child should be visible omissions"
+        );
+    }
+}
+
+#[test]
+fn parent_unavailable_children_of_failed_lists_remain_required_gaps() {
+    let (mut snapshot, active, mut rows) = complete_daily_fixture();
+    snapshot["resources"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|resource| resource["endpoint"] != "pages");
+    rows.retain(|row| row.endpoint != "pages");
+    rows.push(coverage("pages", Some(1), "gap", Some("request-failed")));
+    rows.push(coverage("page", Some(1), "gap", Some("parent-unavailable")));
+
+    let (gaps, omissions) = daily_scope::summarize_daily_scope(&snapshot, &active, &rows).unwrap();
+    assert!(gaps >= 2);
+    assert_eq!(omissions, 0);
+
+    rows.push(coverage("pages", Some(1), "gap", Some("not-found")));
+    let (gaps, omissions) = daily_scope::summarize_daily_scope(&snapshot, &active, &rows).unwrap();
+    assert!(gaps >= 2);
+    assert_eq!(omissions, 0, "a duplicate parent result is ambiguous");
+}
+
+#[test]
+fn complete_capture_allows_calendar_identity_events_and_only_safe_file_omissions() {
+    let (mut snapshot, _active, mut rows) = complete_daily_fixture();
+    snapshot["resources"].as_array_mut().unwrap().push(json!({
+        "endpoint":"calendarEvents", "courseId":null, "contextCode":"user_41",
+        "items":[{"id":1}], "pages":1
+    }));
+    rows.push(CaptureCoverage {
+        endpoint: "calendarEvents".into(),
+        course_id: None,
+        group_id: None,
+        context_code: Some("user_41".into()),
+        status: "complete".into(),
+        reason: None,
+    });
+    assert!(!daily_scope::has_capture_failures(&snapshot, &rows).unwrap());
+
+    let file_bodies_index = snapshot["resources"]
+        .as_array_mut()
+        .unwrap()
+        .iter()
+        .position(|resource| resource["endpoint"] == "fileBodies")
+        .unwrap();
+    snapshot["resources"][file_bodies_index]["items"][0] =
+        json!({"fileId":42,"status":"gap","reason":"not-applicable"});
+    assert!(!daily_scope::has_capture_failures(&snapshot, &rows).unwrap());
+
+    snapshot["resources"][file_bodies_index]["items"][0] = json!({
+        "fileId":42,"status":"gap","reason":"HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH"
+    });
+    assert!(daily_scope::has_capture_failures(&snapshot, &rows).unwrap());
+}
+
+#[test]
+fn conversation_details_require_one_captured_or_explicitly_omitted_row_per_summary() {
+    let (mut snapshot, active, mut rows) = complete_daily_fixture();
+    snapshot["resources"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|resource| resource["endpoint"] != "conversation");
+    rows.retain(|row| row.endpoint != "conversation");
+    rows.push(coverage("conversation", None, "gap", Some("not-found")));
+
+    assert_eq!(
+        daily_scope::summarize_daily_scope(&snapshot, &active, &rows).unwrap(),
+        (0, 1)
+    );
+
+    rows.retain(|row| row.endpoint != "conversation");
+    rows.push(coverage("conversation", None, "gap", Some("not-found")));
+    rows.push(coverage(
+        "conversation",
+        None,
+        "gap",
+        Some("request-failed"),
+    ));
+    let (gaps, omissions) = daily_scope::summarize_daily_scope(&snapshot, &active, &rows).unwrap();
+    assert!(gaps > 0);
+    assert_eq!(omissions, 1);
 }

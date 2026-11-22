@@ -512,3 +512,11 @@ Confirmed in source: signed-in capture proceeds directly to collection. The owne
 
 ## Headless refresh and attended recovery
 Confirmed at 23b0d8b: the broker, launcher and client default to visible Chrome. The installed progress protocol has no reason field. Change the broker and capture boundary to expose fixed sign-in reasons only, retry one eligible headless capture after releasing the profile, and validate the fallback progress frame through the app. Verify with synthetic broker, protocol and UI tests. Live institution behavior and the absent original Python implementation remain unverified.
+
+## Accessible Canvas refresh completion
+
+Confirmed in source: the producer, broker and client force partial results. The owner's counts are supplied observations. The three MIME failures cannot be identified from counts alone. Private legacy data and live service behavior are outside this offline check.
+
+First guard native test storage. Then classify reasoned omissions and actual capture failures, carry the outcome through the archive, import and UI, and exercise synthetic fixtures across each boundary. Keep legacy captures conservative and preserve exact IPC validation. Verify checksums and the requested offline gates before reporting.
+
+Confirmed the collector and importer currently treat a verified empty download as a missing body. Add a file-only omission for explicit zero-byte Canvas metadata plus successful download EOF, and retain failure for every other empty response. Extend signature verification to recognized raster substitutions, including HEIF and AVIF, and qualify both paths using synthetic data only.

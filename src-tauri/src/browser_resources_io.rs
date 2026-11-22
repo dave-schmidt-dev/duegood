@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::browser_resources::{BlobRef, ResourceArchiveError};
-use crate::capture_media::{verify_content_type, MediaError};
+use crate::capture_media::{verify_archived_content_type, MediaError};
 
 pub(super) const ARCHIVE_NAME: &str = "canvas-resource-archive";
 pub(super) const BLOBS_NAME: &str = "blobs";
@@ -238,8 +238,7 @@ where
 }
 
 fn validate_media(content_type: &str, prefix: &[u8]) -> Result<(), ResourceArchiveError> {
-    verify_content_type(Some(content_type), prefix)
-        .map(|_| ())
+    verify_archived_content_type(content_type, prefix)
         .map_err(|error| match error {
             MediaError::SignInResponse | MediaError::MimeSignatureMismatch => {
                 ResourceArchiveError::UnsupportedMedia

@@ -196,7 +196,13 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            #[cfg(test)]
+            let data_root = config::resolve_data_root(None);
+            #[cfg(not(test))]
             let data_root = config::resolve_data_root(app.path().app_data_dir().ok());
+            #[cfg(test)]
+            let home: Option<std::path::PathBuf> = None;
+            #[cfg(not(test))]
             let home = app.path().home_dir().ok();
             let picker = commands::DialogPicker::new(app.handle().clone());
             let state = commands::AppState::open_with_handlers(
@@ -272,6 +278,8 @@ struct CaptureDownloadRequest {
     browser_byte_count: Option<u64>,
     #[serde(default)]
     browser_content_type: Option<String>,
+    #[serde(default)]
+    declared_content_type: Option<String>,
     staging_directory: std::path::PathBuf,
     expected_size: Option<u64>,
 }
@@ -324,6 +332,10 @@ pub fn run_capture_download_helper() -> Result<(), &'static str> {
             .browser_content_type
             .as_ref()
             .is_some_and(|value| value.len() > 256 || value.chars().any(char::is_control))
+        || request
+            .declared_content_type
+            .as_ref()
+            .is_some_and(|value| value.len() > 256 || value.chars().any(char::is_control))
     {
         return Err("invalid-request");
     }
@@ -335,6 +347,7 @@ pub fn run_capture_download_helper() -> Result<(), &'static str> {
         browser_staged_path,
         browser_byte_count,
         browser_content_type,
+        declared_content_type,
         staging_directory,
         expected_size,
     } = request;
@@ -352,25 +365,33 @@ pub fn run_capture_download_helper() -> Result<(), &'static str> {
         browser_staged_path,
         browser_byte_count,
         browser_content_type,
+        declared_content_type,
     ) {
-        (Some(verifier_url), None, None, None, None, None) => {
-            downloads.download_file_to_staging(&verifier_url, file_id, expected_size, &staging)
-        }
-        (None, Some(source_url), Some(location_url), None, None, None) => downloads
+        (Some(verifier_url), None, None, None, None, None, declared_type) => downloads
+            .download_file_to_staging(
+                &verifier_url,
+                file_id,
+                expected_size,
+                declared_type.as_deref(),
+                &staging,
+            ),
+        (None, Some(source_url), Some(location_url), None, None, None, declared_type) => downloads
             .download_file_to_staging_from_browser_location(
                 &source_url,
                 &location_url,
                 file_id,
                 expected_size,
+                declared_type.as_deref(),
                 &staging,
             ),
-        (None, None, None, Some(path), Some(byte_count), content_type) => downloads
+        (None, None, None, Some(path), Some(byte_count), content_type, declared_type) => downloads
             .adopt_browser_staged_file(
                 &path,
                 file_id,
                 byte_count,
                 expected_size,
                 content_type.as_deref(),
+                declared_type.as_deref(),
                 &staging,
             ),
         _ => return Err("invalid-request"),

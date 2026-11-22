@@ -43,8 +43,8 @@ async function setup(): Promise<{ root: string; store: DashboardStore }> {
 afterEach(async () => Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))));
 
 describe("DashboardStore", () => {
-  it("shows validated daily readiness without granting archive removals or promoting failures", () => {
-    const event = {
+  it("shows full-capture completion and omissions without promoting partial or failed captures", () => {
+    const dailyOnly = {
       id: "daily-complete-archive-incomplete",
       source: "canvas",
       sourceLabel: "canvas",
@@ -56,17 +56,37 @@ describe("DashboardStore", () => {
       summary: { added: 0, updated: 0, removed: 7 },
       changes: [],
     };
-    const refresh = projectRefreshes({ events: [event] }, null)[0]!;
-    expect(refresh).toMatchObject({ status: "complete", summary: { removed: 0 } });
-    expect(refresh.summaryText).toContain("Daily Canvas pages refreshed");
-    expect(refresh.summaryText).toContain("2 optional capture omissions");
-    expect(refresh.summaryText).toContain("Existing data was preserved");
+    const partial = projectRefreshes({ events: [dailyOnly] }, null)[0]!;
+    expect(partial).toMatchObject({ status: "partial", summary: { removed: 0 } });
+    expect(partial.summaryText).toContain("Canvas refresh was incomplete");
+    expect(partial.summaryText).toContain("2 optional capture omissions");
+    expect(partial.changes).toContainEqual(expect.objectContaining({
+      kind: "notice",
+      title: "Canvas refresh was incomplete",
+      detail: expect.stringContaining("2 optional capture omissions"),
+    }));
 
-    const failed = projectRefreshes({ events: [{ ...event, status: "failed", sourceComplete: true }] }, null)[0]!;
+    const complete = projectRefreshes({ events: [{
+      ...dailyOnly,
+      id: "full-capture-complete",
+      status: "succeeded",
+      sourceComplete: true,
+    }] }, null)[0]!;
+    expect(complete).toMatchObject({ status: "complete", summary: { removed: 7 } });
+    expect(complete.summaryText).toContain("Canvas refresh completed");
+    expect(complete.summaryText).toContain("2 optional capture omissions");
+    expect(complete.changes).toContainEqual(expect.objectContaining({
+      kind: "notice",
+      title: "Canvas refresh completed",
+      detail: expect.stringContaining("2 optional capture omissions"),
+    }));
+
+    const failed = projectRefreshes({ events: [{ ...dailyOnly, status: "failed", sourceComplete: true }] }, null)[0]!;
     expect(failed.status).toBe("failed");
     expect(failed.summary.removed).toBe(0);
+    expect(failed.summaryText).toContain("2 optional capture omissions");
 
-    const withDailyGap = projectRefreshes({ events: [{ ...event, dailyGapCount: 1 }] }, null)[0]!;
+    const withDailyGap = projectRefreshes({ events: [{ ...dailyOnly, dailyGapCount: 1 }] }, null)[0]!;
     expect(withDailyGap.status).toBe("partial");
     expect(withDailyGap.summary.removed).toBe(0);
   });

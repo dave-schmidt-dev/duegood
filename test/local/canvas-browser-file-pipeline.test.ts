@@ -102,6 +102,52 @@ process.stdout.write(JSON.stringify(${JSON.stringify(receipt)}) + "\\n");
     expect(JSON.stringify(result)).not.toContain(location);
   });
 
+  it("passes Canvas MIME and browser response MIME as separate native checks", async () => {
+    const directory = await privateDirectory();
+    const sourceUrl = "https://marymount.instructure.com/files/41/download?download_frd=1";
+    const part = path.join(directory, ".duegood-browser-123e4567-e89b-42d3-a456-426614174001.part");
+    await writeFile(part, "synthetic", { mode: 0o600 });
+    await downloadCanvasFile({ context: {}, page: {}, fileId: 41, sourceUrl, expectedSize: 9,
+      contentType: "image/jpeg", stagingDirectory: directory, helperPath: path.join(directory, "unused"),
+      browserFetch: async () => ({ kind: "staged" as const, fileId: 41, stagedPath: part, byteCount: 9,
+        responseContentType: "image/jpeg", sourceAuthenticity: "unverified" as const }),
+      nativeHelper: async ({ request }) => {
+        expect(request).toEqual({ fileId: 41, browserStagedPath: part, browserByteCount: 9,
+          browserContentType: "image/jpeg", declaredContentType: "image/jpeg", expectedSize: 9,
+          stagingDirectory: directory });
+        return receipt;
+      },
+    });
+  });
+
+  it("returns an empty omission only when Canvas metadata also says size zero", async () => {
+    const directory = await privateDirectory();
+    const sourceUrl = "https://marymount.instructure.com/files/41/download?download_frd=1";
+    const browserFetch = async () => ({ kind: "empty" as const, fileId: 41, byteCount: 0 as const,
+      sourceAuthenticity: "unverified" as const });
+    const nativeHelper = vi.fn(async () => receipt);
+
+    await expect(downloadCanvasFile({ context: {}, page: {}, fileId: 41, sourceUrl, expectedSize: 0,
+      stagingDirectory: directory, helperPath: path.join(directory, "unused"), browserFetch, nativeHelper }))
+      .resolves.toEqual({ kind: "empty", fileId: 41, byteCount: 0, sourceAuthenticity: "unverified" });
+    expect(nativeHelper).not.toHaveBeenCalled();
+
+    await expect(downloadCanvasFile({ context: {}, page: {}, fileId: 41, sourceUrl, expectedSize: 1,
+      stagingDirectory: directory, helperPath: path.join(directory, "unused"), browserFetch, nativeHelper }))
+      .rejects.toMatchObject({ code: "EMPTY_RESPONSE" });
+  });
+
+  it("maps the native zero-size empty outcome to an omission", async () => {
+    const directory = await privateDirectory();
+    const sourceUrl = "https://marymount.instructure.com/files/41/download?download_frd=1";
+    await expect(downloadCanvasFile({ context: {}, page: {}, fileId: 41, sourceUrl, expectedSize: 0,
+      stagingDirectory: directory, helperPath: path.join(directory, "unused"),
+      browserFetch: async () => ({ kind: "redirect" as const, fileId: 41,
+        location: "https://files.instructureusercontent.com/synthetic", sourceAuthenticity: "unverified" as const }),
+      nativeHelper: async () => { throw Object.assign(new Error("empty"), { code: "HELPER_DOWNLOAD_CANVAS_CONFIRMED_EMPTY" }); },
+    })).resolves.toEqual({ kind: "empty", fileId: 41, byteCount: 0, sourceAuthenticity: "unverified" });
+  });
+
   it("removes a browser direct-body part after a failed native adoption", async () => {
     const directory = await privateDirectory();
     const part = path.join(directory, ".duegood-browser-123e4567-e89b-42d3-a456-426614174000.part");
@@ -111,7 +157,7 @@ process.stdout.write(JSON.stringify(${JSON.stringify(receipt)}) + "\\n");
       sourceUrl: "https://marymount.instructure.com/files/41/download?download_frd=1",
       expectedSize: null, stagingDirectory: directory, helperPath: path.join(directory, "unused"),
       browserFetch: async () => ({ kind: "staged", fileId: 41, stagedPath: part, byteCount: 9,
-        sourceAuthenticity: "unverified" }),
+        responseContentType: null, sourceAuthenticity: "unverified" }),
       nativeHelper: async () => { throw new Error("synthetic failure"); },
     })).rejects.toThrow();
     await expect(readFile(part)).rejects.toMatchObject({ code: "ENOENT" });

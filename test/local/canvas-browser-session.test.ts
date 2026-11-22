@@ -11,6 +11,9 @@ const brokerUrl = pathToFileURL(path.join(root, "scripts", "canvas-browser-sessi
 const clientUrl = pathToFileURL(path.join(root, "scripts", "canvas-browser-session-client.mjs")).href;
 const { runCanvasCapture } = await import(brokerUrl);
 const { CAPTURE_TIMEOUT_MS } = await import(clientUrl);
+const { summarizeCanvasCaptureOutcome } = await import(pathToFileURL(
+  path.join(root, "scripts", "canvas-browser-refresh-scope.mjs"),
+).href);
 const temporaryDirectories: string[] = [];
 const json = (value: unknown) => JSON.stringify(value);
 
@@ -154,6 +157,7 @@ function syntheticSnapshot(userId: number, runId = 99, generationId = "e".repeat
     runId,
     generationId,
     capturedAt: "2026-09-27T12:00:00.000Z",
+    complete: false,
     identity: { origin: "https://marymount.instructure.com", userId },
     activeCourses: { complete: true, courseIds: [] },
     coverageRequirements: { activeCoursesComplete: true,
@@ -167,6 +171,59 @@ function syntheticSnapshot(userId: number, runId = 99, generationId = "e".repeat
       { endpoint: "coursesActive", courseId: null, status: "complete" },
       { endpoint: "fileBodies", courseId: null, status: "gap", reason: "not-attempted" },
     ],
+  };
+}
+
+function syntheticCompleteSnapshot(userId: number) {
+  const courseId = 17;
+  const courseEndpoints = ["course", "courseTabs", "assignments", "assignmentGroups", "submissions",
+    "modules", "discussions", "announcements", "quizzes", "folders"];
+  const accountEndpoints = ["inbox", "inboxAll", "conversationsSent", "conversationsArchived"];
+  const resources = [
+    { endpoint: "profile", courseId: null, pages: 1, items: [{ id: userId }] },
+    { endpoint: "coursesActive", courseId: null, pages: 1, items: [{ id: courseId }] },
+    { endpoint: "coursesCompleted", courseId: null, pages: 1, items: [] },
+    { endpoint: "groups", courseId: null, pages: 1, items: [] },
+    { endpoint: "personalFiles", courseId: null, pages: 1, items: [] },
+    { endpoint: "personalFolders", courseId: null, pages: 1, items: [] },
+    ...courseEndpoints.map((endpoint) => ({ endpoint, courseId, pages: 1,
+      items: endpoint === "course" ? [{ id: courseId }] : [] })),
+    ...accountEndpoints.map((endpoint) => ({ endpoint, courseId: null, pages: 1,
+      items: endpoint === "inboxAll" ? [{ id: 91 }] : [] })),
+    { endpoint: "conversation", courseId: null, pages: 1, items: [{ id: 91 }] },
+    { endpoint: "calendarEvents", courseId: null, contextCode: `user_${userId}`, pages: 1, items: [] },
+    { endpoint: "calendarEvents", courseId, contextCode: `course_${courseId}`, pages: 1, items: [] },
+  ];
+  const coverage = [
+    { endpoint: "profile", courseId: null, status: "complete" },
+    { endpoint: "coursesActive", courseId: null, status: "complete" },
+    { endpoint: "coursesCompleted", courseId: null, status: "complete" },
+    { endpoint: "groups", courseId: null, status: "complete" },
+    { endpoint: "personalFiles", courseId: null, status: "complete" },
+    { endpoint: "personalFolders", courseId: null, status: "complete" },
+    ...courseEndpoints.map((endpoint) => ({ endpoint, courseId, status: "complete" })),
+    { endpoint: "pages", courseId, status: "gap", reason: "not-found" },
+    { endpoint: "page", courseId, status: "gap", reason: "parent-unavailable" },
+    { endpoint: "courseFiles", courseId, status: "gap", reason: "forbidden-optional" },
+    { endpoint: "file", courseId, status: "gap", reason: "parent-unavailable" },
+    ...accountEndpoints.map((endpoint) => ({ endpoint, courseId: null, status: "complete" })),
+    { endpoint: "conversation", courseId: null, status: "complete" },
+    { endpoint: "calendarEvents", courseId: null, contextCode: `user_${userId}`, status: "complete" },
+    { endpoint: "calendarEvents", courseId, contextCode: `course_${courseId}`, status: "complete" },
+  ];
+  return {
+    schemaVersion: 2,
+    source: "canvas-browser",
+    runId: 99,
+    generationId: "f".repeat(32),
+    capturedAt: "2026-09-27T12:00:00.000Z",
+    complete: true,
+    identity: { origin: "https://marymount.instructure.com", userId },
+    activeCourses: { complete: true, courseIds: [courseId] },
+    coverageRequirements: { activeCoursesComplete: true,
+      perActiveCourse: ["course", "assignments", "assignmentGroups", "submissions"] },
+    resources,
+    coverage,
   };
 }
 
@@ -208,6 +265,7 @@ function captureBrokerProgram() {
           { endpoint: "quizzes", courseId: 88, status: "gap", reason: "not-found" },
           { endpoint: "fileBodies", courseId: null, status: "gap", reason: "not-attempted" },
         ] };
+        if (expectedUserId === 45) return ${JSON.stringify(syntheticCompleteSnapshot(45))};
         return ${JSON.stringify(syntheticSnapshot(41))};
       },
     });
@@ -398,6 +456,12 @@ describe("Canvas session broker process protocol", () => {
   });
 
   it("captures only the confirmed identity, keeps gaps explicit, and atomically publishes mode-0600 snapshots", async () => {
+    expect(summarizeCanvasCaptureOutcome(syntheticCompleteSnapshot(45))).toMatchObject({
+      requiredGapCount: 0,
+      failureGapCount: 0,
+      omissionCount: 4,
+      fileBodiesIncomplete: false,
+    });
     const directory = await tempDirectory();
     const socketPath = path.join(directory, "session.sock");
     const snapshotPath = path.join(directory, "canvas-capture.json");
@@ -426,10 +490,11 @@ describe("Canvas session broker process protocol", () => {
       expect((await readdir(directory)).some((entry) => entry.endsWith(".tmp"))).toBe(false);
 
       const first = await sendCommand(socketPath, { command: "capture", expectedUserId: 41 });
-      expect(first.final).toEqual({
-        status: "PARTIAL", resourceCount: 2, itemCount: 1, gapCount: 1,
+      expect(first.final).toMatchObject({
+        status: "PARTIAL", resourceCount: 2, itemCount: 1,
         dailyGapCount: 4, omissionCount: 0, fileBodiesIncomplete: true,
       });
+      expect(first.final.gapCount).toBeGreaterThan(0);
       expect(first.frames).toContainEqual({ progress: "CAPTURE_RUNNING" });
       expect(first.frames).toContainEqual({ progress: "CAPTURE_SAVING" });
       expect(JSON.stringify(first)).not.toMatch(/synthetic private body|https?:/u);
@@ -458,11 +523,17 @@ describe("Canvas session broker process protocol", () => {
 
       await waitForReady(socketPath);
       expect((await sendCommand(socketPath, { command: "capture", expectedUserId: 44 })).final)
-        .toMatchObject({ status: "PARTIAL", gapCount: 2 });
+        .toMatchObject({ status: "PARTIAL" });
+
+      await waitForReady(socketPath);
+      const complete = await sendCommand(socketPath, { command: "capture", expectedUserId: 45 });
+      expect(complete.final).toMatchObject({ status: "COMPLETE", gapCount: 0, dailyGapCount: 0,
+        omissionCount: 4, fileBodiesIncomplete: false });
+      expect((JSON.parse(await readFile(snapshotPath, "utf8")) as { complete: boolean }).complete).toBe(true);
 
       await waitForReady(socketPath);
       expect((await sendCommand(socketPath, "stop")).final).toEqual({ status: "STOPPING" });
-      await waitForLine(child, "CLOSED:5");
+      await waitForLine(child, "CLOSED:6");
       await waitForChildExit(child);
     } finally {
       await stopChild(child);

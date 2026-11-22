@@ -155,6 +155,89 @@ function testDependencies(overrides: {
 }
 
 describe("synthetic Canvas metadata collector", () => {
+  it("marks a fully staged synthetic capture complete without a calendar marker", async () => {
+    const deps = testDependencies();
+    const capture = await collectCanvasBrowserCapture({
+      expectedUserId: USER_ID,
+      evaluate: deps.evaluate,
+      reader: deps.reader,
+      htmlReader: deps.htmlReader,
+      progress: deps.progress,
+      downloadFile: async (file: { fileId: number }) => ({
+        kind: "staged",
+        fileId: file.fileId,
+        byteCount: 1,
+        sha256: "a".repeat(64),
+        contentType: "application/octet-stream",
+        stagedFile: `${file.fileId.toString(16).padStart(32, "0")}.blob`,
+        sourceAuthenticity: "unverified",
+      }),
+      now: () => new Date("2026-09-27T12:00:00.000Z"),
+    });
+
+    expect(capture.complete).toBe(true);
+    expect(capture.coverage.some((entry) => entry.endpoint === "calendar")).toBe(false);
+    expect(capture.coverage.filter((entry) => entry.endpoint === "calendarEvents")
+      .every((entry) => entry.status === "complete")).toBe(true);
+  });
+
+  it("does not report unattempted file bodies when no files were listed", async () => {
+    const deps = testDependencies({
+      resultFor: (request) => {
+        if (["courseFiles", "groupFolderFiles", "personalFiles"].includes(request.endpoint)) {
+          return { ...successfulResult(request), items: [] };
+        }
+        return successfulResult(request);
+      },
+    });
+    const capture = await collectCanvasBrowserCapture({
+      expectedUserId: USER_ID,
+      evaluate: deps.evaluate,
+      reader: deps.reader,
+      htmlReader: deps.htmlReader,
+      progress: deps.progress,
+      now: () => new Date("2026-09-27T12:00:00.000Z"),
+    });
+
+    expect(capture.complete).toBe(true);
+    expect(capture.coverage.some((entry) => entry.endpoint === "fileBodies")).toBe(false);
+  });
+
+  it("preserves each locked and unpublished detail omission beside a request failure", async () => {
+    const deps = testDependencies({
+      resultFor: (request) => {
+        if (request.endpoint === "quizzes") {
+          return {
+            status: "ok",
+            identity: { userId: USER_ID },
+            pages: 1,
+            items: [
+              { id: 101, published: true, locked: true },
+              { id: 102, published: true },
+              { id: 103, published: false },
+            ],
+          };
+        }
+        if (request.endpoint === "quiz" && request.quizId === 102) {
+          throw Object.assign(new Error("REQUEST_FAILED"), { code: "REQUEST_FAILED" });
+        }
+        return successfulResult(request);
+      },
+    });
+    const capture = await collectCanvasBrowserCapture({
+      expectedUserId: USER_ID,
+      evaluate: deps.evaluate,
+      reader: deps.reader,
+      htmlReader: deps.htmlReader,
+      progress: deps.progress,
+      now: () => new Date("2026-09-27T12:00:00.000Z"),
+    });
+
+    expect(capture.coverage).toContainEqual({ endpoint: "quiz", courseId: COURSE_ID, status: "gap", reason: "locked" });
+    expect(capture.coverage).toContainEqual({ endpoint: "quiz", courseId: COURSE_ID, status: "gap", reason: "unpublished" });
+    expect(capture.coverage).toContainEqual({ endpoint: "quiz", courseId: COURSE_ID, status: "gap", reason: "request-failed" });
+  });
+
   it("captures only complete fixed-endpoint reads, sanitizes nested links and records endpoint gaps", async () => {
     const deps = testDependencies();
     const capture = await collectCanvasBrowserCapture({
@@ -214,7 +297,10 @@ describe("synthetic Canvas metadata collector", () => {
     expect(capture.coverage).toContainEqual({ endpoint: "fileBodies", courseId: null, status: "gap", reason: "not-attempted" });
     expect(capture.coverage.some((entry) => entry.endpoint === "calendarEventsHistory")).toBe(false);
     expect(capture.coverage).toContainEqual({ endpoint: "assignmentGroups", courseId: COURSE_ID, status: "complete" });
-    expect(capture.coverage).toContainEqual({ endpoint: "calendar", courseId: COURSE_ID, status: "gap", reason: "unsupported" });
+    expect(capture.coverage.some((entry) => entry.endpoint === "calendar")).toBe(false);
+    expect(capture.coverage).not.toContainEqual(expect.objectContaining({
+      endpoint: "calendarEvents", status: "gap", reason: "unsupported",
+    }));
 
     const assignment = capture.resources.find((resource) => resource.endpoint === "assignments" && resource.courseId === COURSE_ID)?.items[0] as Record<string, unknown> | undefined;
     expect(assignment?.description).toBe("Read the guide and the plain file.");
@@ -663,6 +749,25 @@ describe("synthetic Canvas metadata collector", () => {
     expect(capture.coverage).toContainEqual({ endpoint: "quiz", courseId: COURSE_ID,
       status: "gap", reason: "not-applicable" });
     expect(capture.resources.some((resource) => resource.endpoint === "quizzes" && resource.courseId === COURSE_ID)).toBe(false);
+  });
+
+  it("records a confirmed empty body in receipts and aggregate coverage", async () => {
+    const deps = testDependencies({ resultFor: (request) => {
+      const result = successfulResult(request);
+      if (request.endpoint === "groups") return { ...result, items: [] };
+      if (request.endpoint === "courseFiles" || request.endpoint === "file") {
+        return { ...result, items: result.items.map((item) => ({ ...item, size: 0 })) };
+      }
+      return result;
+    } });
+    const capture = await collectCanvasBrowserCapture({ expectedUserId: USER_ID,
+      evaluate: deps.evaluate, reader: deps.reader, htmlReader: deps.htmlReader,
+      downloadFile: async () => ({ kind: "empty", fileId: 900, byteCount: 0, sourceAuthenticity: "unverified" }),
+    });
+    expect(capture.resources.find((row) => row.endpoint === "fileBodies")?.items)
+      .toEqual([{ fileId: 900, status: "gap", reason: "empty" }]);
+    expect(capture.coverage.filter((row) => row.endpoint === "fileBodies"))
+      .toEqual([{ endpoint: "fileBodies", courseId: null, status: "gap", reason: "empty" }]);
   });
 
   it("allows a file callback to take over ten minutes but fails after the thirty-minute capture budget", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { runCanvasBrowserRefresh } from "../../scripts/canvas-browser-session-client.mjs";
+import { runCanvasBrowserRefresh, sanitizeFrame } from "../../scripts/canvas-browser-session-client.mjs";
 
 const captureFrame = {
   status: "PARTIAL",
@@ -9,6 +9,13 @@ const captureFrame = {
   dailyGapCount: 1,
   omissionCount: 2,
   fileBodiesIncomplete: true,
+};
+const completeCaptureFrame = {
+  ...captureFrame,
+  status: "COMPLETE",
+  gapCount: 0,
+  dailyGapCount: 0,
+  fileBodiesIncomplete: false,
 };
 
 const importFrame = {
@@ -24,6 +31,19 @@ const importFrame = {
 };
 
 describe("Canvas refresh client orchestration", () => {
+  it.each([
+    [completeCaptureFrame, "COMPLETE"],
+    [captureFrame, "PARTIAL"],
+  ])("sanitizes exact %s capture frames", (frame, status) => {
+    expect(sanitizeFrame(frame, "capture")).toMatchObject({ status });
+    expect(() => sanitizeFrame({ status }, "capture")).toThrow("INVALID_RESPONSE");
+    expect(() => sanitizeFrame({ ...frame, privateData: "discard" }, "capture")).toThrow("INVALID_RESPONSE");
+    if (status === "COMPLETE") {
+      expect(() => sanitizeFrame({ ...frame, gapCount: 1 }, "capture")).toThrow("INVALID_RESPONSE");
+      expect(() => sanitizeFrame({ ...frame, fileBodiesIncomplete: true }, "capture")).toThrow("INVALID_RESPONSE");
+    }
+  });
+
   it("captures under the bound account, then imports after capture while retaining PARTIAL", async () => {
     const calls: string[] = [];
     const progress = vi.fn();
@@ -63,6 +83,33 @@ describe("Canvas refresh client orchestration", () => {
     });
     expect(result).not.toHaveProperty("nativeImport.runId");
     expect(progress).toHaveBeenCalledWith("CANVAS_IMPORT_COPYING");
+  });
+
+  it("accepts a complete capture while preserving its omission count", async () => {
+    const result = await runCanvasBrowserRefresh({
+      stateCommand: async (verb, runId) => ({ runId: runId ?? 52 }),
+      start: async () => ({ status: "READY" }),
+      readBinding: async () => 41,
+      capture: async () => completeCaptureFrame,
+      nativeImport: async () => importFrame,
+    });
+
+    expect(result).toMatchObject({
+      ...completeCaptureFrame,
+      nativeImport: { status: "IMPORTED" },
+    });
+  });
+
+  it("rejects a complete capture frame with failures or extra fields", async () => {
+    const result = await runCanvasBrowserRefresh({
+      stateCommand: async (verb, runId) => ({ runId: runId ?? 52 }),
+      start: async () => ({ status: "READY" }),
+      readBinding: async () => 41,
+      capture: async () => ({ ...completeCaptureFrame, dailyGapCount: 1, privateData: "discard" }),
+      nativeImport: async () => importFrame,
+    });
+
+    expect(result).toEqual({ status: "REQUEST_FAILED", errorCode: "INVALID_RESPONSE" });
   });
 
   it("marks a pre-capture failure failed and never starts capture or import", async () => {

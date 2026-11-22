@@ -38,6 +38,9 @@ pub fn verify_content_type(
     if content_type == detected {
         return Ok(content_type);
     }
+    if is_raster_image(content_type) && is_raster_image(detected) {
+        return Ok(detected);
+    }
     if is_text_type(content_type) && detected == "text/plain" {
         return Ok(content_type);
     }
@@ -56,6 +59,34 @@ pub fn verify_content_type(
         return Ok(content_type);
     }
     Err(MediaError::MimeSignatureMismatch)
+}
+
+/// Checks the response type and, when Canvas declared a raster image, requires the detected body
+/// to remain within the reviewed raster image set. The returned type is the type detected from
+/// the bytes, so a mislabeled image is recorded using its actual format.
+pub fn verify_content_type_with_declared_type(
+    response_header: Option<&str>,
+    declared_type: Option<&str>,
+    prefix: &[u8],
+) -> Result<&'static str, MediaError> {
+    let detected = verify_content_type(response_header, prefix)?;
+    if declared_type
+        .and_then(canonical_content_type)
+        .is_some_and(is_raster_image)
+        && !is_raster_image(detected)
+    {
+        return Err(MediaError::MimeSignatureMismatch);
+    }
+    Ok(detected)
+}
+
+/// An archived raster receipt already records the detected type, so verify it exactly.
+pub(crate) fn verify_archived_content_type(header: &str, prefix: &[u8]) -> Result<(), MediaError> {
+    let detected = verify_content_type(Some(header), prefix)?;
+    if canonical_content_type(header).is_some_and(|kind| is_raster_image(kind) && kind != detected) {
+        return Err(MediaError::MimeSignatureMismatch);
+    }
+    Ok(())
 }
 
 fn canonical_content_type(value: &str) -> Option<&'static str> {
@@ -80,6 +111,8 @@ fn canonical_content_type(value: &str) -> Option<&'static str> {
         "image/png" => "image/png",
         "image/gif" => "image/gif",
         "image/webp" => "image/webp",
+        "image/heic" | "image/heif" => "image/heic",
+        "image/avif" => "image/avif",
         "text/plain" => "text/plain",
         "text/csv" | "application/csv" => "text/csv",
         "application/json" | "text/json" => "application/json",
@@ -116,8 +149,17 @@ fn is_text_type(content_type: &str) -> bool {
     )
 }
 
+fn is_raster_image(content_type: &str) -> bool {
+    matches!(
+        content_type,
+        "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "image/heic" | "image/avif"
+    )
+}
+
 fn sniff_content_type(prefix: &[u8]) -> Option<&'static str> {
-    if prefix.starts_with(b"%PDF-") {
+    if looks_like_executable(prefix) {
+        None
+    } else if prefix.starts_with(b"%PDF-") {
         Some("application/pdf")
     } else if prefix.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")
@@ -127,6 +169,8 @@ fn sniff_content_type(prefix: &[u8]) -> Option<&'static str> {
         Some("image/gif")
     } else if prefix.len() >= 12 && prefix.starts_with(b"RIFF") && &prefix[8..12] == b"WEBP" {
         Some("image/webp")
+    } else if let Some(image_type) = ftyp_image_type(prefix) {
+        Some(image_type)
     } else if prefix.starts_with(b"PK\x03\x04") || prefix.starts_with(b"PK\x05\x06") {
         Some("application/zip")
     } else if prefix.starts_with(&[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]) {
@@ -146,8 +190,24 @@ fn sniff_content_type(prefix: &[u8]) -> Option<&'static str> {
     }
 }
 
+fn looks_like_executable(prefix: &[u8]) -> bool {
+    [
+        b"MZ".as_slice(),
+        b"\x7fELF".as_slice(),
+        b"\xca\xfe\xba\xbe".as_slice(),
+        b"\xbe\xba\xfe\xca".as_slice(),
+        b"\xfe\xed\xfa\xce".as_slice(),
+        b"\xce\xfa\xed\xfe".as_slice(),
+        b"\xfe\xed\xfa\xcf".as_slice(),
+        b"\xcf\xfa\xed\xfe".as_slice(),
+        b"\0asm".as_slice(),
+    ]
+    .iter()
+    .any(|signature| prefix.starts_with(signature))
+}
+
 fn is_mp4(prefix: &[u8]) -> bool {
-    if prefix.len() < 16 || &prefix[4..8] != b"ftyp" {
+    if prefix.len() < 16 || &prefix[4..8] != b"ftyp" || ftyp_image_type(prefix).is_some() {
         return false;
     }
     let box_size = u32::from_be_bytes(prefix[..4].try_into().expect("four-byte size")) as usize;
@@ -175,6 +235,29 @@ fn is_mp4(prefix: &[u8]) -> bool {
             | b"M4VP"
             | b"MSNV"
     )
+}
+
+fn ftyp_image_type(prefix: &[u8]) -> Option<&'static str> {
+    if prefix.len() < 16 || &prefix[4..8] != b"ftyp" {
+        return None;
+    }
+    let box_size = u32::from_be_bytes(prefix[..4].try_into().expect("four-byte size")) as usize;
+    if box_size < 16 || (box_size - 16) % 4 != 0 {
+        return None;
+    }
+    let brand_end = prefix.len().min(box_size);
+    let brands = std::iter::once(&prefix[8..12]).chain(prefix[16..brand_end].chunks_exact(4));
+    let mut is_heif = false;
+    for brand in brands {
+        match brand {
+            b"avif" | b"avis" => return Some("image/avif"),
+            b"heic" | b"heix" | b"hevc" | b"heim" | b"heis" | b"mif1" | b"msf1" => {
+                is_heif = true;
+            }
+            _ => {}
+        }
+    }
+    is_heif.then_some("image/heic")
 }
 
 fn is_svg(prefix: &[u8]) -> bool {
@@ -326,6 +409,19 @@ fn looks_like_html(prefix: &[u8]) -> bool {
 mod tests {
     use super::*;
 
+    fn ftyp(major_brand: &[u8; 4], compatible_brands: &[[u8; 4]]) -> Vec<u8> {
+        let box_size = 16 + compatible_brands.len() * 4;
+        let mut prefix = Vec::with_capacity(box_size);
+        prefix.extend_from_slice(&(box_size as u32).to_be_bytes());
+        prefix.extend_from_slice(b"ftyp");
+        prefix.extend_from_slice(major_brand);
+        prefix.extend_from_slice(&[0; 4]);
+        for brand in compatible_brands {
+            prefix.extend_from_slice(brand);
+        }
+        prefix
+    }
+
     #[test]
     fn media_validation_rejects_html_and_signature_mismatches() {
         assert_eq!(
@@ -368,6 +464,130 @@ mod tests {
         );
         assert_eq!(
             verify_content_type(Some("application/octet-stream"), b"SQLite format 2\0"),
+            Err(MediaError::MimeSignatureMismatch)
+        );
+    }
+
+    #[test]
+    fn image_declarations_accept_only_detected_raster_image_types() {
+        let heic = ftyp(b"heic", &[]);
+        let avif = ftyp(b"avif", &[]);
+        let fixtures = [
+            ("image/png", b"\x89PNG\r\n\x1a\nsynthetic".as_slice()),
+            ("image/webp", b"RIFF\0\0\0\0WEBPsynthetic".as_slice()),
+            ("image/heic", heic.as_slice()),
+            ("image/avif", avif.as_slice()),
+        ];
+        for (expected, prefix) in fixtures {
+            assert_eq!(
+                verify_content_type_with_declared_type(
+                    Some("application/octet-stream"),
+                    Some("image/jpeg"),
+                    prefix,
+                ),
+                Ok(expected)
+            );
+        }
+
+        for (response_type, prefix) in [
+            (
+                Some("application/octet-stream"),
+                b"\0\0\0\x18ftypisom\0\0\0\0isom".as_slice(),
+            ),
+            (
+                Some("application/octet-stream"),
+                b"PK\x03\x04synthetic ZIP".as_slice(),
+            ),
+            (None, b"MZ synthetic executable".as_slice()),
+        ] {
+            assert_eq!(
+                verify_content_type_with_declared_type(response_type, Some("image/jpeg"), prefix),
+                Err(MediaError::MimeSignatureMismatch)
+            );
+        }
+        assert_eq!(
+            verify_content_type_with_declared_type(
+                Some("application/octet-stream"),
+                Some("image/jpeg"),
+                b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>",
+            ),
+            Err(MediaError::MimeSignatureMismatch)
+        );
+        assert_eq!(
+            verify_content_type_with_declared_type(
+                Some("application/octet-stream"),
+                Some("image/jpeg"),
+                b"<!doctype html><html></html>",
+            ),
+            Err(MediaError::SignInResponse)
+        );
+    }
+
+    #[test]
+    fn heif_and_avif_brands_are_not_misclassified_as_mp4() {
+        for brand in [
+            b"heic", b"heix", b"hevc", b"heim", b"heis", b"mif1", b"msf1",
+        ] {
+            let prefix = ftyp(brand, &[]);
+            assert_eq!(sniff_content_type(&prefix), Some("image/heic"));
+            assert!(!is_mp4(&prefix));
+        }
+        for brand in [b"avif", b"avis"] {
+            let prefix = ftyp(brand, &[]);
+            assert_eq!(sniff_content_type(&prefix), Some("image/avif"));
+            assert!(!is_mp4(&prefix));
+        }
+        let compatible_brand = ftyp(b"isom", &[*b"avif"]);
+        assert_eq!(sniff_content_type(&compatible_brand), Some("image/avif"));
+        assert!(!is_mp4(&compatible_brand));
+        assert_eq!(
+            sniff_content_type(b"\0\0\0\x18ftypisom\0\0\0\0isom"),
+            Some("video/mp4")
+        );
+    }
+
+    #[test]
+    fn media_validation_accepts_reviewed_benign_mime_cases() {
+        let office_open_xml =
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        assert_eq!(
+            verify_content_type(Some("application/octet-stream"), b"%PDF-1.7\nsynthetic"),
+            Ok("application/pdf")
+        );
+        assert_eq!(
+            verify_content_type(Some(office_open_xml), b"PK\x03\x04synthetic ZIP container"),
+            Ok(office_open_xml)
+        );
+        assert_eq!(
+            verify_content_type(Some("text/plain; charset=utf-8"), b"Synthetic notes\n"),
+            Ok("text/plain")
+        );
+    }
+
+    #[test]
+    fn media_validation_rejects_executables_and_unknown_binary_prefixes() {
+        for executable in [
+            b"MZ synthetic executable prefix".as_slice(),
+            b"\x7fELF synthetic executable prefix".as_slice(),
+            b"\xfe\xed\xfa\xcf synthetic Mach-O prefix".as_slice(),
+            b"\xca\xfe\xba\xbe synthetic executable prefix".as_slice(),
+            b"\0asm synthetic WebAssembly prefix".as_slice(),
+        ] {
+            assert_eq!(
+                verify_content_type(None, executable),
+                Err(MediaError::MimeSignatureMismatch)
+            );
+            assert_eq!(
+                verify_content_type(Some("application/octet-stream"), executable),
+                Err(MediaError::MimeSignatureMismatch)
+            );
+            assert_eq!(
+                verify_content_type(Some("text/plain"), executable),
+                Err(MediaError::MimeSignatureMismatch)
+            );
+        }
+        assert_eq!(
+            verify_content_type(Some("application/octet-stream"), b"\0\xff\x01\x80"),
             Err(MediaError::MimeSignatureMismatch)
         );
     }

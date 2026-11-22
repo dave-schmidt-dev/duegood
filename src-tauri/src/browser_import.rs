@@ -24,14 +24,18 @@ use crate::export::{copy_tree, ExportProgress};
 use crate::history::{self, HISTORY_FILE};
 use crate::store::{utc_stamp, Store, StoreError};
 
+const OPTIONAL_FILE_BODY_REASONS: &[&str] = &["empty", "locked", "not-applicable", "unpublished"];
+
+#[path = "browser_import_capture_evidence.rs"]
+mod capture_evidence;
 #[path = "browser_import_course_metadata.rs"]
 mod course_metadata;
 #[path = "browser_import_daily_scope.rs"]
 mod daily_scope;
-#[path = "browser_import_inventory.rs"]
-mod inventory;
 #[path = "browser_import_diagnostics.rs"]
 mod diagnostics;
+#[path = "browser_import_inventory.rs"]
+mod inventory;
 #[path = "browser_import_state.rs"]
 mod state;
 
@@ -257,6 +261,7 @@ fn import_current_capture_inner(
     {
         return Err(BrowserImportError::CaptureUnverified);
     }
+    validate_complete_claim(&bundle)?;
     let confirmed_first_user_id = first_account_confirmation.resolve(bundle.user_id);
 
     let initial = {
@@ -423,6 +428,29 @@ fn import_current_capture_inner(
     ))
 }
 
+fn validate_complete_claim(bundle: &ValidatedCaptureBundle) -> Result<(), BrowserImportError> {
+    let manifest_complete = bundle.manifest.get("complete").and_then(Value::as_bool);
+    let snapshot_complete = bundle.snapshot.get("complete").and_then(Value::as_bool);
+    if manifest_complete != snapshot_complete {
+        return Err(BrowserImportError::CaptureUnverified);
+    }
+    if manifest_complete != Some(true) {
+        return Ok(());
+    }
+    let (daily_gap_count, _) = daily_scope::summarize_daily_scope(
+        &bundle.snapshot,
+        &bundle.active_courses,
+        &bundle.coverage,
+    )?;
+    if daily_gap_count > 0
+        || daily_scope::has_capture_failures(&bundle.snapshot, &bundle.coverage)?
+        || !capture_evidence::has_complete_capture_evidence(&bundle.snapshot, &bundle.coverage)
+    {
+        return Err(BrowserImportError::IncompleteCoverage);
+    }
+    Ok(())
+}
+
 fn projected_file_gap_count(
     documents: &std::collections::BTreeMap<String, Vec<u8>>,
 ) -> Result<usize, BrowserImportError> {
@@ -440,7 +468,13 @@ fn projected_file_gap_count(
         Ok(count
             + receipts
                 .iter()
-                .filter(|receipt| receipt.get("status").and_then(Value::as_str) != Some("saved"))
+                .filter(|receipt| {
+                    receipt.get("status").and_then(Value::as_str) != Some("saved")
+                        && !receipt
+                            .get("reason")
+                            .and_then(Value::as_str)
+                            .is_some_and(|reason| OPTIONAL_FILE_BODY_REASONS.contains(&reason))
+                })
                 .count())
     })
 }
@@ -488,11 +522,6 @@ fn canvas_import_history_event(
     now: SystemTime,
 ) -> Result<Value, BrowserImportError> {
     let diff = history::diff_coursework(before, after)?;
-    let coverage_gap_count = bundle
-        .coverage
-        .iter()
-        .filter(|row| row.status != "complete")
-        .count();
     let (daily_gap_count, daily_omission_count) = daily_scope::summarize_daily_scope(
         &bundle.snapshot,
         &bundle.active_courses,
@@ -500,7 +529,9 @@ fn canvas_import_history_event(
     )?;
     let source_complete = bundle.manifest.get("complete").and_then(Value::as_bool) == Some(true)
         && bundle.snapshot.get("complete").and_then(Value::as_bool) == Some(true)
-        && coverage_gap_count == 0
+        && daily_gap_count == 0
+        && !daily_scope::has_capture_failures(&bundle.snapshot, &bundle.coverage)?
+        && capture_evidence::has_complete_capture_evidence(&bundle.snapshot, &bundle.coverage)
         && file_gap_count == 0;
     let mut event = history::event_value(&diff, started_at, &utc_stamp(now).iso, now);
     event["source"] = Value::String("canvas".into());
@@ -611,8 +642,18 @@ fn parse_capture_time(value: &str) -> Result<SystemTime, BrowserImportError> {
 }
 
 #[cfg(test)]
+#[path = "browser_import_completion_tests.rs"]
+mod completion_tests;
+#[cfg(test)]
 #[path = "browser_import_daily_scope_tests.rs"]
 mod daily_scope_tests;
+#[cfg(test)]
+#[path = "browser_import_end_to_end_tests.rs"]
+mod end_to_end_tests;
+#[cfg(test)]
+#[path = "browser_import_fixture.rs"]
+mod fixture;
+
 #[cfg(test)]
 #[path = "browser_import_tests.rs"]
 mod tests;

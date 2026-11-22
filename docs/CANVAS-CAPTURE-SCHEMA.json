@@ -12,7 +12,7 @@
     "runId": { "type": "integer", "minimum": 1 },
     "generationId": { "type": "string", "pattern": "^[a-f0-9]{32}$" },
     "capturedAt": { "type": "string", "format": "date-time" },
-    "complete": { "type": "boolean" },
+    "complete": { "type": "boolean", "description": "True only when all accessible data and applicable file bodies were captured and verified. Recorded access omissions may remain." },
     "identity": {
       "type": "object",
       "additionalProperties": false,
@@ -64,7 +64,7 @@
           "courseId": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
           "groupId": { "type": "integer", "minimum": 1 },
           "contextCode": { "type": "string", "pattern": "^(user|course|group|account)_[1-9][0-9]*$" },
-          "items": { "type": "array", "items": { "type": "object" } },
+          "items": { "type": "array", "description": "For fileBodies, a gap receipt with reason empty records an explicitly zero-size Canvas file whose successful download yielded zero bytes. It has no archived blob.", "items": { "type": "object" } },
           "pages": { "type": "integer", "minimum": 1 }
         }
       }
@@ -75,13 +75,15 @@
         "type": "object",
         "additionalProperties": false,
         "required": ["endpoint", "courseId", "status"],
+        "if": { "required": ["reason"], "properties": { "reason": { "const": "empty" } } },
+        "then": { "properties": { "endpoint": { "const": "fileBodies" }, "status": { "const": "gap" } } },
         "properties": {
           "endpoint": { "type": "string", "minLength": 1 },
           "courseId": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
           "groupId": { "type": "integer", "minimum": 1 },
           "contextCode": { "type": "string", "pattern": "^(user|course|group|account)_[1-9][0-9]*$" },
           "status": { "enum": ["complete", "incomplete", "gap"] },
-          "reason": { "enum": ["forbidden-optional", "disabled", "not-attempted", "not-found", "request-failed", "pagination-budget", "capture-budget"] }
+          "reason": { "enum": ["empty", "forbidden-optional", "disabled", "not-attempted", "not-found", "request-failed", "pagination-budget", "capture-budget", "detail-budget", "invalid-slug", "locked", "not-applicable", "parent-unavailable", "unpublished", "unsupported"] }
         }
       }
     }

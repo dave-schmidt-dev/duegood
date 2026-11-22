@@ -41,7 +41,8 @@ export function collectCanvasBlobReceipts(snapshot) {
   for (const resource of resources) {
     if (!Array.isArray(resource.items)) throw archiveError("INVALID_BLOB_RECEIPT");
     for (const item of resource.items) {
-      if (item?.status !== "staged") continue;
+      if (item?.status === "gap") continue;
+      if (item?.status !== "staged") throw archiveError("INVALID_BLOB_RECEIPT");
       const expectedSizeValid = item.expectedSize === null
         || (Number.isSafeInteger(item.expectedSize) && item.expectedSize >= 0);
       if (!Number.isSafeInteger(item.fileId) || item.fileId <= 0 || !expectedSizeValid

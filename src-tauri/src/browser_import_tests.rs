@@ -1,74 +1,17 @@
+use super::fixture::{open_store, publish_with, COURSE_ID};
 use super::*;
 use crate::store::node_json_bytes;
 use serde_json::json;
 
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use crate::config::canvas_capture_archive_root;
-use crate::store::{atomic_write, create_private_dir, new_preview_manifest, sha256_hex};
+use crate::store::{atomic_write, create_private_dir};
 use crate::testutil::{snapshot_tree, TempRoot};
 
 const USER_ID: u64 = 41;
-const COURSE_ID: u64 = 900_001;
 const GENERATION_ID: &str = "a123456789abcdef0123456789abcdef";
-
-fn open_store(root: &TempRoot, state: &str, folderless: bool) -> Store {
-    let store = Store::open(root.path(), Duration::from_millis(300)).unwrap();
-    create_private_dir(&store.store_dir(), false).unwrap();
-    let mut manifest = new_preview_manifest(1, 1, "synthetic", SystemTime::now());
-    manifest["state"] = Value::String(state.into());
-    atomic_write(
-        &store.store_dir().join(MANIFEST_FILE),
-        &node_json_bytes(&manifest),
-    )
-    .unwrap();
-
-    let mut coursework: Value = serde_json::from_slice(include_bytes!(
-        "../../fixtures/local-coursework-contract.json"
-    ))
-    .unwrap();
-    coursework["courses"][0]["canvasCourseId"] = json!(COURSE_ID);
-    if folderless {
-        coursework["courses"][0]["folder"] = Value::Null;
-    }
-    coursework["items"][0]["done"] = Value::Bool(false);
-    coursework["items"][0]["doneAt"] = Value::Null;
-    coursework["items"][0]["studentNote"] = json!("Synthetic note kept from the latest store");
-    atomic_write(
-        &store.store_dir().join(COURSEWORK_FILE),
-        &node_json_bytes(&coursework),
-    )
-    .unwrap();
-    atomic_write(
-        &store.store_dir().join("courses.json"),
-        &node_json_bytes(&json!({"courses":[{"key":"course-a","canvasId":COURSE_ID}]})),
-    )
-    .unwrap();
-
-    if !folderless {
-        let directory = store
-            .store_dir()
-            .join("classes/synthetic-course-a/canvas-export/api");
-        create_private_dir(&store.store_dir().join("classes"), false).unwrap();
-        create_private_dir(&store.store_dir().join("classes/synthetic-course-a"), false).unwrap();
-        create_private_dir(
-            &store
-                .store_dir()
-                .join("classes/synthetic-course-a/canvas-export"),
-            false,
-        )
-        .unwrap();
-        create_private_dir(&directory, false).unwrap();
-        atomic_write(
-            &directory.join("course.json"),
-            &node_json_bytes(&json!({"id":COURSE_ID,"name":"Synthetic"})),
-        )
-        .unwrap();
-    }
-    store
-}
 
 fn snapshot(run_id: u64, generation_id: &str, user_id: u64) -> Value {
     let active_ids = [COURSE_ID, 900_002_u64];
@@ -128,47 +71,10 @@ fn snapshot(run_id: u64, generation_id: &str, user_id: u64) -> Value {
 }
 
 fn publish_attempt(root: &TempRoot, user_id: u64) -> u64 {
-    let archive = canvas_capture_archive_root(root.path()).unwrap();
-    create_private_dir(&archive, true).unwrap();
-    create_private_dir(&archive.join("generations"), true).unwrap();
-    create_private_dir(&archive.join("blobs"), true).unwrap();
-    let guard = CaptureRunGuard::acquire(root.path()).unwrap();
-    let attempt = guard.begin().unwrap();
-    let generation_id = format!("{:032x}", attempt.run_id + 100);
-    let snapshot = snapshot(attempt.run_id, &generation_id, user_id);
-    let snapshot_bytes = node_json_bytes(&snapshot);
-    let snapshot_hash = sha256_hex(&snapshot_bytes);
-    let generation = archive.join("generations").join(&generation_id);
-    create_private_dir(&generation, false).unwrap();
-    atomic_write(&generation.join("snapshot.json"), &snapshot_bytes).unwrap();
-    let resource_count = snapshot["resources"].as_array().unwrap().len() as u64;
-    let item_count = snapshot["resources"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|resource| resource["items"].as_array().unwrap().len() as u64)
-        .sum::<u64>();
-    let manifest = json!({
-        "format":"duegood-canvas-capture-generation","version":2,"runId":attempt.run_id,
-        "generationId":generation_id,"capturedAt":"2030-01-08T12:00:00Z","complete":false,
-        "identity":{"origin":"https://marymount.instructure.com","userId":user_id},
-        "snapshotBytes":snapshot_bytes.len(),"snapshotSha256":snapshot_hash,
-        "resourceCount":resource_count,"itemCount":item_count,"blobCount":0,"blobBytes":0,"blobs":[]
-    });
-    atomic_write(
-        &generation.join("manifest.json"),
-        &node_json_bytes(&manifest),
-    )
-    .unwrap();
-    let pointer = json!({"format":"duegood-canvas-capture-current","version":2,"runId":attempt.run_id,"generationId":generation_id,"snapshotSha256":snapshot_hash});
-    atomic_write(&archive.join("current.json"), &node_json_bytes(&pointer)).unwrap();
-    guard
-        .complete(attempt.run_id, &generation_id, &snapshot_hash, user_id)
-        .unwrap();
-    attempt.run_id
+    publish_with(root, user_id, snapshot)
 }
 
-fn run_import(
+pub(super) fn run_import(
     store: &Store,
     root: &TempRoot,
     confirmation: Option<u64>,
@@ -190,7 +96,7 @@ fn read_coursework(store: &Store) -> Value {
     serde_json::from_slice(&fs::read(store.store_dir().join(COURSEWORK_FILE)).unwrap()).unwrap()
 }
 
-fn read_history(store: &Store) -> Value {
+pub(super) fn read_history(store: &Store) -> Value {
     serde_json::from_slice(&fs::read(store.store_dir().join(HISTORY_FILE)).unwrap()).unwrap()
 }
 
@@ -779,14 +685,27 @@ fn status_coverage_coalesces_duplicate_endpoint_rows_to_gap() {
         .iter()
         .any(|row| row["reason"] == "other" && row["count"] == 1));
     let notices = diagnostics::file_history_notices(&bundle);
-    assert!(notices.iter().any(|notice| notice["detail"].as_str().unwrap().starts_with("1 file: could not be verified")));
-    assert!(notices.iter().any(|notice| notice["detail"].as_str().unwrap().contains("could not be downloaded")));
-    assert!(!serde_json::to_string(&notices).unwrap().contains("secret-private-download-error"));
+    assert!(notices.iter().any(|notice| notice["detail"]
+        .as_str()
+        .unwrap()
+        .starts_with("1 file: could not be verified")));
+    assert!(notices.iter().any(|notice| notice["detail"]
+        .as_str()
+        .unwrap()
+        .contains("could not be downloaded")));
+    assert!(!serde_json::to_string(&notices)
+        .unwrap()
+        .contains("secret-private-download-error"));
     let resources = bundle.snapshot["resources"].as_array_mut().unwrap();
-    let receipts = resources.last_mut().unwrap()["items"].as_array_mut().unwrap();
+    let receipts = resources.last_mut().unwrap()["items"]
+        .as_array_mut()
+        .unwrap();
     receipts[1]["reason"] = json!("not-applicable");
     let optional_notices = diagnostics::file_history_notices(&bundle);
-    assert!(optional_notices.iter().any(|notice| notice["detail"].as_str().unwrap().contains("macOS metadata companions skipped")));
+    assert!(optional_notices.iter().any(|notice| notice["detail"]
+        .as_str()
+        .unwrap()
+        .contains("not applicable in Canvas; skipped")));
     let encoded = serde_json::to_string(&status).unwrap();
     assert!(!encoded.contains("secretpayload"));
     assert!(!encoded.contains("private-course-token-991"));

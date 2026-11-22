@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import path from "node:path";
 import { collectCanvasBrowserCapture } from "./canvas-browser-capture.mjs";
+import { isRasterImageContentType } from "./canvas-browser-capture-files.mjs";
 import { downloadCanvasFile } from "./canvas-browser-file-pipeline.mjs";
 import { saveCanvasCaptureGeneration } from "./canvas-browser-archive.mjs";
 import { loadCanvasFileReuseIndex, stageReusedCanvasFile } from "./canvas-browser-file-reuse.mjs";
@@ -21,7 +22,6 @@ import { handleSurveyPopup } from "./canvas-survey-popup.mjs";
 const APP_DIR = path.join(homedir(), "Library", "Application Support", "DueGood");
 const MAX_CAPTURE_DISK_BYTES = 4 * 1024 * 1024 * 1024;
 const DIAGNOSTIC_FILE = "canvas-capture-last-error.json";
-
 async function writeSafeDiagnostic(appDirectory, { phase, endpoint, error }) {
   const errorCode = [error?.code, error?.message].find((value) =>
     typeof value === "string" && /^[A-Z_]{1,48}$/u.test(value)) ?? "UNCLASSIFIED";
@@ -46,9 +46,9 @@ async function privateDirectory(directory) {
   }
 }
 
-/** Removes reused staging copies the collector no longer references before the archive save. */
-async function discardReplacedStaging(snapshot, stagingDirectory, reusedStagedFiles) {
-  if (reusedStagedFiles.size === 0) return;
+/** Removes staged copies the collector no longer references before the archive save. */
+async function discardUnreferencedStaging(snapshot, stagingDirectory, stagedFiles) {
+  if (stagedFiles.size === 0) return;
   const referenced = new Set();
   for (const resource of Array.isArray(snapshot?.resources) ? snapshot.resources : []) {
     if (resource?.endpoint !== "fileBodies" || !Array.isArray(resource.items)) continue;
@@ -56,7 +56,7 @@ async function discardReplacedStaging(snapshot, stagingDirectory, reusedStagedFi
       if (item?.status === "staged" && typeof item.stagedFile === "string") referenced.add(item.stagedFile);
     }
   }
-  for (const stagedFile of reusedStagedFiles) {
+  for (const stagedFile of stagedFiles) {
     if (!referenced.has(stagedFile)) {
       await unlink(path.join(stagingDirectory, stagedFile)).catch(() => undefined);
     }
@@ -124,7 +124,7 @@ export async function runCanvasCapture({
         progress("CAPTURE_RUNNING");
         let stagedBytes = 0;
         const reuseIndex = await loadFileReuseIndex({ appDirectory, expectedUserId });
-        const reusedStagedFiles = new Set();
+        const stagedFiles = new Set();
         phase = "collecting";
         const snapshot = await collector({
           expectedUserId,
@@ -149,10 +149,12 @@ export async function runCanvasCapture({
                 progress: () => progress("CAPTURE_RUNNING"),
               });
               if (reused !== null) {
-                if (Number.isSafeInteger(reused.byteCount) && reused.byteCount > 0
+                const imageReceiptMatches = !isRasterImageContentType(contentType)
+                  || isRasterImageContentType(reused.contentType);
+                if (imageReceiptMatches && Number.isSafeInteger(reused.byteCount) && reused.byteCount > 0
                     && reused.byteCount <= MAX_CAPTURE_DISK_BYTES - stagedBytes) {
                   stagedBytes += reused.byteCount;
-                  reusedStagedFiles.add(reused.stagedFile);
+                  if (/^[a-f0-9]{32}\.blob$/u.test(reused.stagedFile)) stagedFiles.add(reused.stagedFile);
                   return reused;
                 }
                 // An unusable copied receipt is removed so staging stays exact for the save.
@@ -168,7 +170,9 @@ export async function runCanvasCapture({
             }
             progress("CAPTURE_DOWNLOADING");
             const receipt = await browserFileDownload({ context, page, fileId, sourceUrl, expectedSize,
-              stagingDirectory, helperPath, progress: () => progress("CAPTURE_DOWNLOADING") });
+              contentType, stagingDirectory, helperPath, progress: () => progress("CAPTURE_DOWNLOADING") });
+            if (receipt?.kind === "empty" && receipt.fileId === fileId && receipt.byteCount === 0
+                && receipt.sourceAuthenticity === "unverified" && expectedSize === 0) return receipt;
             if (receipt?.kind !== "staged" || !Number.isSafeInteger(receipt.byteCount)
                 || receipt.byteCount <= 0 || receipt.byteCount > MAX_CAPTURE_DISK_BYTES - stagedBytes) {
               if (typeof receipt?.stagedFile === "string" && /^[a-f0-9]{32}\.blob$/u.test(receipt.stagedFile)) {
@@ -176,11 +180,12 @@ export async function runCanvasCapture({
               }
               throw new Error("CAPTURE_DISK_BUDGET_EXCEEDED");
             }
+            if (/^[a-f0-9]{32}\.blob$/u.test(receipt.stagedFile ?? "")) stagedFiles.add(receipt.stagedFile);
             stagedBytes += receipt.byteCount;
             return receipt;
           },
         });
-        await discardReplacedStaging(snapshot, stagingDirectory, reusedStagedFiles);
+        await discardUnreferencedStaging(snapshot, stagingDirectory, stagedFiles);
         snapshot.syllabusSessions = await deriveCapturedSyllabusSessions({
           snapshot,
           stagingDirectory,

@@ -102,13 +102,13 @@ describe.sequential("packaged browser runtime", () => {
         process.stderr.write(`CANVAS_CAPTURE_PROGRESS=PRIVATE_${privateSentinel}\n`);
         options.reportImportProgress?.("raw account or course data");
         return {
-          status: "PARTIAL",
+          status: "COMPLETE",
           resourceCount: 9,
           itemCount: 4,
           gapCount: 0,
           dailyGapCount: 0,
           omissionCount: 3,
-          fileBodiesIncomplete: true,
+          fileBodiesIncomplete: false,
           snapshotPath: privateSentinel,
           courseName: "private course name",
           nativeImport: {
@@ -164,8 +164,8 @@ describe.sequential("packaged browser runtime", () => {
         await new Promise((resolve) => setTimeout(resolve, 25));
         process.stderr.write("CANVAS_CAPTURE_PROGRESS=CAPTURE_RUNNING\n");
         return {
-          status: "PARTIAL", resourceCount: 1, itemCount: 1, gapCount: 0, dailyGapCount: 0,
-          omissionCount: 0, fileBodiesIncomplete: true,
+          status: "COMPLETE", resourceCount: 1, itemCount: 1, gapCount: 0, dailyGapCount: 0,
+          omissionCount: 0, fileBodiesIncomplete: false,
           nativeImport: {
             status: "IMPORTED", importedCourses: 1, archivedCourses: 0, promotedBlobs: 0,
             reusedBlobs: 0, bytesVerified: 0, alreadyCurrent: false,
@@ -228,5 +228,36 @@ describe.sequential("packaged browser runtime", () => {
     });
     expect(malformed.status).toBe("incomplete");
     expect(malformed.errorCode).toBe("BROWSER_REFRESH_FAILED");
+  });
+
+  it("shows personal-file body failures when daily coursework has no gaps", async () => {
+    const output: string[] = [];
+    const result = await runCanvasAppRefresh({
+      heartbeatMs: 60_000,
+      writeLine: (line) => { output.push(line); return true; },
+      runClient: async () => ({
+        status: "PARTIAL",
+        resourceCount: 5,
+        itemCount: 7,
+        gapCount: 3,
+        dailyGapCount: 0,
+        omissionCount: 0,
+        fileBodiesIncomplete: true,
+        nativeImport: {
+          status: "IMPORTED",
+          importedCourses: 0,
+          archivedCourses: 0,
+          promotedBlobs: 0,
+          reusedBlobs: 0,
+          bytesVerified: 0,
+          alreadyCurrent: false,
+        },
+      }),
+    });
+
+    expect(result.status).toBe("incomplete");
+    expect(result.gapCount).toBe(3);
+    expect(result.errorCode).toBe("CAPTURE_GAPS");
+    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({ gapCount: 3, omissionCount: 0 });
   });
 });

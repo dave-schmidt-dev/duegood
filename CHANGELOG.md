@@ -10,6 +10,8 @@
 
 ### Changed
 
+- Canvas refresh skips confirmed empty files and keeps supported raster images under their detected format when the label differs.
+
 - Start Canvas refresh headless. When sign-in needs help, explain why and open Chrome for one attended retry. Use `canvas:session -- start --headed` to keep a visible session open.
 
 - Exclude disposable build caches and stages from package validation while continuing to check public source files.
@@ -17,6 +19,9 @@
 - Run screen-seizing checks (XCUITest smoke, production launch check, live populated-store verifier, and installer cold-launch proofs) only before a release, at an owner-qualification install, or for a walkthrough. Git hooks and phase gates stay headless, and the hook and test-membership checks now reject these runners in hooks and `test:all`.
 
 ### Fixed
+
+- Report a complete Canvas refresh when every accessible item was captured. Show the omission count for inaccessible items and keep failed downloads or verification visibly incomplete.
+- Isolate native test storage so fixture imports cannot replace the owner’s archive pointer.
 
 - Keep calendar imports from rejecting valid requests split across network reads on macOS, while retaining request deadlines.
 

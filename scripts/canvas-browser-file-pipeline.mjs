@@ -14,7 +14,7 @@ const SHA256 = /^[a-f0-9]{64}$/u;
 const DOWNLOAD_ERROR_CODES = new Set([
   "invalid-url", "redirect-refused", "too-many-redirects", "response-too-large", "invalid-avatar",
   "request-failed", "http-status", "concurrency-lock-poisoned", "sign-in-response",
-  "mime-signature-mismatch", "size-mismatch", "unsafe-staging-directory", "staging-failed",
+  "mime-signature-mismatch", "size-mismatch", "canvas-confirmed-empty", "unsafe-staging-directory", "staging-failed",
 ]);
 function failure(code) {
   return Object.assign(new Error(code), { code });
@@ -104,19 +104,36 @@ export async function runCaptureDownloadHelper({ helperPath, request, fileId, pr
 }
 
 /** Fetches one Canvas file through the existing page, then verifies/stages it natively. */
-export async function downloadCanvasFile({ context, page, fileId, sourceUrl, expectedSize, stagingDirectory, helperPath,
+export async function downloadCanvasFile({ context, page, fileId, sourceUrl, expectedSize, contentType = /** @type {string | null} */ (null), stagingDirectory, helperPath,
   progress = () => {}, browserFetch = fetchCanvasFileToStaging, nativeHelper = runCaptureDownloadHelper }) {
   const browserResult = await browserFetch({ context, page, fileId, sourceUrl, stagingDirectory, progress });
   let request;
+  if (browserResult?.kind === "empty") {
+    if (browserResult.fileId !== fileId || browserResult.byteCount !== 0
+        || browserResult.sourceAuthenticity !== "unverified") throw failure("BROWSER_DOWNLOAD_REJECTED");
+    if (expectedSize !== 0) throw failure("EMPTY_RESPONSE");
+    return { kind: "empty", fileId, byteCount: 0, sourceAuthenticity: "unverified" };
+  }
   if (browserResult?.kind === "redirect" && browserResult.fileId === fileId) {
     request = { fileId, browserSourceUrl: sourceUrl, browserLocationUrl: browserResult.location,
-      expectedSize, stagingDirectory };
+      expectedSize, stagingDirectory,
+      ...(typeof contentType === "string" ? { declaredContentType: contentType } : {}) };
   } else if (browserResult?.kind === "staged" && browserResult.fileId === fileId) {
     request = { fileId, browserStagedPath: browserResult.stagedPath, browserByteCount: browserResult.byteCount,
-      expectedSize, stagingDirectory };
+      expectedSize, stagingDirectory,
+      browserContentType: typeof browserResult.responseContentType === "string" ? browserResult.responseContentType : null,
+      ...(typeof contentType === "string" ? { declaredContentType: contentType } : {}) };
   } else throw failure("BROWSER_DOWNLOAD_REJECTED");
   try {
-    const receipt = await nativeHelper({ helperPath, request, fileId, progress });
+    let receipt;
+    try {
+      receipt = await nativeHelper({ helperPath, request, fileId, progress });
+    } catch (error) {
+      if (error?.code === "HELPER_DOWNLOAD_CANVAS_CONFIRMED_EMPTY" && expectedSize === 0) {
+        return { kind: "empty", fileId, byteCount: 0, sourceAuthenticity: "unverified" };
+      }
+      throw error;
+    }
     if (!validReceipt(receipt, fileId)) throw failure("HELPER_RESPONSE_REJECTED");
     await progress({ state: "FILE_STAGED", byteCount: receipt.byteCount });
     return { kind: "staged", fileId, stagedFile: receipt.stagedFile, byteCount: receipt.byteCount,

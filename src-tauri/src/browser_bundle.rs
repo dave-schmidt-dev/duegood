@@ -212,6 +212,11 @@ where
     }
     let snapshot: Value =
         serde_json::from_slice(&snapshot_bytes).map_err(|_| BundleError::InvalidSnapshot)?;
+    if manifest.get("complete").and_then(Value::as_bool)
+        != snapshot.get("complete").and_then(Value::as_bool)
+    {
+        return Err(BundleError::InvalidSnapshot);
+    }
     let captured_at = validate_snapshot(&snapshot, run_id, &generation_id, user_id)?;
     validate_counts(&manifest, &snapshot)?;
     let (active_courses, coverage) = coverage::validate_active_coverage(&snapshot)?;
@@ -275,7 +280,7 @@ fn validate_manifest(
         return Err(BundleError::RunMismatch);
     }
     if required_hash(manifest, "snapshotSha256", BundleError::InvalidManifest)? != pointer_hash
-        || manifest.get("complete").and_then(Value::as_bool) != Some(false)
+        || manifest.get("complete").and_then(Value::as_bool).is_none()
     {
         return Err(BundleError::InvalidManifest);
     }
@@ -307,7 +312,7 @@ fn validate_snapshot(
         return Err(BundleError::UnsupportedVersion);
     }
     if snapshot.get("source").and_then(Value::as_str) != Some("canvas-browser")
-        || snapshot.get("complete").and_then(Value::as_bool) != Some(false)
+        || snapshot.get("complete").and_then(Value::as_bool).is_none()
     {
         return Err(BundleError::InvalidSnapshot);
     }

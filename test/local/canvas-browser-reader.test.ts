@@ -145,6 +145,20 @@ describe("guarded Canvas browser API reader", () => {
     }
   });
 
+  it.each([403, 404])("keeps a denied pagination continuation (%i) incomplete", async (status) => {
+    const fetcher = async (value: RequestInfo | URL) => {
+      const url = new URL(String(value));
+      if (url.pathname.endsWith("/profile")) return profile();
+      if (url.searchParams.has("page")) return json({}, {}, status);
+      return json([{ id: 71, course_id: 88 }], {
+        link: `<${ORIGIN}/api/v1/courses/88/files?per_page=1&page=2>; rel="next"`,
+      });
+    };
+    await expect(readCanvasBrowserApi({
+      mode: "read", endpoint: "courseFiles", courseId: 88, expectedUserId: 41, perPage: 1,
+    }, fetcher)).rejects.toMatchObject({ code: "REQUEST_FAILED" });
+  });
+
   it("keeps forbidden areas as gaps and required-area 403 responses incomplete", async () => {
     const forbiddenPage = vi.fn(async (value: RequestInfo | URL) => new URL(String(value)).pathname.endsWith("/profile")
       ? profile()

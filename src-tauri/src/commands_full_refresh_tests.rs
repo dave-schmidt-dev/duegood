@@ -110,6 +110,30 @@ fn browser_client_uses_fixed_entrypoint_and_sanitizes_content_free_frames() {
 }
 
 #[test]
+fn complete_browser_capture_keeps_omission_count_in_full_refresh_result() {
+    let result = combine_outcomes(
+        BrowserOutcome::Complete {
+            gaps: 0,
+            omissions: 14,
+        },
+        CalendarOutcome::Complete(IcalRefreshResult {
+            status: "complete",
+            updated_at: "2026-11-22T12:00:00Z".into(),
+            added: 7,
+            updated: 2,
+            held: 0,
+            removed: 0,
+        }),
+    );
+
+    assert_eq!(result.status, "complete");
+    assert_eq!(result.browser_status, "complete");
+    assert_eq!(result.calendar_status, "complete");
+    assert_eq!(result.gap_count, 0);
+    assert_eq!(result.omission_count, 14);
+}
+
+#[test]
 fn browser_progress_requires_an_allowlisted_reason_for_the_sign_in_window() {
     for reason in [
         "CREDENTIALS_UNAVAILABLE",

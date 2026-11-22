@@ -218,6 +218,39 @@ test("production helper refuses a redirect that Rust cannot accept", async ({ br
   }
 });
 
+test("authenticated browser reports an empty response without leaving a staged blob", async ({ browser }) => {
+  let fileRequests = 0;
+  const fixture = await productionFixture(browser, (request, response) => {
+    if (request.url === "/") {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end("<!doctype html><title>synthetic Canvas</title>");
+      return;
+    }
+    if (request.url === "/files/817/download?download_frd=1") {
+      fileRequests += 1;
+      response.writeHead(200, { "content-type": "image/jpeg" });
+      response.end();
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  const { staging, server, context, page } = fixture;
+  try {
+    const result = await testOnlyFetch(context, {
+      page,
+      fileId: 817,
+      sourceUrl: `${server.origin}/files/817/download?download_frd=1`,
+      stagingDirectory: staging.path,
+    }, server.origin);
+    expect(result).toEqual({ kind: "empty", fileId: 817, byteCount: 0, sourceAuthenticity: "unverified" });
+    expect(fileRequests).toBe(1);
+    expect(await readdir(staging.path)).toEqual([]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test("production helper bypasses service workers and stages direct 200 bytes privately", async ({ browser }) => {
   const body = Buffer.from("%PDF-1.7\nsynthetic local file bytes");
   let fileRequestCount = 0;

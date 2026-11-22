@@ -2,7 +2,8 @@ import { readCanvasBrowserApi } from "./canvas-browser-reader.mjs";
 import { extractCanvasHtmlInPage } from "./canvas-browser-links.mjs";
 import { sanitizeCanvasCaptureItem } from "./canvas-browser-capture-sanitize.mjs";
 import { ACCOUNT_DETAIL_REQUEST_CAPS, MAX_ACCOUNT_FILE_IDS, collectCanvasAccountCapture } from "./canvas-browser-capture-account.mjs";
-import { createCanvasFileCapture } from "./canvas-browser-capture-files.mjs";
+import { canvasFileBodiesComplete, createCanvasFileCapture } from "./canvas-browser-capture-files.mjs";
+import { summarizeCanvasCaptureOutcome } from "./canvas-browser-refresh-scope.mjs";
 
 const ORIGIN = "https://marymount.instructure.com";
 const REQUEST_LIMITS = Object.freeze({
@@ -55,6 +56,9 @@ const COURSE_ENDPOINTS = Object.freeze([
   "course", "courseTabs", "assignments", "assignmentGroups", "submissions", "pages", "modules",
   "discussions", "announcements", "quizzes", "courseFiles", "folders",
 ]);
+const DEDUPED_GAP_REASONS = new Set([
+  "capture-budget", "detail-budget", "not-attempted", "pagination-budget",
+]);
 
 function captureError(code) {
   const error = new Error(code);
@@ -98,7 +102,7 @@ function isRecord(value) {
 
 /** @typedef {{endpoint: string, courseId: number | null, groupId?: number, contextCode?: string, pages: number, items: Array<Record<string, unknown>>}} CanvasCaptureResource */
 /** @typedef {{endpoint: string, courseId: number | null, groupId?: number, contextCode?: string, status: "complete" | "incomplete" | "gap", reason?: string}} CanvasCaptureCoverage */
-/** @typedef {{schemaVersion: 2, source: "canvas-browser", runId: number, generationId: string, capturedAt: string, complete: false, identity: {origin: string, userId: number, accountId?: number}, activeCourses: {complete: true, courseIds: number[]}, coverageRequirements: {activeCoursesComplete: true, perActiveCourse: string[]}, resources: CanvasCaptureResource[], coverage: CanvasCaptureCoverage[]}} CanvasBrowserCapture */
+/** @typedef {{schemaVersion: 2, source: "canvas-browser", runId: number, generationId: string, capturedAt: string, complete: boolean, identity: {origin: string, userId: number, accountId?: number}, activeCourses: {complete: true, courseIds: number[]}, coverageRequirements: {activeCoursesComplete: true, perActiveCourse: string[]}, resources: CanvasCaptureResource[], coverage: CanvasCaptureCoverage[]}} CanvasBrowserCapture */
 
 /**
  * Collect a bounded synthetic-testable metadata snapshot through fixed Canvas reader endpoints.
@@ -115,7 +119,7 @@ function isRecord(value) {
  * @param {Function} [options.downloadFile] Receives transient `{fileId, sourceUrl, expectedSize}` and returns a staged receipt.
  * @param {Function} [options.progress] Receives content-free request-boundary events.
  * @param {Function} [options.now] Injectable clock for deterministic synthetic tests.
- * @returns {Promise<CanvasBrowserCapture>} A schema-v2 partial capture; it is not written to disk.
+ * @returns {Promise<CanvasBrowserCapture>} A schema-v2 capture with its coverage outcome.
  */
 export async function collectCanvasBrowserCapture({
   expectedUserId,
@@ -155,22 +159,12 @@ export async function collectCanvasBrowserCapture({
   const coverage = [];
   const recordedGaps = new Map();
 
-  const gapReasonPriority = (reason) => {
-    if (["locked", "unpublished", "not-applicable", "unsupported"].includes(reason)) return 0;
-    if (["forbidden-optional", "not-found"].includes(reason)) return 1;
-    if (reason === "not-attempted") return 2;
-    return 3;
-  };
-
   const addNotAttemptedGap = (endpoint, courseId, groupId = undefined, reason = "not-attempted") => {
-    const key = `${endpoint}:${courseId ?? "account"}:${groupId ?? ""}`;
-    const priorIndex = recordedGaps.get(key);
-    if (priorIndex !== undefined) {
-      const prior = coverage[priorIndex];
-      if (gapReasonPriority(reason) > gapReasonPriority(prior.reason)) prior.reason = reason;
-      return;
+    if (DEDUPED_GAP_REASONS.has(reason)) {
+      const key = `${endpoint}:${courseId ?? "account"}:${groupId ?? ""}:${reason}`;
+      if (recordedGaps.has(key)) return;
+      recordedGaps.set(key, coverage.length);
     }
-    recordedGaps.set(key, coverage.length);
     coverage.push({ endpoint, courseId: courseId ?? null,
       ...(groupId === undefined ? {} : { groupId }), status: "gap", reason });
   };
@@ -551,11 +545,20 @@ export async function collectCanvasBrowserCapture({
     if (fileBodyReceipts.length > 0) {
       resources.push({ endpoint: "fileBodies", courseId: null, items: fileBodyReceipts, pages: 1 });
     }
-    for (const courseId of courseIds) addNotAttemptedGap("calendar", courseId, undefined, "unsupported");
-    addNotAttemptedGap("fileBodies", null);
+    if (!canvasFileBodiesComplete(fileBodyReceipts)) {
+      const notAttemptedReasons = new Set([
+        "download-not-configured", "file-count-limit", "invalid-or-oversized-file-size", "source-url-unavailable",
+      ]);
+      const reason = fileBodyReceipts.some((receipt) => receipt.status === "gap"
+          && notAttemptedReasons.has(receipt.reason))
+        ? "not-attempted" : "request-failed";
+      addNotAttemptedGap("fileBodies", null, undefined, reason);
+    } else if (fileBodyReceipts.some((receipt) => receipt.reason === "empty")) {
+      addNotAttemptedGap("fileBodies", null, undefined, "empty");
+    }
     const identity = { origin: ORIGIN, userId: expectedUserId };
     if (observedAccountId !== undefined) identity.accountId = observedAccountId;
-    output = {
+    const snapshot = {
       schemaVersion: 2,
       source: "canvas-browser",
       runId,
@@ -571,6 +574,10 @@ export async function collectCanvasBrowserCapture({
       resources,
       coverage,
     };
+    const outcome = summarizeCanvasCaptureOutcome(snapshot);
+    snapshot.complete = outcome.requiredGapCount === 0
+      && outcome.failureGapCount === 0 && !outcome.fileBodiesIncomplete;
+    output = snapshot;
   } catch (error) {
     failure = captureError(publicErrorCode(error));
   } finally {

@@ -261,9 +261,20 @@ fn retains_repeated_child_detail_coverage_and_each_optional_gap() {
         let coverage = fixture.snapshot["coverage"].as_array_mut().unwrap();
         coverage.extend([row.clone(), row.clone()]);
         for reason in [
-            "capture-budget", "detail-budget", "disabled", "forbidden-optional",
-            "invalid-slug", "locked", "not-applicable", "not-attempted", "not-found",
-            "pagination-budget", "parent-unavailable", "request-failed", "unsupported", "unpublished",
+            "capture-budget",
+            "detail-budget",
+            "disabled",
+            "forbidden-optional",
+            "invalid-slug",
+            "locked",
+            "not-applicable",
+            "not-attempted",
+            "not-found",
+            "pagination-budget",
+            "parent-unavailable",
+            "request-failed",
+            "unsupported",
+            "unpublished",
         ] {
             row["status"] = json!("gap");
             row["reason"] = json!(reason);
@@ -284,9 +295,20 @@ fn retains_repeated_child_detail_coverage_and_each_optional_gap() {
             2
         );
         for reason in [
-            "capture-budget", "detail-budget", "disabled", "forbidden-optional",
-            "invalid-slug", "locked", "not-applicable", "not-attempted", "not-found",
-            "pagination-budget", "parent-unavailable", "request-failed", "unsupported", "unpublished",
+            "capture-budget",
+            "detail-budget",
+            "disabled",
+            "forbidden-optional",
+            "invalid-slug",
+            "locked",
+            "not-applicable",
+            "not-attempted",
+            "not-found",
+            "pagination-budget",
+            "parent-unavailable",
+            "request-failed",
+            "unsupported",
+            "unpublished",
         ] {
             assert!(rows
                 .iter()

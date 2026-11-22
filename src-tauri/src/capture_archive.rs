@@ -9,8 +9,6 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-pub use crate::capture_media::{verify_content_type, MediaError};
-
 /// Content-free staging failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StagingError {
@@ -493,6 +491,7 @@ mod downloader_tests {
                 &format!("{origin}/files/41/download?download_frd=1&verifier=synthetic"),
                 41,
                 Some(body.len() as u64),
+                None,
                 &staging,
             )
             .unwrap();
@@ -530,6 +529,7 @@ mod downloader_tests {
                     &format!("{origin}/files/42/download?verifier=synthetic"),
                     42,
                     None,
+                    None,
                     &staging,
                 )
                 .err(),
@@ -559,6 +559,7 @@ mod downloader_tests {
                 .download_file_to_staging(
                     &format!("{origin}/files/43/download?verifier=synthetic"),
                     43,
+                    None,
                     None,
                     &staging,
                 )
@@ -604,6 +605,7 @@ mod downloader_tests {
                         &format!("{origin}/files/44/download?verifier=synthetic"),
                         44,
                         Some(body.len() as u64),
+                        None,
                         &staging,
                     )
                     .err(),
@@ -655,6 +657,7 @@ mod downloader_tests {
                 &format!("{origin}/files/46/download?download_frd=1&verifier=synthetic"),
                 46,
                 Some(body_size as u64),
+                None,
                 &staging,
             )
             .unwrap();
@@ -681,6 +684,7 @@ mod downloader_tests {
                     &format!("{origin}/files/47/download?verifier=synthetic"),
                     47,
                     Some(body.len() as u64 + 1),
+                    None,
                     &staging,
                 )
                 .err(),

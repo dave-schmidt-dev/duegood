@@ -15,6 +15,7 @@ const temporaryRoots: string[] = [];
 type CaptureResource = {
   endpoint: string;
   courseId: number | null;
+  contextCode?: string;
   pages: number;
   items: Array<Record<string, unknown>>;
 };
@@ -33,7 +34,7 @@ type CaptureSnapshot = {
   coverage: Array<Record<string, unknown>>;
 };
 
-type ArchivedSnapshot = { resources: Array<{ items: Array<Record<string, unknown>> }> };
+type ArchivedSnapshot = { complete: boolean; resources: Array<{ items: Array<Record<string, unknown>> }> };
 
 async function fixture(body = Buffer.from("synthetic Canvas file body")) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "duegood-canvas-archive-test-")));
@@ -88,6 +89,37 @@ async function fixture(body = Buffer.from("synthetic Canvas file body")) {
   return { root, appDirectory, stagingDirectory, stagedFile, body, snapshot };
 }
 
+function makeComplete(data: Awaited<ReturnType<typeof fixture>>) {
+  const accountEndpoints = [
+    "coursesCompleted", "groups", "personalFiles", "personalFolders",
+    "inbox", "inboxAll", "conversationsSent", "conversationsArchived",
+  ];
+  data.snapshot.complete = true;
+  data.snapshot.resources.push(...accountEndpoints.map((endpoint) => ({
+    endpoint,
+    courseId: null,
+    pages: 1,
+    items: endpoint === "personalFiles"
+      ? [{ id: 77, size: data.body.length, contentType: "application/pdf" }]
+      : [],
+  })));
+  data.snapshot.resources.push({
+    endpoint: "calendarEvents",
+    courseId: null,
+    contextCode: "user_41",
+    pages: 1,
+    items: [],
+  });
+  data.snapshot.coverage = [
+    { endpoint: "profile", courseId: null, status: "complete" },
+    { endpoint: "coursesActive", courseId: null, status: "complete" },
+    ...accountEndpoints.map((endpoint) => ({ endpoint, courseId: null, status: "complete" })),
+    { endpoint: "fileBodies", courseId: null, status: "complete" },
+    { endpoint: "calendarEvents", courseId: null, contextCode: "user_41", status: "complete" },
+  ];
+  return data;
+}
+
 afterEach(async () => {
   await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -101,6 +133,59 @@ async function currentGeneration(appDirectory: string) {
 }
 
 describe("private Canvas capture archive", () => {
+  it("persists a complete outcome in the generation and archive pointer", async () => {
+    const data = makeComplete(await fixture());
+
+    const saved = await saveCanvasCaptureGeneration(data);
+    const current = await currentGeneration(data.appDirectory);
+    const manifest = JSON.parse(await readFile(
+      path.join(current.archive, "generations", current.generationId, "manifest.json"), "utf8",
+    )) as Record<string, unknown>;
+
+    expect(saved.complete).toBe(true);
+    expect(saved.archivedSnapshot).toMatchObject({ complete: true });
+    expect(manifest.complete).toBe(true);
+  });
+
+  it("publishes verified empty personal-file coverage without archiving a blob", async () => {
+    const data = makeComplete(await fixture());
+    await rm(path.join(data.stagingDirectory, data.stagedFile));
+    const metadata = data.snapshot.resources.find((row) => row.endpoint === "personalFiles")!.items[0]!;
+    data.snapshot.resources.find((row) => row.endpoint === "fileBodies")!.items =
+      [{ fileId: 77, status: "gap", reason: "empty" }];
+    Object.assign(data.snapshot.coverage.find((row) => row.endpoint === "fileBodies")!, { status: "gap", reason: "empty" });
+    await expect(saveCanvasCaptureGeneration(data)).rejects.toMatchObject({ code: "COMPLETE_COVERAGE_INCOMPLETE" });
+    metadata.size = 0;
+    const saved = await saveCanvasCaptureGeneration(data);
+    expect(saved.complete).toBe(true);
+    const current = await currentGeneration(data.appDirectory);
+    expect(await readdir(path.join(current.archive, "blobs"))).toEqual([]);
+  });
+
+  it("requires staged bytes even when an incoming receipt claims they were archived", async () => {
+    const data = makeComplete(await fixture());
+    const receipt = data.snapshot.resources.find((resource) => resource.endpoint === "fileBodies")!.items[0]!;
+    receipt.status = "archived";
+    await expect(saveCanvasCaptureGeneration(data)).rejects.toMatchObject({ code: "INVALID_BLOB_RECEIPT" });
+    await expect(currentGeneration(data.appDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps the prior current generation when a false completion claim is rejected", async () => {
+    const data = await fixture();
+    const prior = await saveCanvasCaptureGeneration(data);
+    const pointerBefore = await currentGeneration(data.appDirectory);
+    const falseClaim = structuredClone(data.snapshot);
+    falseClaim.runId = 2;
+    falseClaim.generationId = randomUUID().replaceAll("-", "");
+    falseClaim.complete = true;
+
+    await expect(saveCanvasCaptureGeneration({ ...data, snapshot: falseClaim }))
+      .rejects.toMatchObject({ code: "COMPLETE_COVERAGE_INCOMPLETE" });
+
+    expect(await currentGeneration(data.appDirectory)).toEqual(pointerBefore);
+    expect(await readdir(path.join(pointerBefore.archive, "generations"))).toEqual([prior.generationId]);
+  });
+
   it("atomically publishes a hashed generation and retains the prior generation on refresh", async () => {
     const data = await fixture();
     const first = await saveCanvasCaptureGeneration(data);

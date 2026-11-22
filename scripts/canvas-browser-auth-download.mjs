@@ -139,7 +139,7 @@ async function writeAll(handle, bytes) {
  * @param {number} [options.timeoutMs] Request deadline in milliseconds, at most 120 seconds.
  * @param {Function} [options.progress] Receives content-free state and byte-count updates.
  * @param {AbortSignal} [options.signal] Cancels the request and removes partial staging bytes.
- * @returns {Promise<{kind: 'redirect', fileId: number, location: string, sourceAuthenticity: 'unverified'} | {kind: 'staged', fileId: number, stagedPath: string, byteCount: number, sourceAuthenticity: 'unverified'}>}
+ * @returns {Promise<{kind: 'redirect', fileId: number, location: string, sourceAuthenticity: 'unverified'} | {kind: 'empty', fileId: number, byteCount: 0, sourceAuthenticity: 'unverified'} | {kind: 'staged', fileId: number, stagedPath: string, byteCount: number, responseContentType: string | null, sourceAuthenticity: 'unverified'}>}
  * @throws {Error} A content-free error whose `code` identifies the bounded failure.
  */
 async function fetchFromOrigin({
@@ -258,7 +258,13 @@ async function fetchFromOrigin({
         eof = true;
       }
       if (!eof) throw failure("RESPONSE_TOO_LARGE");
-      if (totalBytes === 0) throw failure("EMPTY_RESPONSE");
+      if (totalBytes === 0) {
+        await cdp.send("Fetch.failRequest", { requestId: event.requestId, errorReason: "BlockedByClient" });
+        activeRequestId = undefined;
+        await emit("EMPTY_BODY");
+        settle(undefined, { kind: "empty", fileId, byteCount: 0, sourceAuthenticity: "unverified" });
+        return;
+      }
       await verifyDirectory(request.stagingDirectory, directoryIdentity);
       await stage.handle.sync();
       const stat = await lstat(stage.filePath);
@@ -272,11 +278,13 @@ async function fetchFromOrigin({
       await emit("STAGED", totalBytes);
       if (settled) throw failure("TRANSFER_INTERRUPTED");
       keepStage = true;
+      const responseContentType = responseHeader(event.responseHeaders, "content-type") ?? null;
       settle(undefined, {
         kind: "staged",
         fileId,
         stagedPath: stage.filePath,
         byteCount: totalBytes,
+        responseContentType,
         sourceAuthenticity: "unverified",
       });
     } finally {

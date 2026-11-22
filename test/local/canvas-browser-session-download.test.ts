@@ -61,7 +61,7 @@ describe("browser capture file staging lifecycle", () => {
         coverageRequirements: { activeCoursesComplete: true as const,
           perActiveCourse: ["course", "assignments", "assignmentGroups", "submissions"] },
         identity: { origin: "https://marymount.instructure.com", userId: 7 }, complete: false as const,
-        resources: [{ endpoint: "fileBodies", courseId: null, pages: 1, items: [receipt] }],
+        resources: [{ endpoint: "fileBodies", courseId: null, pages: 1, items: [{ ...receipt, status: "staged" }] }],
         coverage: [{ endpoint: "fileBodies", courseId: null, status: "gap" as const, reason: "not-attempted" }] };
     });
     const saveGeneration = vi.fn(async ({ snapshot, stagingDirectory: stage, generationId }) => {
@@ -82,6 +82,73 @@ describe("browser capture file staging lifecycle", () => {
     await expect(lstat(stagingDirectory)).rejects.toMatchObject({ code: "ENOENT" });
     expect((await readdir(appDirectory)).filter((entry) => entry.startsWith("canvas-capture-stage-"))).toEqual([]);
     expect(progress).toHaveBeenCalledWith("CAPTURE_DOWNLOADING");
+  });
+
+  it("passes Canvas-confirmed empty files through without staging blob bytes", async () => {
+    const appDirectory = await directory();
+    const helperPath = path.join(appDirectory, "synthetic-helper");
+    await writeFile(helperPath, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    const stateHelperPath = await writeStateHelper(appDirectory);
+    const { browser } = context();
+    const sourceUrl = "https://marymount.instructure.com/files/41/download?download_frd=1";
+    const browserFileDownload = vi.fn(async ({ contentType, expectedSize }) => {
+      expect(contentType).toBe("image/png");
+      expect(expectedSize).toBe(0);
+      return { kind: "empty", fileId: 41, byteCount: 0, sourceAuthenticity: "unverified" };
+    });
+    const collector = vi.fn(async ({ downloadFile, runId, generationId }) => {
+      const receipt = await downloadFile({ fileId: 41, sourceUrl, expectedSize: 0, contentType: "image/png" });
+      return { schemaVersion: 2 as const, source: "canvas-browser" as const, runId, generationId,
+        capturedAt: "2026-09-27T12:00:00Z", activeCourses: { complete: true as const, courseIds: [] },
+        coverageRequirements: { activeCoursesComplete: true as const,
+          perActiveCourse: ["course", "assignments", "assignmentGroups", "submissions"] },
+        identity: { origin: "https://marymount.instructure.com", userId: 7 }, complete: true as const,
+        resources: [{ endpoint: "fileBodies", courseId: null, pages: 1, items: [receipt] }], coverage: [] };
+    });
+    const saveGeneration = vi.fn(async ({ snapshot, stagingDirectory: stage, generationId }) => {
+      expect(await readdir(stage)).toEqual([]);
+      return { generationId, snapshotSha256: "c".repeat(64), capturedAt: "2026-09-27T12:00:00Z",
+        complete: true as const, resourceCount: 1, itemCount: 1, blobCount: 0, blobBytes: 0, archivedSnapshot: snapshot };
+    });
+    await runCanvasCapture({ checkSurveyPopup: async () => {}, context: browser, expectedUserId: 7, progress: () => {},
+      appDirectory, helperPath, stateHelperPath, withRunLease: syntheticLease,
+      collector: collector as unknown as typeof collectCanvasBrowserCapture, browserFileDownload, saveGeneration });
+    expect(browserFileDownload).toHaveBeenCalledWith(expect.objectContaining({ contentType: "image/png", expectedSize: 0 }));
+    expect(saveGeneration).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes a fresh staged blob rejected after later image metadata arrives", async () => {
+    const appDirectory = await directory();
+    const helperPath = path.join(appDirectory, "synthetic-helper");
+    await writeFile(helperPath, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    const stateHelperPath = await writeStateHelper(appDirectory);
+    const { browser } = context();
+    const stagedFile = `${"d".repeat(32)}.blob`;
+    const browserFileDownload = vi.fn(async ({ stagingDirectory: stage }) => {
+      await writeFile(path.join(stage, stagedFile), "synthetic", { mode: 0o600 });
+      return { kind: "staged", fileId: 41, stagedFile, byteCount: 9,
+        sha256: "b".repeat(64), contentType: "application/pdf", sourceAuthenticity: "unverified" };
+    });
+    const collector = vi.fn(async ({ downloadFile, runId, generationId }) => {
+      await downloadFile({ fileId: 41, sourceUrl: "https://marymount.instructure.com/files/41/download?download_frd=1",
+        expectedSize: 9, contentType: "image/jpeg" });
+      return { schemaVersion: 2 as const, source: "canvas-browser" as const, runId, generationId,
+        capturedAt: "2026-09-27T12:00:00Z", activeCourses: { complete: true as const, courseIds: [] },
+        coverageRequirements: { activeCoursesComplete: true as const,
+          perActiveCourse: ["course", "assignments", "assignmentGroups", "submissions"] },
+        identity: { origin: "https://marymount.instructure.com", userId: 7 }, complete: false as const,
+        resources: [{ endpoint: "fileBodies", courseId: null, pages: 1,
+          items: [{ fileId: 41, status: "gap", reason: "HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH" }] }], coverage: [] };
+    });
+    const saveGeneration = vi.fn(async ({ snapshot, stagingDirectory: stage, generationId }) => {
+      expect(await readdir(stage)).toEqual([]);
+      return { generationId, snapshotSha256: "c".repeat(64), capturedAt: "2026-09-27T12:00:00Z",
+        complete: false as const, resourceCount: 1, itemCount: 1, blobCount: 0, blobBytes: 0, archivedSnapshot: snapshot };
+    });
+    await runCanvasCapture({ checkSurveyPopup: async () => {}, context: browser, expectedUserId: 7, progress: () => {},
+      appDirectory, helperPath, stateHelperPath, withRunLease: syntheticLease,
+      collector: collector as unknown as typeof collectCanvasBrowserCapture, browserFileDownload, saveGeneration });
+    expect(saveGeneration).toHaveBeenCalledTimes(1);
   });
 
   it("fails the allocated run when the private download helper is absent", async () => {
