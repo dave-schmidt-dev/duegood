@@ -16,6 +16,7 @@ import {
   waitForSignedInCanvas,
 } from "../../scripts/canvas-okta-sign-in.mjs";
 import { desktopChromeUserAgent, installedChromeMajor, sessionLaunchOptions } from "../../scripts/canvas-browser-launch.mjs";
+import { isSignInReason, parseSessionMode, signInReasonForOutcome } from "../../scripts/canvas-sign-in-recovery.mjs";
 
 const helper = fileURLToPath(new URL("../../scripts/canvas-sso-credentials.mjs", import.meta.url));
 const SYNTHETIC_PASSWORD = "synthetic-password-Zq9!";
@@ -127,9 +128,9 @@ describe("rejection block and outcome record", () => {
     expect(await attemptAutomaticSignIn({
       context, appDirectory: directory, progress, settleMs: 50,
       getCredentials: async () => { throw Object.assign(new Error("x"), { code: "CREDENTIALS_UNAVAILABLE" }); },
-    })).toBe("UNKNOWN_PAGE");
+    })).toBe("CREDENTIALS_UNAVAILABLE");
     expect(progress).toHaveBeenCalledWith("SIGNING_IN_AUTOMATICALLY");
-    expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ outcome: "UNKNOWN_PAGE", blocked: false });
+    expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ outcome: "CREDENTIALS_UNAVAILABLE", blocked: false });
   });
 
   it("does nothing when no page is on Okta", async () => {
@@ -177,12 +178,25 @@ describe("signed-in Canvas wait", () => {
 
   it("ends a headless wait at once when automatic sign-in fails closed", async () => {
     const waitForCanvasPage = vi.fn(async () => undefined);
+    const onHeadlessFailure = vi.fn();
     const page = await waitForSignedInCanvas({
       context: { pages: () => [] }, appDirectory: scratch(), attendedSignIn: false,
-      automaticSignIn: async () => "PUSH_OR_NUMBER_CHALLENGE", waitForCanvasPage, timeoutMs: 60_000, pollIntervalMs: 10,
+      automaticSignIn: async () => "PUSH_OR_NUMBER_CHALLENGE", waitForCanvasPage, onHeadlessFailure,
+      timeoutMs: 60_000, pollIntervalMs: 10,
     });
     expect(page).toBeUndefined();
     expect(waitForCanvasPage).toHaveBeenCalledTimes(1);
+    expect(onHeadlessFailure).toHaveBeenCalledWith("VERIFICATION_REQUIRED");
+  });
+
+  it("reports sign-in required when the headless deadline expires after the attempt", async () => {
+    const onHeadlessFailure = vi.fn();
+    await waitForSignedInCanvas({
+      context: { pages: () => [] }, appDirectory: scratch(), attendedSignIn: false,
+      automaticSignIn: async () => "SIGNED_IN", waitForCanvasPage: async () => undefined,
+      onHeadlessFailure, timeoutMs: 0, pollIntervalMs: 10,
+    });
+    expect(onHeadlessFailure).toHaveBeenCalledWith("SIGN_IN_REQUIRED");
   });
 
   it("keeps the attended fallback and clears a block after a manual sign-in", async () => {
@@ -200,17 +214,23 @@ describe("signed-in Canvas wait", () => {
 });
 
 describe("headless launch options", () => {
-  it("rejects any broker argument other than a single --headless", () => {
+  it("defaults to headless and accepts only one explicit mode flag", () => {
+    expect(parseSessionMode([])).toBe(true);
+    expect(parseSessionMode(["--headless"])).toBe(true);
+    expect(parseSessionMode(["--headed"])).toBe(false);
+    for (const args of [["--visible"], ["--headless", "--headless"], ["--headed", "--headless"], ["--headless=1"]]) {
+      expect(parseSessionMode(args)).toBeUndefined();
+    }
     const broker = fileURLToPath(new URL("../../scripts/canvas-browser-session.mjs", import.meta.url));
-    for (const args of [["--visible"], ["--headless", "--headless"], ["--headless=1"]]) {
+    for (const args of [["--visible"], ["--headless", "--headless"], ["--headed", "--headless"], ["--headless=1"]]) {
       const result = spawnSync(process.execPath, [broker, ...args], { encoding: "utf8", env: { PATH: process.env.PATH ?? "", HOME: scratch() } });
       expect(result.status).toBe(2);
       expect(result.stderr).toBe("SESSION_BROKER=INVALID_CONFIGURATION\n");
     }
   }, 30_000);
 
-  it("keeps visible mode by default and replaces the HeadlessChrome user agent when headless", async () => {
-    expect(await sessionLaunchOptions()).toEqual({ channel: "chrome", headless: false, args: ["--disable-http-cache"], timeout: 20_000 });
+  it("uses the desktop user agent in headless mode and keeps headed launch options plain", async () => {
+    expect(await sessionLaunchOptions({ headless: false })).toEqual({ channel: "chrome", headless: false, args: ["--disable-http-cache"], timeout: 20_000 });
     const headless = await sessionLaunchOptions({ headless: true, chromeMajor: async () => 142 });
     expect(headless).toMatchObject({ channel: "chrome", headless: true });
     expect(headless.userAgent).toBe(desktopChromeUserAgent(142));
@@ -223,5 +243,25 @@ describe("headless launch options", () => {
     writeFileSync(plist, "<plist><dict><key>CFBundleShortVersionString</key>\n\t<string>142.0.7444.60</string></dict></plist>");
     expect(await installedChromeMajor(plist)).toBe(142);
     await expect(installedChromeMajor(path.join(scratch(), "missing.plist"))).rejects.toThrow("HEADLESS_USER_AGENT_UNAVAILABLE");
+  });
+});
+
+describe("public sign-in recovery reasons", () => {
+  it("accepts only bounded, allowlisted reason codes", () => {
+    for (const code of ["CREDENTIALS_UNAVAILABLE", "SIGN_IN_BLOCKED", "VERIFICATION_REQUIRED", "SURVEY_POPUP_BLOCKING",
+      "UNKNOWN_PAGE", "SIGN_IN_TIMEOUT", "SIGN_IN_REQUIRED"]) {
+      expect(isSignInReason(code)).toBe(true);
+    }
+    for (const code of ["OKTA_HOST_REJECTED", "PUSH_OR_NUMBER_CHALLENGE", "password rejected", null, 4]) {
+      expect(isSignInReason(code)).toBe(false);
+    }
+  });
+
+  it("maps automatic sign-in outcomes without exposing page content", () => {
+    expect(signInReasonForOutcome("BLOCKED_AFTER_REJECTION")).toBe("SIGN_IN_BLOCKED");
+    expect(signInReasonForOutcome("FASTPASS_CHALLENGE")).toBe("VERIFICATION_REQUIRED");
+    expect(signInReasonForOutcome("STEP_TIMEOUT")).toBe("SIGN_IN_TIMEOUT");
+    expect(signInReasonForOutcome("OKTA_HOST_REJECTED")).toBe("OKTA_HOST_REJECTED");
+    expect(signInReasonForOutcome("private page text")).toBeUndefined();
   });
 });

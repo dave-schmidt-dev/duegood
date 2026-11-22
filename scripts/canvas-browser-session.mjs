@@ -10,6 +10,8 @@ import { runCanvasBrowserProbe } from "./canvas-browser-probe.mjs";
 import { readCanvasIdentity } from "./canvas-browser-identity.mjs";
 import { loadCurrentCanvasCapture } from "./canvas-browser-runtime-loader.mjs";
 import { isCanvasCoverageEntry, summarizeCanvasRefreshScope } from "./canvas-browser-refresh-scope.mjs";
+import { readCommand } from "./canvas-browser-command.mjs";
+import { isSignInReason, parseSessionMode } from "./canvas-sign-in-recovery.mjs";
 export { runCanvasCapture } from "./canvas-browser-session-capture.mjs";
 
 const ORIGIN = "https://marymount.instructure.com";
@@ -18,9 +20,7 @@ const PROFILE_DIR = path.join(APP_DIR, "canvas-capture-profile");
 const SOCKET_PATH = path.join(APP_DIR, "canvas-session.sock");
 const OWNER_PATH = path.join(APP_DIR, "canvas-session.owner");
 const SNAPSHOT_FILENAME = "canvas-capture.json";
-const MAX_REQUEST_BYTES = 256;
 const MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024;
-const SOCKET_TIMEOUT_MS = 5_000;
 const PROGRESS_STATES = new Set([
   "SURVEY_POPUP_BLOCKING", "WAITING_FOR_OWNER_SIGN_IN", "SIGNING_IN_AUTOMATICALLY", "CANVAS_SESSION_AVAILABLE", "CHECKING_CANVAS_SESSION",
   "PROBE_RUNNING", "PROBE_HEARTBEAT", "CAPTURE_OPENING", "CAPTURE_RUNNING", "CAPTURE_DOWNLOADING", "CAPTURE_SAVING",
@@ -30,7 +30,7 @@ const CAPTURE_PROGRESS_STATES = new Set([
   "CAPTURE_OPENING", "CAPTURE_RUNNING", "CAPTURE_DOWNLOADING", "CAPTURE_SAVING",
 ]);
 const PUBLIC_CAPTURE_FAILURES = new Set([
-  "SURVEY_POPUP_BLOCKING", "IDENTITY_MISMATCH", "HTML_OR_SSO_REJECTED", "REQUIRED_SECTION_INCOMPLETE", "PAGINATION_INCOMPLETE",
+  "SURVEY_POPUP_BLOCKING", "OKTA_HOST_REJECTED", "IDENTITY_MISMATCH", "HTML_OR_SSO_REJECTED", "REQUIRED_SECTION_INCOMPLETE", "PAGINATION_INCOMPLETE",
   "CAPTURE_BUDGET_EXCEEDED", "CAPTURE_ITEM_BUDGET_EXCEEDED", "COURSE_BUDGET_EXCEEDED",
   "DETAIL_BUDGET_EXCEEDED", "REQUEST_FAILED", "HELPER_UNAVAILABLE", "PRIVATE_DIRECTORY_REJECTED",
   "ARCHIVE_RECEIPT_REJECTED", "CAPTURE_DISK_BUDGET_EXCEEDED", "CAPTURE_COVERAGE_INCOMPLETE",
@@ -40,6 +40,7 @@ const PUBLIC_CAPTURE_FAILURES = new Set([
 
 function publicCaptureFailure(error) {
   for (const value of [error?.code, error?.message]) {
+    if (isSignInReason(value)) return value;
     if (PUBLIC_CAPTURE_FAILURES.has(value)) return value;
   }
   return "UNCLASSIFIED";
@@ -76,52 +77,6 @@ async function ensurePrivateDirectory(directory) {
 
 function sendFrame(socket, value) {
   if (!socket.destroyed) socket.write(`${JSON.stringify(value)}\n`);
-}
-
-function readCommand(socket) {
-  return new Promise((resolve, reject) => {
-    let buffer = Buffer.alloc(0);
-    const finish = (error, value) => {
-      socket.off("data", onData);
-      socket.off("end", onEnd);
-      socket.off("error", onError);
-      socket.setTimeout(0);
-      error ? reject(error) : resolve(value);
-    };
-    const onError = () => finish(new Error("SOCKET_READ_FAILED"));
-    const onEnd = () => finish(new Error("INCOMPLETE_REQUEST"));
-    const onData = (chunk) => {
-      buffer = Buffer.concat([buffer, chunk]);
-      if (buffer.length > MAX_REQUEST_BYTES) return finish(new Error("REQUEST_TOO_LARGE"));
-      const newline = buffer.indexOf(0x0a);
-      if (newline < 0) return;
-      if (newline !== buffer.length - 1) return finish(new Error("MULTIPLE_REQUESTS_REJECTED"));
-      let request;
-      const rawRequest = buffer.subarray(0, newline).toString("utf8");
-      try { request = JSON.parse(rawRequest); } catch { return finish(new Error("INVALID_REQUEST")); }
-      if (request === null || typeof request !== "object" || Array.isArray(request)) {
-        return finish(new Error("INVALID_REQUEST"));
-      }
-      const keys = Object.keys(request);
-      if (["status", "probe", "identity", "stop"].includes(request.command) && keys.length === 1) {
-        if (rawRequest !== JSON.stringify({ command: request.command })) return finish(new Error("INVALID_REQUEST"));
-        return finish(undefined, request);
-      }
-      if (request.command === "capture" && keys.length === 2
-          && keys.includes("expectedUserId") && Number.isSafeInteger(request.expectedUserId)
-          && request.expectedUserId > 0) {
-        if (rawRequest !== JSON.stringify({ command: "capture", expectedUserId: request.expectedUserId })) {
-          return finish(new Error("INVALID_REQUEST"));
-        }
-        return finish(undefined, request);
-      }
-      finish(new Error("INVALID_REQUEST"));
-    };
-    socket.setTimeout(SOCKET_TIMEOUT_MS, () => finish(new Error("REQUEST_TIMEOUT")));
-    socket.on("data", onData);
-    socket.once("end", onEnd);
-    socket.once("error", onError);
-  });
 }
 
 function isRecord(value) {
@@ -366,10 +321,10 @@ export async function startSessionBroker({
   appDirectory = APP_DIR,
   profileDirectory = PROFILE_DIR,
   socketPath = SOCKET_PATH,
-  headless = false,
+  headless = true,
   launchContext = async () => chromium.launchPersistentContext(profileDirectory, await sessionLaunchOptions({ headless })),
   probe = ({ context, progress }) => runCanvasBrowserProbe({
-    context, closeContext: false, attended: true, progress,
+    context, closeContext: false, attended: !headless, progress,
   }),
   identity = readCanvasIdentity,
   capture = runCurrentCanvasCapture,
@@ -391,13 +346,14 @@ export async function startSessionBroker({
   const cleanup = async () => {
     if (closing) return closed;
     closing = true;
+    // Release Chrome's persistent profile before server.close unlinks the socket path.
+    await context?.close().catch(() => undefined);
     if (server?.listening) {
       await new Promise((resolve) => {
         server.close(() => resolve());
         for (const socket of activeSockets) socket.destroy();
       });
     }
-    await context?.close().catch(() => undefined);
     if (socketIdentity) {
       const stat = await lstat(socketPath).catch(() => undefined);
       if (stat?.isSocket() && stat.dev === socketIdentity.dev && stat.ino === socketIdentity.ino) {
@@ -440,7 +396,7 @@ export async function startSessionBroker({
           const request = await readCommand(socket);
           activeCommand = request.command;
           if (closing) return respond({ status: "STOPPING" });
-          if (request.command === "status") return respond({ status: "READY" });
+          if (request.command === "status") return respond({ status: "READY", headless, pid: process.pid });
           if (request.command === "identity") {
             const userId = await identity({ context });
             return respond(Number.isSafeInteger(userId) && userId > 0
@@ -478,7 +434,15 @@ export async function startSessionBroker({
               fileBodiesIncomplete: true,
             });
           }
-          respond({ status: "STOPPING" }, { keepBusy: true, onFlushed: () => setImmediate(() => { void cleanup(); }) });
+          if (request.command === "stop") {
+            if (request.expectedPid !== undefined && request.expectedPid !== process.pid) {
+              return respond({ status: "STOP_FAILED" });
+            }
+            return respond({ status: "STOPPING" }, {
+              keepBusy: true,
+              onFlushed: () => setImmediate(() => { void cleanup(); }),
+            });
+          }
         } catch (error) {
           respond(activeCommand === "capture"
             ? { status: "REQUEST_FAILED", errorCode: publicCaptureFailure(error) }
@@ -514,12 +478,13 @@ export async function startSessionBroker({
 
 async function main() {
   const flags = process.argv.slice(2);
-  if (flags.some((flag) => flag !== "--headless") || flags.length > 1) {
+  const headless = parseSessionMode(flags);
+  if (headless === undefined) {
     process.stderr.write("SESSION_BROKER=INVALID_CONFIGURATION\n");
     process.exitCode = 2;
     return;
   }
-  const broker = await startSessionBroker({ headless: flags.includes("--headless") });
+  const broker = await startSessionBroker({ headless });
   if (broker.alreadyRunning) {
     process.stderr.write("SESSION_BROKER=ALREADY_RUNNING\n");
     return;

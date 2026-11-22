@@ -509,3 +509,6 @@ Remaining owner actions: confirm Google Authenticator is offered, enroll it with
 ### EvaluationKIT capture gate
 
 Confirmed in source: signed-in capture proceeds directly to collection. The owner observed the asynchronous dialog on Canvas. Verify dismissal, deadline handling and origin restrictions with synthetic pages. Live behavior remains unverified.
+
+## Headless refresh and attended recovery
+Confirmed at 23b0d8b: the broker, launcher and client default to visible Chrome. The installed progress protocol has no reason field. Change the broker and capture boundary to expose fixed sign-in reasons only, retry one eligible headless capture after releasing the profile, and validate the fallback progress frame through the app. Verify with synthetic broker, protocol and UI tests. Live institution behavior and the absent original Python implementation remain unverified.

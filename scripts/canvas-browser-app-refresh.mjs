@@ -3,10 +3,11 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCanvasBrowserRefresh } from "./canvas-browser-session-client.mjs";
+import { isSignInReason } from "./canvas-sign-in-recovery.mjs";
 
 const ALLOWED_ARGUMENTS = 0;
 const PROGRESS_PHASES = new Set([
-  "broker-starting", "waiting-for-canvas", "capturing", "importing", "complete",
+  "broker-starting", "waiting-for-canvas", "capturing", "importing", "complete", "sign-in-window",
 ]);
 const CAPTURE_PROGRESS = new Set([
   "SURVEY_POPUP_BLOCKING", "WAITING_FOR_OWNER_SIGN_IN", "SIGNING_IN_AUTOMATICALLY", "CANVAS_SESSION_AVAILABLE", "CHECKING_CANVAS_SESSION",
@@ -114,20 +115,25 @@ export async function runCanvasAppRefresh({
   const writeFrame = frameWriter(writeLine);
   let lastPhase = "";
   let currentPhase = "broker-starting";
-  const emitPhase = (phase, force = false) => {
+  let currentReason;
+  const emitPhase = (phase, force = false, reason = undefined) => {
     if (!PROGRESS_PHASES.has(phase) || !force && phase === lastPhase) return;
+    if (currentPhase === "sign-in-window" && phase === "waiting-for-canvas") return;
+    if (phase === "sign-in-window" ? !isSignInReason(reason) : reason !== undefined) return;
     lastPhase = phase;
     currentPhase = phase;
-    writeFrame({ type: "progress", phase });
+    currentReason = reason;
+    writeFrame({ type: "progress", phase, ...(reason === undefined ? {} : { reason }) });
   };
   emitPhase(currentPhase);
-  const heartbeat = setInterval(() => emitPhase(currentPhase, true), heartbeatMs);
+  const heartbeat = setInterval(() => emitPhase(currentPhase, true, currentReason), heartbeatMs);
   heartbeat.unref?.();
   const restoreStderr = interceptCaptureProgress(emitPhase);
   let result;
   try {
     result = await runClient({
       reportImportProgress: () => emitPhase("importing"),
+      reportSignInWindow: (reason) => emitPhase("sign-in-window", true, reason),
     });
   } catch {
     result = { status: "REQUEST_FAILED" };

@@ -31,13 +31,13 @@ The private coursework, grades, messages, feed URL, credentials, and screenshots
 
 ## Private Canvas capture
 
-Canvas capture uses one headed Chrome profile under the app's private data folder. Sign in in that window, confirm the account ID reported by `identity`, and bind that ID locally. The signed-in browser stays open across commands; capture reuses its existing Canvas page for requests and does not open or close a tab per file. A separate headless relaunch did not restore the signed-in session, so this workflow relies on the headed profile by default. After SSO expires, the broker can sign in to Marymount Okta automatically using credentials from the pinned `duegood-canvas-sso` broker consumer, and otherwise waits for an attended sign-in. Setup, fail-closed behavior, and the opt-in `start --headless` mode are in [docs/OKTA-AUTO-SIGN-IN.md](docs/OKTA-AUTO-SIGN-IN.md).
+Refresh starts Chrome headless using the private capture profile. If automatic sign-in needs help, Due Good explains why, opens Chrome and retries once. Finish sign-in or dismiss the survey there. Refresh closes the window it started after the retry and starts headless again next time. For first-time account binding, start Chrome with `--headed`, sign in, confirm the account ID reported by `identity`, and bind that ID locally. Refresh reuses an owner-started window until you stop it. See [Okta sign-in setup](docs/OKTA-AUTO-SIGN-IN.md).
 
 Run `canvas:prepare-helper` once to build and install the three fixed native helpers in the private DueGood Application Support directory: `duegood-capture-state` (capture run/lease), `duegood-capture-download` (bounded file transfer), and `duegood-browser-import` (native import). Later refreshes use those installed helpers and the saved account binding:
 
 ```sh
 npm run canvas:prepare-helper
-npm run canvas:session -- start
+npm run canvas:session -- start --headed
 npm run canvas:session -- status
 npm run canvas:session -- probe
 npm run canvas:session -- identity

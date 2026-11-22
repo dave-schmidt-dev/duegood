@@ -97,6 +97,7 @@ describe.sequential("packaged browser runtime", () => {
       heartbeatMs: 60_000,
       writeLine: (line) => { output.push(line); return true; },
       runClient: async (options = {}) => {
+        options.reportSignInWindow?.("PRIVATE_PAGE_CONTENT");
         process.stderr.write("CANVAS_CAPTURE_PROGRESS=CAPTURE_RUNNING\n");
         process.stderr.write(`CANVAS_CAPTURE_PROGRESS=PRIVATE_${privateSentinel}\n`);
         options.reportImportProgress?.("raw account or course data");
@@ -147,6 +148,41 @@ describe.sequential("packaged browser runtime", () => {
     expect(JSON.stringify(frames)).not.toContain(privateSentinel);
     expect(JSON.stringify(frames)).not.toContain("private course name");
     expect(result).toStrictEqual(frames.at(-1));
+  });
+
+  it("keeps the attended sign-in reason visible until capture resumes", async () => {
+    const output: string[] = [];
+    const result = await runCanvasAppRefresh({
+      heartbeatMs: 10,
+      writeLine: (line) => { output.push(line); return true; },
+      runClient: async (options = {}) => {
+        options.reportSignInWindow?.("VERIFICATION_REQUIRED");
+        process.stderr.write("CANVAS_CAPTURE_PROGRESS=WAITING_FOR_OWNER_SIGN_IN\n");
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        process.stderr.write("CANVAS_CAPTURE_PROGRESS=SIGNING_IN_AUTOMATICALLY\n");
+        process.stderr.write("CANVAS_CAPTURE_PROGRESS=SURVEY_POPUP_BLOCKING\n");
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        process.stderr.write("CANVAS_CAPTURE_PROGRESS=CAPTURE_RUNNING\n");
+        return {
+          status: "PARTIAL", resourceCount: 1, itemCount: 1, gapCount: 0, dailyGapCount: 0,
+          omissionCount: 0, fileBodiesIncomplete: true,
+          nativeImport: {
+            status: "IMPORTED", importedCourses: 1, archivedCourses: 0, promotedBlobs: 0,
+            reusedBlobs: 0, bytesVerified: 0, alreadyCurrent: false,
+          },
+        };
+      },
+    });
+    const frames = output.map((line) => JSON.parse(line) as Record<string, unknown>);
+    const progress = frames.filter((frame) => frame.type === "progress");
+    const fallbackIndex = progress.findIndex((frame) => frame.phase === "sign-in-window");
+    const captureIndex = progress.findIndex((frame) => frame.phase === "capturing");
+    expect(fallbackIndex).toBeGreaterThan(0);
+    expect(captureIndex).toBeGreaterThan(fallbackIndex);
+    expect(progress.slice(fallbackIndex, captureIndex).every((frame) =>
+      frame.phase === "sign-in-window" && frame.reason === "VERIFICATION_REQUIRED")).toBe(true);
+    expect(progress.filter((frame) => frame.phase === "sign-in-window").length).toBeGreaterThan(1);
+    expect(result.status).toBe("complete");
   });
 
   it("fails closed when capture data is incomplete", async () => {

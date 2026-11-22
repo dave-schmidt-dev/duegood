@@ -44,7 +44,11 @@ function brokerProgram() {
       newPage: async () => page,
       newCDPSession: async () => ({ send: async () => {}, detach: async () => {} }),
       on: () => {},
-      close: async () => { contextClosed = true; },
+      close: async () => {
+        process.stdout.write("CLOSING_PROFILE\\n");
+        await new Promise((resolve) => process.once("SIGUSR1", resolve));
+        contextClosed = true;
+      },
     };
     const broker = await startSessionBroker({
       appDirectory: directory,
@@ -300,15 +304,22 @@ describe("Canvas session broker process protocol", () => {
       expect(socketStat.mode & 0o077).toBe(0);
       expect((await lstat(directory)).mode & 0o077).toBe(0);
 
-      expect((await sendCommand(socketPath, "status")).final).toEqual({ status: "READY" });
+      const initialStatus = (await sendCommand(socketPath, "status")).final;
+      expect(initialStatus).toMatchObject({ status: "READY", headless: true, pid: child.pid });
+      expect((await sendCommand(socketPath, { command: "stop", expectedPid: child.pid! + 1 })).final)
+        .toEqual({ status: "STOP_FAILED" });
+      expect((await sendCommand(socketPath, "status")).final).toMatchObject({ status: "READY", headless: true });
       const first = await sendCommand(socketPath, "probe");
       const second = await sendCommand(socketPath, "probe");
       expect(first.final).toMatchObject({ status: "PARTIAL", checks: { apiShapePagination: "NO_COURSES" } });
       expect(second.final).toMatchObject({ status: "PARTIAL", checks: { apiShapePagination: "OK" } });
       expect(first.frames).toContainEqual({ progress: "PROBE_RUNNING" });
       expect((await sendCommand(socketPath, "probe")).final).toEqual({ status: "REQUEST_FAILED" });
-      expect((await sendCommand(socketPath, "status")).final).toEqual({ status: "READY" });
-      expect((await sendCommand(socketPath, "stop")).final).toEqual({ status: "STOPPING" });
+      expect((await sendCommand(socketPath, "status")).final).toMatchObject({ status: "READY", headless: true });
+      expect((await sendCommand(socketPath, { command: "stop", expectedPid: child.pid! })).final).toEqual({ status: "STOPPING" });
+      await waitForLine(child, "CLOSING_PROFILE");
+      expect((await lstat(socketPath)).isSocket()).toBe(true);
+      child.kill("SIGUSR1");
       await waitForLine(child, "CLOSED:true");
       await waitForChildExit(child);
       await expect(lstat(socketPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -330,12 +341,12 @@ describe("Canvas session broker process protocol", () => {
     try {
       await waitForLine(child, "READY");
 
-      expect((await sendCommand(socketPath, "status")).final).toEqual({ status: "READY" });
+      expect((await sendCommand(socketPath, "status")).final).toMatchObject({ status: "READY", headless: true });
       expect((await sendCommand(socketPath, "probe")).final)
         .toMatchObject({ status: "PARTIAL", checks: { apiShapePagination: "OK" } });
       expect((await sendCommand(socketPath, { command: "capture", expectedUserId: 41 })).final)
         .toMatchObject({ status: "PARTIAL", resourceCount: 2, fileBodiesIncomplete: true });
-      expect((await sendCommand(socketPath, "status")).final).toEqual({ status: "READY" });
+      expect((await sendCommand(socketPath, "status")).final).toMatchObject({ status: "READY", headless: true });
 
       let signalRunning!: () => void;
       const probeRunning = new Promise<void>((resolve) => { signalRunning = resolve; });

@@ -55,7 +55,7 @@ export interface DashboardState {
   readonly selectedConversationId?: string;
   readonly selectedRefreshId?: string;
   readonly refreshState: "idle" | "running" | "complete" | "partial" | "failed";
-  readonly refreshProgress?: { readonly phase: string; readonly completed: number; readonly total: number | null; readonly bytesDone: number | null };
+  readonly refreshProgress?: { readonly phase: string; readonly completed: number; readonly total: number | null; readonly bytesDone: number | null; readonly reason?: string };
   readonly refreshSettingPending?: boolean;
   readonly refreshSettingError?: string;
   readonly refreshDetail?: string;

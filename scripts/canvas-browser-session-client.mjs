@@ -7,6 +7,8 @@ import net from "node:net";
 import { fixedSessionPaths } from "./canvas-browser-session.mjs";
 import { bindCanvasAccount, readCanvasAccountBinding } from "./canvas-browser-binding.mjs";
 import { runCanvasBrowserNativeImport } from "./canvas-browser-native-import.mjs";
+import { captureWithSignInWindow, captureFailureSummary } from "./canvas-refresh-retry.mjs";
+import { parseSessionMode } from "./canvas-sign-in-recovery.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BROKER_SCRIPT = path.join(ROOT, "scripts", "canvas-browser-session.mjs");
@@ -95,6 +97,10 @@ function sanitizeFrame(frame, command) {
     }
     return { status: frame.status, checks: frame.checks };
   }
+  if (command === "status" && frame.status === "READY" && keys.length === 3
+      && typeof frame.headless === "boolean" && Number.isSafeInteger(frame.pid) && frame.pid > 0) {
+    return { status: "READY", headless: frame.headless, pid: frame.pid };
+  }
   if (command === "identity" && frame.userId !== undefined) {
     if (frame.status !== "IDENTITY_AVAILABLE" || keys.length !== 2
         || !Number.isSafeInteger(frame.userId) || frame.userId <= 0) throw new Error("INVALID_RESPONSE");
@@ -104,9 +110,10 @@ function sanitizeFrame(frame, command) {
   return { status: frame.status };
 }
 
-async function sendCommand(command, timeoutMs, expectedUserId = undefined) {
+async function sendCommand(command, timeoutMs, argument = undefined) {
   if (!await verifySocketPath()) return undefined;
-  const request = command === "capture" ? { command, expectedUserId } : { command };
+  const request = command === "capture" ? { command, expectedUserId: argument }
+    : command === "stop" && argument !== undefined ? { command, expectedPid: argument } : { command };
   return new Promise((resolve, reject) => {
     let buffer = Buffer.alloc(0);
     const socket = net.createConnection(socketPath);
@@ -141,14 +148,14 @@ async function sendCommand(command, timeoutMs, expectedUserId = undefined) {
   });
 }
 
-function launchDetachedBroker({ headless = false } = {}) {
+function launchDetachedBroker({ headless = true } = {}) {
   const childEnv = {
     PATH: process.env.PATH ?? "",
     HOME: homedir(),
     TMPDIR: process.env.TMPDIR ?? tmpdir(),
     LANG: process.env.LANG ?? "en_US.UTF-8",
   };
-  const child = spawn(process.execPath, headless ? [BROKER_SCRIPT, "--headless"] : [BROKER_SCRIPT], {
+  const child = spawn(process.execPath, [BROKER_SCRIPT, headless ? "--headless" : "--headed"], {
     cwd: ROOT,
     detached: true,
     stdio: "ignore",
@@ -157,9 +164,10 @@ function launchDetachedBroker({ headless = false } = {}) {
   });
   if (!child.pid) throw new Error("BROKER_LAUNCH_FAILED");
   child.unref();
+  return child.pid;
 }
 
-async function startAndWait({ headless = false } = {}) {
+async function startAndWait({ headless = true } = {}) {
   await mkdir(appDirectory, { recursive: true, mode: 0o700 });
   const before = await lstat(appDirectory);
   if (!before.isDirectory() || before.isSymbolicLink()
@@ -168,23 +176,28 @@ async function startAndWait({ headless = false } = {}) {
   const after = await lstat(appDirectory);
   if ((after.mode & 0o077) !== 0) throw new Error("SOCKET_DIRECTORY_REJECTED");
   const existing = await sendCommand("status", 1_000).catch(() => undefined);
-  if (existing?.status === "READY" || existing?.status === "BUSY") return existing;
-  try { launchDetachedBroker({ headless }); } catch { return { status: "START_FAILED" }; }
+  if (existing?.status === "READY" || existing?.status === "BUSY") return { ...existing, reused: true };
+  let pid;
+  try { pid = launchDetachedBroker({ headless }); } catch { return { status: "START_FAILED" }; }
   const deadline = Date.now() + START_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const status = await sendCommand("status", 1_000).catch(() => undefined);
-    if (status?.status === "READY" || status?.status === "BUSY") return status;
+    if (status?.status === "READY" || status?.status === "BUSY") return { ...status, reused: status.pid !== pid };
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   return { status: "START_FAILED" };
 }
 
-async function stopAndWait() {
-  const response = await sendCommand("stop", 5_000).catch(() => undefined);
+async function stopAndWait(expectedPid = undefined) {
+  const response = await sendCommand("stop", 5_000, expectedPid).catch(() => undefined);
   if (response?.status !== "STOPPING") return response ?? { status: "NOT_RUNNING" };
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    if (!await verifySocketPath().catch(() => false)) return { status: "STOPPED" };
+    // Node may unlink its listening socket before Chrome releases the profile.
+    const owner = await lstat(path.join(appDirectory, "canvas-session.owner")).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+    if (!owner && !await verifySocketPath()) return { status: "STOPPED" };
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   return { status: "STOP_FAILED" };
@@ -341,22 +354,11 @@ function captureSummary(frame) {
   };
 }
 
-function captureFailureSummary(frame) {
-  if (frame?.status === "REQUEST_FAILED" && Object.keys(frame).length === 2
-      && Object.hasOwn(frame, "errorCode") && typeof frame.errorCode === "string"
-      && /^[A-Z_]{1,48}$/u.test(frame.errorCode)) {
-    return { status: "REQUEST_FAILED", errorCode: frame.errorCode };
-  }
-  if (frame && Object.keys(frame).length === 1
-      && typeof frame.status === "string" && /^[A-Z0-9_]{1,48}$/u.test(frame.status)) {
-    return { status: frame.status };
-  }
-  return { status: "REQUEST_FAILED", errorCode: "INVALID_RESPONSE" };
-}
-
 /**
  * @typedef {object} CanvasRefreshOptions
- * @property {() => Promise<{status: string}>} [start]
+ * @property {(options: {headless: boolean}) => Promise<{status: string, headless?: boolean, pid?: number, reused?: boolean}>} [start]
+ * @property {(expectedPid?: number) => Promise<{status: string}>} [stop]
+ * @property {(reason: string) => void} [reportSignInWindow]
  * @property {() => Promise<number | undefined>} [readBinding]
  * @property {(userId: number) => Promise<{status: string, [key: string]: unknown} | undefined>} [capture]
  * @property {(options: {confirmedFirstUserId: number, progress: (status: string) => void}) => Promise<{
@@ -372,6 +374,8 @@ function captureFailureSummary(frame) {
  */
 export async function runCanvasBrowserRefresh({
   start = startAndWait,
+  stop = stopAndWait,
+  reportSignInWindow = (reason) => process.stderr.write(`OPENING_SIGN_IN_WINDOW=${reason}\n`),
   readBinding = () => readCanvasAccountBinding(appDirectory),
   capture = (userId) => sendCommand("capture", CAPTURE_TIMEOUT_MS, userId),
   nativeImport = runCanvasBrowserNativeImport,
@@ -390,7 +394,7 @@ export async function runCanvasBrowserRefresh({
   };
 
   let ready;
-  try { ready = await start(); } catch {
+  try { ready = await start({ headless: true }); } catch {
     await invalidatePreCaptureAttempt();
     return { status: "START_FAILED" };
   }
@@ -407,7 +411,9 @@ export async function runCanvasBrowserRefresh({
   }
 
   let captured;
-  try { captured = await capture(boundId); } catch { captured = undefined; }
+  try {
+    captured = await captureWithSignInWindow({ ready, capture: () => capture(boundId), start, stop, reportSignInWindow });
+  } catch { captured = undefined; }
   if (captured?.status !== "PARTIAL") {
     await invalidatePreCaptureAttempt();
     return captureFailureSummary(captured ?? { status: "NOT_RUNNING" });
@@ -438,14 +444,14 @@ async function main() {
   const validCaptureId = Number.isSafeInteger(captureUserId) && captureUserId > 0;
   if (["capture", "bind"].includes(command) && !validCaptureId
       || !["capture", "bind"].includes(command) && extra.length !== 0
-        && !(command === "start" && extra.length === 1 && extra[0] === "--headless")
+        && !(command === "start" && parseSessionMode(extra) !== undefined)
       || !["start", "status", "probe", "identity", "bind", "capture", "refresh", "stop"].includes(command)) {
     output({ status: "INVALID_CONFIGURATION" });
     process.exitCode = 2;
     return;
   }
   let result;
-  if (command === "start") result = await startAndWait({ headless: extra[0] === "--headless" });
+  if (command === "start") result = { status: (await startAndWait({ headless: parseSessionMode(extra) })).status };
   else if (command === "stop") result = await stopAndWait();
   else if (command === "bind") {
     const identity = await sendCommand("identity", 40_000).catch(() => undefined);

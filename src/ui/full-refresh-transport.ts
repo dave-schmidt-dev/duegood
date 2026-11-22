@@ -1,7 +1,12 @@
-const FULL_REFRESH_PHASES = ["browser-capture", "browser-import", "calendar", "complete"] as const;
+const FULL_REFRESH_PHASES = ["browser-capture", "browser-import", "calendar", "complete", "sign-in-window"] as const;
+const SIGN_IN_REASONS = [
+  "CREDENTIALS_UNAVAILABLE", "SIGN_IN_BLOCKED", "VERIFICATION_REQUIRED", "SURVEY_POPUP_BLOCKING",
+  "UNKNOWN_PAGE", "SIGN_IN_TIMEOUT", "SIGN_IN_REQUIRED",
+] as const;
 type FullRefreshPhase = (typeof FULL_REFRESH_PHASES)[number];
 
-export interface FullRefreshProgress { readonly phase: FullRefreshPhase }
+type SignInReason = (typeof SIGN_IN_REASONS)[number];
+export interface FullRefreshProgress { readonly phase: FullRefreshPhase; readonly reason?: SignInReason }
 export interface FullRefreshResult {
   readonly status: "complete" | "incomplete";
   readonly browserStatus: "complete" | "incomplete" | "failed";
@@ -17,8 +22,15 @@ export interface FullRefreshResult {
 
 export function parseFullRefreshProgress(value: unknown): FullRefreshProgress | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const phase = (value as { phase?: unknown }).phase;
-  return typeof phase === "string" && (FULL_REFRESH_PHASES as readonly string[]).includes(phase) ? { phase: phase as FullRefreshPhase } : null;
+  const row = value as { phase?: unknown; reason?: unknown };
+  if (row.phase === "sign-in-window") {
+    return typeof row.reason === "string" && (SIGN_IN_REASONS as readonly string[]).includes(row.reason)
+      ? { phase: "sign-in-window", reason: row.reason as SignInReason }
+      : null;
+  }
+  return row.reason === undefined && typeof row.phase === "string"
+    && (FULL_REFRESH_PHASES as readonly string[]).includes(row.phase)
+    ? { phase: row.phase as FullRefreshPhase } : null;
 }
 
 export function parseFullRefreshResult(value: unknown): FullRefreshResult | null {

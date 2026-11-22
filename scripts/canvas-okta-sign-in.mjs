@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { lstat, open, readFile, rename, rm, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { signInReasonForOutcome } from "./canvas-sign-in-recovery.mjs";
 
 export const CANVAS_ORIGIN = "https://marymount.instructure.com";
 export const OKTA_HOSTS = Object.freeze(["marymount.okta.com", "sso.marymount.edu"]);
@@ -345,7 +346,8 @@ export async function attemptAutomaticSignIn({
     credentials = await getCredentials();
     outcome = await performOktaSignIn({ page, credentials, now, stepTimeoutMs, initialView: view });
   } catch (error) {
-    outcome = error instanceof OktaSignInError && SIGN_IN_OUTCOMES.includes(error.code) ? error.code : "UNKNOWN_PAGE";
+    outcome = error?.code === "CREDENTIALS_UNAVAILABLE" ? "CREDENTIALS_UNAVAILABLE"
+      : error instanceof OktaSignInError && SIGN_IN_OUTCOMES.includes(error.code) ? error.code : "UNKNOWN_PAGE";
     if (error instanceof OktaSignInError) viewClasses = error.viewClasses;
   } finally {
     scrub(credentials);
@@ -402,6 +404,7 @@ async function reachOkta(context, deadline) {
  * @param {{ context: any, appDirectory: string, progress?: (status: string) => void,
  *   waitForCanvasPage: (context: any, timeoutMs: number, pollMs: number) => Promise<any>,
  *   automaticSignIn?: (options: any) => Promise<string>, attendedSignIn?: boolean,
+ *   onHeadlessFailure?: (reason: string) => void,
  *   timeoutMs: number, pollIntervalMs: number }} options
  */
 export async function waitForSignedInCanvas({
@@ -411,6 +414,7 @@ export async function waitForSignedInCanvas({
   waitForCanvasPage,
   automaticSignIn = attemptAutomaticSignIn,
   attendedSignIn = true,
+  onHeadlessFailure = () => {},
   timeoutMs,
   pollIntervalMs,
 }) {
@@ -421,10 +425,21 @@ export async function waitForSignedInCanvas({
   if (page) return page;
   if (Date.now() < deadline) await reachOkta(context, deadline);
   const outcome = await automaticSignIn({ context, appDirectory, progress, settleMs: Math.min(SETTLE_MS, remaining()) });
-  if (!attendedSignIn && !["SIGNED_IN", "NOT_ON_OKTA"].includes(outcome)) return undefined;
-  if (Date.now() >= deadline) return undefined;
+  if (!attendedSignIn && !["SIGNED_IN", "NOT_ON_OKTA"].includes(outcome)) {
+    const reason = signInReasonForOutcome(outcome);
+    if (reason) onHeadlessFailure(reason);
+    return undefined;
+  }
+  if (Date.now() >= deadline) {
+    if (!attendedSignIn) onHeadlessFailure(signInReasonForOutcome(outcome) ?? "SIGN_IN_REQUIRED");
+    return undefined;
+  }
   const budget = attendedSignIn ? remaining() : Math.min(remaining(), HEADLESS_VERIFY_MS);
   page = await waitForCanvasPage(context, budget, Math.min(pollIntervalMs, budget));
+  if (!attendedSignIn && !page) {
+    const reason = signInReasonForOutcome(outcome) ?? "SIGN_IN_REQUIRED";
+    onHeadlessFailure(reason);
+  }
   if (page && outcome !== "SIGNED_IN") await clearSignInBlock(appDirectory).catch(() => undefined);
   return page;
 }

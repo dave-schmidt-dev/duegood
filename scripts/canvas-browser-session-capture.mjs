@@ -14,6 +14,7 @@ import {
   waitForCanvasProfile,
 } from "./canvas-browser-session-wait.mjs";
 import { waitForSignedInCanvas } from "./canvas-okta-sign-in.mjs";
+import { isSignInReason } from "./canvas-sign-in-recovery.mjs";
 
 import { handleSurveyPopup } from "./canvas-survey-popup.mjs";
 
@@ -105,11 +106,15 @@ export async function runCanvasCapture({
       }
       progress("WAITING_FOR_OWNER_SIGN_IN");
       const deadline = Date.now() + sessionWaitTimeoutMs;
+      let headlessFailureReason;
       const page = await waitForSignedInCanvas({
         context, appDirectory, progress, waitForCanvasPage, automaticSignIn, attendedSignIn,
+        onHeadlessFailure: (reason) => {
+          if (isSignInReason(reason) || reason === "OKTA_HOST_REJECTED") headlessFailureReason = reason;
+        },
         timeoutMs: sessionWaitTimeoutMs, pollIntervalMs: sessionPollIntervalMs,
       });
-      if (!page) throw new Error("CANVAS_SESSION_UNAVAILABLE");
+      if (!page) throw new Error(headlessFailureReason ?? "CANVAS_SESSION_UNAVAILABLE");
       await checkSurveyPopup(page, { deadline, attended: attendedSignIn, progress });
       progress("CANVAS_SESSION_AVAILABLE");
       const generationId = randomUUID().replaceAll("-", "");

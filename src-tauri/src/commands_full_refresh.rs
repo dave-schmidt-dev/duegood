@@ -15,11 +15,22 @@ const MAX_CHILD_RUNTIME: Duration = Duration::from_secs(45 * 60);
 const MAX_CHILD_LINE_BYTES: usize = 8192;
 const MAX_CHILD_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PROGRESS_FRAMES: usize = 256;
+const SIGN_IN_REASONS: &[&str] = &[
+    "CREDENTIALS_UNAVAILABLE",
+    "SIGN_IN_BLOCKED",
+    "VERIFICATION_REQUIRED",
+    "SURVEY_POPUP_BLOCKING",
+    "UNKNOWN_PAGE",
+    "SIGN_IN_TIMEOUT",
+    "SIGN_IN_REQUIRED",
+];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct FullRefreshProgress {
     pub phase: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -42,6 +53,8 @@ pub(super) struct FullRefreshResult {
 enum RuntimeMessage {
     Progress {
         phase: String,
+        #[serde(default)]
+        reason: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     Result {
@@ -121,12 +134,12 @@ impl Inner {
             if !self.ical_refresh_available(store) {
                 return Ok(CalendarOutcome::Unavailable);
             }
-            if !(report.borrow_mut())(FullRefreshProgress { phase: "calendar" }) {
+            if !(report.borrow_mut())(FullRefreshProgress { phase: "calendar", reason: None }) {
                 self.terminate_refresh_process();
                 return Err(());
             }
             let result = self.refresh_ical_under_refresh_guard(&mut |_| {
-                (report.borrow_mut())(FullRefreshProgress { phase: "calendar" })
+                (report.borrow_mut())(FullRefreshProgress { phase: "calendar", reason: None })
             });
             match result {
                 Ok(result) if result.held == 0 => Ok(CalendarOutcome::Complete(result)),
@@ -145,7 +158,7 @@ impl Inner {
                 "Full refresh was stopped before it completed.",
             )
         })?;
-        if !(report.borrow_mut())(FullRefreshProgress { phase: "complete" }) {
+        if !(report.borrow_mut())(FullRefreshProgress { phase: "complete", reason: None }) {
             return Err(CommandError::new(
                 "refresh-cancelled",
                 "Full refresh was stopped before it completed.",
@@ -319,24 +332,18 @@ fn run_browser_client_with_timeout(
                     break;
                 }
                 match serde_json::from_slice::<RuntimeMessage>(&line) {
-                    Ok(RuntimeMessage::Progress { phase }) if result.is_none() => {
+                    Ok(RuntimeMessage::Progress { phase, reason }) if result.is_none() => {
                         progress_frames += 1;
                         if progress_frames > MAX_PROGRESS_FRAMES {
                             failed = Some("browser-output-invalid");
                             break;
                         }
-                        let ui_phase = match phase.as_str() {
-                            "broker-starting" | "waiting-for-canvas" | "capturing" => {
-                                "browser-capture"
-                            }
-                            "importing" | "complete" => "browser-import",
-                            _ => {
-                                failed = Some("browser-output-invalid");
-                                break;
-                            }
+                        let Some((ui_phase, ui_reason)) = runtime_progress_phase(&phase, reason.as_deref()) else {
+                            failed = Some("browser-output-invalid");
+                            break;
                         };
                         if last_ui_phase != Some(ui_phase) {
-                            if !report(FullRefreshProgress { phase: ui_phase }) {
+                            if !report(FullRefreshProgress { phase: ui_phase, reason: ui_reason }) {
                                 inner.terminate_refresh_process();
                                 return Err(BrowserRunError::Cancelled);
                             }
@@ -459,6 +466,19 @@ fn valid_runtime_error_code(value: Option<&str>) -> bool {
                 | "INVALID_REFRESH_RESULT"
         )
     })
+}
+
+fn runtime_progress_phase(phase: &str, reason: Option<&str>) -> Option<(&'static str, Option<&'static str>)> {
+    match (phase, reason) {
+        ("sign-in-window", Some(reason)) => Some(("sign-in-window", Some(sign_in_reason(reason)?))),
+        ("broker-starting" | "waiting-for-canvas" | "capturing", None) => Some(("browser-capture", None)),
+        ("importing" | "complete", None) => Some(("browser-import", None)),
+        _ => None,
+    }
+}
+
+fn sign_in_reason(value: &str) -> Option<&'static str> {
+    SIGN_IN_REASONS.iter().copied().find(|reason| *reason == value)
 }
 
 #[tauri::command]

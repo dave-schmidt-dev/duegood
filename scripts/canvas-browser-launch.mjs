@@ -1,5 +1,5 @@
 /**
- * Launch options for the dedicated Canvas capture profile. Visible Chrome is the default;
+ * Launch options for the dedicated Canvas capture profile. Headless Chrome is the default;
  * headless mode presents the installed desktop Chrome user agent without the Headless marker.
  */
 import { readFile } from "node:fs/promises";
@@ -21,7 +21,7 @@ export async function installedChromeMajor(plistPath = CHROME_INFO_PLIST) {
 }
 
 /** Launch options for the dedicated profile; headless mode replaces the HeadlessChrome user agent. */
-export async function sessionLaunchOptions({ headless = false, chromeMajor = installedChromeMajor } = {}) {
+export async function sessionLaunchOptions({ headless = true, chromeMajor = installedChromeMajor } = {}) {
   return {
     channel: "chrome", headless, args: ["--disable-http-cache"], timeout: 20_000,
     ...(headless ? { userAgent: desktopChromeUserAgent(await chromeMajor()) } : {}),

@@ -116,3 +116,82 @@ describe("Canvas refresh client orchestration", () => {
     expect(JSON.stringify(result)).not.toContain("private diagnostic");
   });
 });
+
+const signInReasons = [
+  "CREDENTIALS_UNAVAILABLE", "SIGN_IN_BLOCKED", "VERIFICATION_REQUIRED", "SURVEY_POPUP_BLOCKING",
+  "UNKNOWN_PAGE", "SIGN_IN_TIMEOUT", "SIGN_IN_REQUIRED",
+];
+
+function recoveryFixture(errorCode: string, headless = true) {
+  const failure = { status: "REQUEST_FAILED", errorCode };
+  const start = vi.fn(async (options: { headless: boolean }) => ({
+    status: "READY", headless: options.headless && headless, pid: options.headless ? 101 : 102,
+  }));
+  const stop = vi.fn(async () => ({ status: "STOPPED" }));
+  const capture = vi.fn(async (): Promise<typeof failure | typeof captureFrame> => failure);
+  const reportSignInWindow = vi.fn();
+  const nativeImport = vi.fn(async () => importFrame);
+  const stateCommand = vi.fn(async () => ({ runId: 9 }));
+  return { start, stop, capture, reportSignInWindow, nativeImport, stateCommand, readBinding: async () => 41 };
+}
+
+describe("attended capture recovery", () => {
+  it.each(signInReasons)("retries %s exactly once, then closes the temporary window", async (reason) => {
+    const fx = recoveryFixture(reason);
+    await expect(runCanvasBrowserRefresh(fx)).resolves.toEqual({ status: "REQUEST_FAILED", errorCode: reason });
+    expect(fx.start.mock.calls).toEqual([[{ headless: true }], [{ headless: false }]]);
+    expect(fx.reportSignInWindow.mock.calls).toEqual([[reason]]);
+    expect(fx.capture.mock.calls).toEqual([[41], [41]]);
+    expect(fx.stop.mock.calls).toEqual([[101], [102]]);
+    expect(fx.nativeImport).not.toHaveBeenCalled();
+  });
+
+  it.each(["IDENTITY_MISMATCH", "BINDING_REQUIRED", "CAPTURE_STATE_UNAVAILABLE", "REQUEST_FAILED",
+    "CAPTURE_COVERAGE_INCOMPLETE", "CAPTURE_BUDGET_EXCEEDED", "HELPER_UNAVAILABLE", "OKTA_HOST_REJECTED", "UNRECOGNIZED"])(
+    "preserves %s without opening a window", async (reason) => {
+      const fx = recoveryFixture(reason);
+      await expect(runCanvasBrowserRefresh(fx)).resolves.toEqual({ status: "REQUEST_FAILED", errorCode: reason });
+      expect(fx.stop).not.toHaveBeenCalled();
+      expect(fx.reportSignInWindow).not.toHaveBeenCalled();
+    },
+  );
+
+  it("leaves an owner-started visible session open", async () => {
+    const fx = recoveryFixture("SIGN_IN_TIMEOUT", false);
+    await runCanvasBrowserRefresh(fx);
+    expect(fx.capture).toHaveBeenCalledTimes(1);
+    expect(fx.stop).not.toHaveBeenCalled();
+    expect(fx.reportSignInWindow).not.toHaveBeenCalled();
+  });
+
+  it("preserves a headed session the owner started during the switch", async () => {
+    const fx = recoveryFixture("SIGN_IN_REQUIRED");
+    fx.capture.mockResolvedValueOnce({ status: "REQUEST_FAILED", errorCode: "SIGN_IN_REQUIRED" })
+      .mockResolvedValueOnce(captureFrame);
+    const start = vi.fn(async ({ headless }: { headless: boolean }) => ({
+      status: "READY", headless, pid: headless ? 101 : 201, reused: true,
+    }));
+    await expect(runCanvasBrowserRefresh({ ...fx, start })).resolves.toMatchObject({ nativeImport: { status: "IMPORTED" } });
+    expect(fx.stop.mock.calls).toEqual([[101]]);
+  });
+
+  it("imports after recovery and starts the next refresh headless", async () => {
+    const fx = recoveryFixture("SIGN_IN_REQUIRED");
+    fx.capture.mockResolvedValueOnce({ status: "REQUEST_FAILED", errorCode: "SIGN_IN_REQUIRED" })
+      .mockResolvedValue(captureFrame);
+    await expect(runCanvasBrowserRefresh(fx)).resolves.toMatchObject({ nativeImport: { status: "IMPORTED" } });
+    await runCanvasBrowserRefresh(fx);
+    expect(fx.start.mock.calls).toEqual([[{ headless: true }], [{ headless: false }], [{ headless: true }]]);
+    expect(fx.stop.mock.calls).toEqual([[101], [102]]);
+    expect(fx.reportSignInWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not launch Chrome when the headless session cannot stop", async () => {
+    const fx = recoveryFixture("SIGN_IN_REQUIRED");
+    fx.stop.mockResolvedValue({ status: "STOP_FAILED" });
+    await expect(runCanvasBrowserRefresh(fx)).resolves.toEqual({ status: "STOP_FAILED" });
+    expect(fx.start).toHaveBeenCalledTimes(1);
+    expect(fx.capture).toHaveBeenCalledTimes(1);
+    expect(fx.reportSignInWindow).not.toHaveBeenCalled();
+  });
+});

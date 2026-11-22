@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { fullRefreshFeedback } from "../../src/ui/full-refresh";
-import { parseFullRefreshResult } from "../../src/ui/full-refresh-transport";
+import { parseFullRefreshProgress, parseFullRefreshResult } from "../../src/ui/full-refresh-transport";
 
 describe("full refresh result semantics", () => {
+  it("accepts sign-in help progress only with an allowlisted reason", () => {
+    expect(parseFullRefreshProgress({ phase: "sign-in-window", reason: "VERIFICATION_REQUIRED" }))
+      .toEqual({ phase: "sign-in-window", reason: "VERIFICATION_REQUIRED" });
+    expect(parseFullRefreshProgress({ phase: "sign-in-window", reason: "PRIVATE_PAGE_CONTENT" })).toBeNull();
+    expect(parseFullRefreshProgress({ phase: "browser-capture", reason: "VERIFICATION_REQUIRED" })).toBeNull();
+  });
+
   it("reports daily completion and bounded optional omissions without implying archive completeness", () => {
     const result = parseFullRefreshResult({
       status: "complete",

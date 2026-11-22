@@ -110,6 +110,27 @@ fn browser_client_uses_fixed_entrypoint_and_sanitizes_content_free_frames() {
 }
 
 #[test]
+fn browser_progress_requires_an_allowlisted_reason_for_the_sign_in_window() {
+    for reason in [
+        "CREDENTIALS_UNAVAILABLE",
+        "SIGN_IN_BLOCKED",
+        "VERIFICATION_REQUIRED",
+        "SURVEY_POPUP_BLOCKING",
+        "UNKNOWN_PAGE",
+        "SIGN_IN_TIMEOUT",
+        "SIGN_IN_REQUIRED",
+    ] {
+        assert_eq!(
+            runtime_progress_phase("sign-in-window", Some(reason)),
+            Some(("sign-in-window", Some(reason)))
+        );
+    }
+    assert_eq!(runtime_progress_phase("sign-in-window", None), None);
+    assert_eq!(runtime_progress_phase("sign-in-window", Some("PRIVATE_PAGE_CONTENT")), None);
+    assert_eq!(runtime_progress_phase("capturing", Some("VERIFICATION_REQUIRED")), None);
+}
+
+#[test]
 fn browser_timeout_terminates_and_reaps_the_child() {
     let (_temp, runtime) = runtime_fixture("exec /bin/sleep 10");
     let (_app_root, app) = app_with_store("full-refresh-timeout");
