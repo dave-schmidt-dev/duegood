@@ -270,6 +270,21 @@ function isOwnedStageHandoff({ ownership, candidateRootReal, sourceRootReal }) {
 }
 
 /** Unregister only verified installer-owned backups while retaining their bytes for both proofs. */
+const BACKUP_UNREGISTER_RETRY_DELAYS_MS = [250, 1000];
+
+async function unregisterWithRetry(run, bundlePath) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await run(LSREGISTER, ["-u", bundlePath]);
+      return true;
+    } catch {
+      const delay = BACKUP_UNREGISTER_RETRY_DELAYS_MS[attempt];
+      if (delay === undefined) return false;
+      await new Promise((resolve) => { setTimeout(resolve, delay); });
+    }
+  }
+}
+
 async function unregisterInstallerOwnedBackups({ files, run, applicationsDirectory, signingName, log }) {
   let entries;
   try {
@@ -286,7 +301,11 @@ async function unregisterInstallerOwnedBackups({ files, run, applicationsDirecto
       continue;
     }
     log(`install: unregistering installer-owned backup while retaining its bytes: ${entry.name}`);
-    await run(LSREGISTER, ["-u", backupPath]);
+    if (!(await unregisterWithRetry(run, backupPath))) {
+      // LaunchServices can reject -u for a bundle renamed moments ago. The cold proof still requires the
+      // installed path, and post-proof cleanup deletes these bytes, which drops the stale registration.
+      log(`install: warning: LaunchServices did not confirm unregistering ${entry.name}; continuing to the cold proof`);
+    }
     owned.push(backupPath);
   }
   return owned;

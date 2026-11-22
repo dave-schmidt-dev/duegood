@@ -323,6 +323,40 @@ describe("desktop app installer", () => {
     expect(await readdir(harness.applications)).toEqual(["Due Good.app"]);
   });
 
+  it("continues past a LaunchServices refusal to unregister a retained backup and still removes it", async () => {
+    const installed = path.join(harness.applications, "Due Good.app");
+    const priorBackup = path.join(harness.applications, backupEntryName);
+    await harness.makeApp(installed);
+    await harness.makeApp(priorBackup);
+    const messages: string[] = [];
+    let refusals = 0;
+    const run = (command: string, args: string[], options?: { cwd?: string; timeoutMs?: number }) => {
+      if (command.endsWith("/lsregister") && args[0] === "-u" && args[1] === priorBackup) {
+        refusals += 1;
+        return Promise.reject(new Error("A required local verification command failed."));
+      }
+      return harness.fakeRun(command, args, options);
+    };
+
+    const result = await harness.installDesktopApp({
+      appPath: harness.app,
+      candidateRoot: harness.candidateRoot,
+      sourceCheckout: harness.sourceCheckout,
+      applicationsDirectory: harness.applications,
+      homeDirectory: harness.homeDirectory,
+      rootMarkerPath: harness.rootMarkerPath,
+      signingIdentity: identityName,
+      platform: "darwin",
+      run,
+      log: (message: string) => { messages.push(message); },
+    });
+
+    expect(refusals).toBeGreaterThanOrEqual(3);
+    expect(messages.some((message) => message.includes("did not confirm unregistering"))).toBe(true);
+    expect(result.removedBackupPaths).toContain(priorBackup);
+    expect(await readdir(harness.applications)).toEqual(["Due Good.app"]);
+  });
+
   it("leaves an unknown bundle with a backup-like name untouched on success", async () => {
     const unknown = path.join(harness.applications, backupEntryName);
     await harness.makeApp(unknown, "com.example.not-duegood");
