@@ -6,6 +6,7 @@ function installDashboardMock(): void {
   type Callback = (message: unknown) => void;
   const callbacks = new Map<number, Callback>();
   let nextId = 1;
+  let refreshCalls = 0;
   let completeRefresh: (() => void) | undefined;
   const scope = window as unknown as Record<string, unknown>;
   const now = Date.now();
@@ -60,9 +61,13 @@ function installDashboardMock(): void {
         storeState: "authoritative", coursework: { text: coursework, version: "a".repeat(64) }, refreshHistory, conversations,
         profile: null, avatar: null, courseExports: { "course-101": { files: "[]", pages: "[]", modules: "[]", announcements: "[]", quizzes: "[]", downloadManifest: "[]" }, "course-102": { files: "[]", pages: "[]", modules: "[]", announcements: "[]", quizzes: "[]", downloadManifest: "[]" } },
       };
-      if (command === "start_canvas_refresh") return new Promise((resolve) => {
-        completeRefresh = () => resolve({ status: "complete", updatedAt: "2026-10-03T12:00:00Z" });
-      });
+      if (command === "start_canvas_refresh") {
+        refreshCalls += 1;
+        if (refreshCalls === 1) return { status: "complete", updatedAt: "2026-10-03T11:00:00Z" };
+        return new Promise((resolve) => {
+          completeRefresh = () => resolve({ status: "complete", updatedAt: "2026-10-03T12:00:00Z" });
+        });
+      }
       throw { code: "unexpected-command", message: `Unexpected synthetic IPC command: ${command}` };
     },
   };
@@ -73,6 +78,7 @@ async function openDashboard(page: Page): Promise<void> {
   await page.addInitScript(installDashboardMock);
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
+  await expect(page.locator(".refresh-button")).toBeEnabled();
 }
 
 test("shows captured rubric details for an assignment", async ({ page }) => {

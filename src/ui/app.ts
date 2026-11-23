@@ -26,6 +26,7 @@ import {
   type NativeTransport,
 } from "./transport";
 import { fullRefreshFeedback } from "./full-refresh";
+import { refreshChangeAlert } from "./refresh-change-alert";
 import { createLibraryResourceActionRunner } from "./library-resource-action";
 import { boundedScrollPosition, createDashboardViewStateStore, reconcileDashboardViewState, type DashboardViewState } from "./dashboard-view-state";
 
@@ -34,6 +35,7 @@ function element(tag: string, attrs: Record<string, string> = {}, text?: string)
 }
 
 const EMPTY_DATA: DashboardData = { version: "", courses: [], events: [], pendingSourceLinks: [], resources: [], conversations: [], refreshes: [], profile: null, refreshAvailable: false, sourceStatus: {} };
+const AUTOMATIC_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1_000;
 
 function desktopRefreshAvailable(info: DesktopStoreInfo | undefined): boolean { return info?.browserRefreshAvailable === true || info?.refreshAvailable === true || info?.icalRefreshAvailable === true; }
 
@@ -75,6 +77,10 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
   let scrollPositions: Partial<Record<DashboardPage, number>> = { ...storedViewState.scrollPositions };
   let restoredViewState = false;
   let viewStateTimer: ReturnType<typeof setTimeout> | undefined;
+  let automaticRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let automaticRefreshDueAt: number | undefined;
+  let automaticRefreshStarted = false;
+  let refreshComparisonBaselineKnown = false;
   let skipNextHashScrollCapture = false;
   let state: DashboardState = { page: pageFromHash(), loading: true, data: { ...EMPTY_DATA, refreshAvailable: desktopRefreshAvailable(desktop.info) }, now: Date.now(), eventMode: "all", courseFilter: "all", gradeCourseFilter: "all", gradeMode: "all", resourceFilter: "all", expandedEventIds: new Set(), pendingCompletionIds: new Set(), failedCompletionIds: new Set(), pendingDiscussionIds: new Set(), failedDiscussionIds: new Set(), pendingManualGradeIds: new Set(), failedManualGradeIds: new Set(), refreshState: "idle", desktop: desktop.info };
   const resourceActionRunner = createLibraryResourceActionRunner((id) => transport.openResource(id));
@@ -150,12 +156,41 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
       const data = await withAvatar(parseDashboard(await transport.loadDashboardBody(false)));
       restoreStoredViewState(data);
       state = { ...reconciledDashboardState(state, data), loading: false, error: undefined };
+      refreshComparisonBaselineKnown = true;
     } catch (error) {
       const detail = error instanceof DesktopCommandError ? ` ${error.message}` : "";
       state = { ...state, loading: false, error: `Coursework could not be loaded. No substitute or sample data was shown.${detail}` };
     }
     draw();
     restoreScroll();
+    maybeStartAutomaticRefresh();
+  }
+
+  function scheduleAutomaticRefresh(): void {
+    if (automaticRefreshTimer !== undefined) clearTimeout(automaticRefreshTimer);
+    automaticRefreshTimer = undefined;
+    automaticRefreshDueAt = undefined;
+    if (disposed || state.loading || !state.data.refreshAvailable) return;
+    automaticRefreshDueAt = Date.now() + AUTOMATIC_REFRESH_INTERVAL_MS;
+    automaticRefreshTimer = setTimeout(() => {
+      automaticRefreshTimer = undefined;
+      automaticRefreshDueAt = undefined;
+      void refresh();
+    }, AUTOMATIC_REFRESH_INTERVAL_MS);
+  }
+
+  function refreshIfOverdue(): void {
+    if (automaticRefreshDueAt === undefined || Date.now() < automaticRefreshDueAt || disposed || state.refreshState === "running") return;
+    if (automaticRefreshTimer !== undefined) clearTimeout(automaticRefreshTimer);
+    automaticRefreshTimer = undefined;
+    automaticRefreshDueAt = undefined;
+    void refresh();
+  }
+
+  function maybeStartAutomaticRefresh(): void {
+    if (automaticRefreshStarted || disposed || state.loading || state.refreshState === "running" || state.desktop.storeState !== "authoritative" || !state.data.refreshAvailable || state.desktop.snapshotInProgress === true) return;
+    automaticRefreshStarted = true;
+    void refresh();
   }
 
   async function pollStartupSnapshot(): Promise<void> {
@@ -166,6 +201,7 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
       if (status.availability === "ready" && (status.state === "preview" || status.state === "authoritative")) {
         state = { ...state, desktop: { ...state.desktop!, canvasRefreshEnabled: status.canvasRefreshEnabled, refreshAvailable: status.refreshAvailable, icalRefreshAvailable: status.icalRefreshAvailable, browserRefreshAvailable: status.browserRefreshAvailable, snapshotInProgress: status.snapshotInProgress, snapshotProgress: status.snapshotProgress, warning: status.problem }, data: { ...state.data, refreshAvailable: status.refreshAvailable || status.icalRefreshAvailable || status.browserRefreshAvailable === true } };
         draw();
+        maybeStartAutomaticRefresh();
       }
       if (status.snapshotInProgress) snapshotStatusTimer = setTimeout(() => { void pollStartupSnapshot(); }, 500);
     } catch {
@@ -176,7 +212,8 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
   async function reloadAuthoritativeDashboard(): Promise<boolean> {
     try {
       const data = await withAvatar(parseDashboard(await transport.loadDashboardBody(true)));
-      state = reconciledDashboardState(state, data);
+      state = { ...reconciledDashboardState(state, data), error: undefined };
+      refreshComparisonBaselineKnown = true;
       return true;
     } catch {
       return false;
@@ -304,7 +341,12 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
 
   async function refresh(): Promise<void> {
     if (!state.data.refreshAvailable || state.refreshState === "running") return;
+    if (automaticRefreshTimer !== undefined) clearTimeout(automaticRefreshTimer);
+    automaticRefreshTimer = undefined;
+    automaticRefreshDueAt = undefined;
     const fullRefresh = state.desktop?.browserRefreshAvailable === true;
+    const previousData = state.data;
+    const canCompareChanges = refreshComparisonBaselineKnown;
     captureScroll();
     state = { ...state, refreshState: "running", refreshProgress: undefined, refreshDetail: undefined, refreshSettingError: undefined }; drawPreservingScroll();
     try {
@@ -318,9 +360,9 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
           state = { ...state, refreshProgress: { phase: progress.phase, completed: 0, total: null, bytesDone: null, ...(progress.reason === undefined ? {} : { reason: progress.reason }) } };
           drawPreservingScroll();
         });
-        const previousRefreshIds = new Set(data.refreshes.map((refresh) => refresh.id));
         const reloaded = await reloadAuthoritativeDashboard();
         if (reloaded) data = state.data;
+        const previousRefreshIds = new Set(previousData.refreshes.map((refresh) => refresh.id));
         const fileNotices = reloaded ? data.refreshes
           .filter((refresh) => refresh.source === "canvas" && !previousRefreshIds.has(refresh.id))
           .flatMap((refresh) => refresh.changes.filter((change) => change.kind === "notice"
@@ -347,6 +389,8 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
         refreshDetail = useCalendar ? `Calendar refresh complete · ${String((result as IcalRefreshResult).added)} added · ${String((result as IcalRefreshResult).updated)} updated · ${String((result as IcalRefreshResult).held)} held` : undefined;
         try {
           data = await withAvatar(parseDashboard(await transport.loadDashboardBody(true)));
+          refreshComparisonBaselineKnown = true;
+          state = { ...state, error: undefined };
           refreshState = result.status === "incomplete" ? "partial" : "complete";
         } catch {
           refreshDetail = "Refresh finished, but updated data could not be reloaded. The prior view is still shown.";
@@ -361,13 +405,15 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
           : { ...state.desktop!, canvasRefreshEnabled: currentStatus.canvasRefreshEnabled, refreshAvailable: false, icalRefreshAvailable: false, browserRefreshAvailable: false, warning: currentStatus.problem, lastRefreshAt: updatedAt ?? state.desktop?.lastRefreshAt };
       const refreshAvailable = currentStatus === undefined ? desktopRefreshAvailable(desktopInfo) : currentStatus.availability === "ready" && (currentStatus.refreshAvailable || currentStatus.icalRefreshAvailable || currentStatus.browserRefreshAvailable === true);
       state = reconciledDashboardState({ ...state, desktop: desktopInfo }, data, refreshAvailable);
-      state = { ...state, desktop: desktopInfo, refreshState, refreshProgress: undefined, refreshDetail };
+      const refreshAlert = canCompareChanges ? refreshChangeAlert(previousData, data) ?? state.refreshAlert : state.refreshAlert;
+      state = { ...state, desktop: desktopInfo, refreshState, refreshProgress: undefined, refreshDetail, refreshAlert };
     } catch {
       if (fullRefresh) {
         const reloaded = await reloadAuthoritativeDashboard();
         state = { ...state, refreshState: "failed", refreshProgress: undefined, refreshDetail: reloaded ? "Full refresh failed. Latest saved data was reloaded." : "Full refresh failed and updated data could not be reloaded; the prior view is still shown." };
       } else state = { ...state, refreshState: "failed", refreshProgress: undefined, refreshDetail: undefined };
     }
+    scheduleAutomaticRefresh();
     drawPreservingScroll();
     scheduleViewStateSave();
   }
@@ -387,6 +433,8 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
     }
     state = { ...state, refreshSettingPending: false };
     draw();
+    if (automaticRefreshStarted) scheduleAutomaticRefresh();
+    else maybeStartAutomaticRefresh();
   }
 
   function transitionFailure(error: unknown, cancelledMessage: string): { readonly message: string; readonly error: boolean } {
@@ -558,6 +606,7 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
     onSelectConversation(selectedConversationId) { state = { ...state, selectedConversationId }; draw(); scheduleViewStateSave(); },
     onSelectRefresh(selectedRefreshId) { state = { ...state, selectedRefreshId }; draw(); scheduleViewStateSave(); },
     onRefresh() { void refresh(); },
+    onDismissRefreshAlert() { state = { ...state, refreshAlert: undefined }; draw(); },
     onToggleCanvasRefresh(enabled) { void toggleCanvasRefresh(enabled); },
     onCopyAssignment(id) { void copyAssignment(id); },
     onSelectPendingLink(id) { selectPendingLink(id); },
@@ -617,9 +666,14 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
     } else if (event.key.toLowerCase() === "c") { event.preventDefault(); openPendingLinkDecision("confirm"); }
     else if (event.key.toLowerCase() === "r") { event.preventDefault(); openPendingLinkDecision("reject"); }
   }, { signal: listeners.signal });
+  window.addEventListener("focus", refreshIfOverdue, { signal: listeners.signal });
+  document.addEventListener("visibilitychange", refreshIfOverdue, { signal: listeners.signal });
   draw(); void load(); void pollStartupSnapshot();
   return () => {
     disposed = true;
+    if (automaticRefreshTimer !== undefined) clearTimeout(automaticRefreshTimer);
+    automaticRefreshTimer = undefined;
+    automaticRefreshDueAt = undefined;
     captureScroll();
     saveViewState();
     listeners.abort();

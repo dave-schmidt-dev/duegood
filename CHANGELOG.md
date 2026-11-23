@@ -4,6 +4,8 @@
 
 ### Added
 
+- Refresh the dashboard when it opens and every six hours while open. Show verified changes in an accessible banner, suppressing removals when a source read is incomplete.
+
 - Keep Canvas assignment, discussion, announcement, quiz and page bodies with their formatting and timestamps. Timeline, Done and Library details show the instructions. Missing or unreadable bodies mark the refresh partial.
 - Export readable assignment and discussion copies to configured local class folders after a native import. Refresh preserves owner-written files and reports export outcomes without revealing their contents.
 

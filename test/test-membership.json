@@ -11,7 +11,8 @@
       "test/ui/library-resource-action.test.ts",
       "test/ui/dashboard-view-state.test.ts",
       "test/ui/desktop-transport.test.ts",
-      "test/ui/desktop-setup.test.ts"
+      "test/ui/desktop-setup.test.ts",
+      "test/ui/refresh-change-alert.test.ts"
     ]
   },
   "container": {

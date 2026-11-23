@@ -5,6 +5,9 @@ const NOW = new Date().toISOString();
 
 interface Setup {
   readonly mode?: "canvas" | "calendar" | "full" | "none";
+  readonly autoRefreshChanges?: "none" | "coursework" | "grade" | "inbox" | "library";
+  readonly initialLoadError?: boolean;
+  readonly historicalChanges?: boolean;
   readonly refreshError?: boolean;
   readonly fullRefreshError?: boolean;
   readonly fullErrorCode?: string;
@@ -69,13 +72,21 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
   const storageKey = "duegood-refresh-pages-synthetic-documents";
   let nextId = 1;
   let documents = JSON.parse(JSON.stringify(options.initial)) as Record<string, unknown>;
+  let canvasRefreshCalls = 0;
+  let calendarRefreshCalls = 0;
+  let fullRefreshCalls = 0;
   if (setup.noDeadlines) (documents.coursework as { items: unknown[] }).items = [];
   try {
     const stored = localStorage.getItem(storageKey);
     if (stored !== null) documents = JSON.parse(stored) as Record<string, unknown>;
   } catch { /* A fresh synthetic context uses its in-memory fixture. */ }
   const persistDocuments = (): void => { localStorage.setItem(storageKey, JSON.stringify(documents)); };
+  const recordNoChange = (source: "canvas" | "calendar", id: string): void => {
+    documents.history = [{ id, source, status: "succeeded", sourceComplete: source === "canvas", startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), summary: { added: 0, updated: 0, removed: 0, held: 0 }, changes: [] }, ...(documents.history as Record<string, unknown>[])];
+    persistDocuments();
+  };
   let failNextRead = false;
+  let failInitialRead = setup.initialLoadError === true;
   let fullCaptureStale = false;
   scope.__refreshCalls = calls;
   scope.isTauri = true;
@@ -92,6 +103,7 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
       };
       if (command === "read_avatar_bytes") return null;
       if (command === "read_dashboard_documents") {
+        if (failInitialRead) { failInitialRead = false; throw { code: "store-unavailable", message: "Synthetic initial read failure" }; }
         if (failNextRead) { failNextRead = false; throw { code: "store-unavailable", message: "Synthetic reload failure" }; }
         const freshness = setup.staleCapture === true || fullCaptureStale
           ? { current: false, reason: "capture-unverified", runId: null, observedAt: null, sections: [] }
@@ -100,7 +112,7 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
           storeState: "authoritative",
           coursework: { text: JSON.stringify(documents.coursework), version: "b".repeat(64) },
           refreshHistory: JSON.stringify({ events: documents.history }),
-          conversations: JSON.stringify({ complete: true, generatedAt: now, conversations: documents.conversations }),
+          conversations: JSON.stringify({ complete: true, generatedAt: documents.inboxGeneratedAt ?? now, conversations: documents.conversations, ...(documents.inboxChanges === undefined ? {} : { changes: documents.inboxChanges }) }),
           profile: null,
           avatar: null,
           courseExports: {
@@ -112,6 +124,30 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
         };
       }
       if (command === "start_canvas_refresh") {
+        canvasRefreshCalls += 1;
+        if (setup.autoRefreshChanges === "none" || canvasRefreshCalls === 1 && setup.autoRefreshChanges === undefined) {
+          recordNoChange("canvas", `canvas-run-auto-${String(canvasRefreshCalls)}`);
+          return { status: "complete", updatedAt: new Date().toISOString() };
+        }
+        if (canvasRefreshCalls === 1 && setup.autoRefreshChanges === "library") {
+          documents.files = [...(documents.files as Record<string, unknown>[]), { id: 504, display_name: "New automatic library file.pdf" }];
+          recordNoChange("canvas", "canvas-run-auto-library");
+          return { status: "complete", updatedAt: new Date().toISOString() };
+        }
+        if (canvasRefreshCalls === 1 && setup.autoRefreshChanges === "inbox") {
+          documents.conversations = [...documents.conversations as Record<string, unknown>[], { canvasConversationId: "thread-auto", subject: "Automatic inbox update", unread: true, starred: false, messageCount: 1, latestMessageAt: new Date().toISOString(), messages: [{ canvasMessageId: "auto-message", author: "Synthetic Instructor", createdAt: new Date().toISOString(), body: "Synthetic new message" }], attachments: [] }];
+          documents.inboxGeneratedAt = new Date().toISOString();
+          recordNoChange("canvas", "canvas-run-auto-inbox");
+          return { status: "complete", updatedAt: new Date().toISOString() };
+        }
+        if (canvasRefreshCalls === 1 && setup.autoRefreshChanges === "grade") {
+          const coursework = documents.coursework as { items: Record<string, unknown>[] };
+          const grade = coursework.items.find((item) => item.id === "canvas-deadline");
+          if (grade !== undefined) Object.assign(grade, { score: 9, grade: "90%" });
+          documents.history = [{ id: "canvas-run-auto-grade", source: "canvas", status: "succeeded", sourceComplete: true, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), summary: { added: 0, updated: 1, removed: 0 }, changes: [{ kind: "changed", title: "Synthetic grade update", detail: "Score: 8 → 9" }] }, ...(documents.history as Record<string, unknown>[])];
+          persistDocuments();
+          return { status: "complete", updatedAt: new Date().toISOString() };
+        }
         if (setup.refreshError === true) throw { code: "refresh-failed", message: "Synthetic refresh failure" };
         const coursework = documents.coursework as { generated: string; courses: Record<string, unknown>[]; items: Record<string, unknown>[] };
         coursework.courses = coursework.courses.filter((course) => course.key !== "102");
@@ -154,6 +190,11 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
         return { status: "complete", updatedAt: new Date(Date.now() + 4_000).toISOString() };
       }
       if (command === "start_ical_refresh") {
+        calendarRefreshCalls += 1;
+        if (setup.autoRefreshChanges === "none" || calendarRefreshCalls === 1 && setup.autoRefreshChanges === undefined) {
+          recordNoChange("calendar", `calendar-run-auto-${String(calendarRefreshCalls)}`);
+          return { status: "complete", updatedAt: new Date().toISOString(), added: 0, updated: 0, held: 0, removed: 0 };
+        }
         const coursework = documents.coursework as { items: Record<string, unknown>[] };
         if (setup.noCalendarChange !== true) {
           const due = coursework.items.find((item) => item.id === "calendar-deadline");
@@ -174,6 +215,12 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
         return { status: "complete", updatedAt: new Date(Date.now() + 2_000).toISOString(), added: 0, updated: setup.noCalendarChange === true ? 0 : 1, held: 0, removed: 0 };
       }
       if (command === "start_full_refresh") {
+        fullRefreshCalls += 1;
+        if (setup.autoRefreshChanges === "none" || fullRefreshCalls === 1 && setup.autoRefreshChanges === undefined) {
+          recordNoChange("canvas", `canvas-run-auto-${String(fullRefreshCalls)}`);
+          recordNoChange("calendar", `calendar-run-auto-${String(fullRefreshCalls)}`);
+          return { status: "complete", browserStatus: "complete", calendarStatus: "complete", gapCount: 0, omissionCount: 0, bodyCount: 0, emptyBodyCount: 0, bodyFailureReason: null, exportStatus: "disabled", exportWritten: 0, exportUnchanged: 0, exportSkippedOwnerFiles: 0, rubricCount: 0, linkedFileCount: 0, calendarAdded: 0, calendarUpdated: 0, calendarHeld: 0, updatedAt: new Date().toISOString() };
+        }
         const gapCount = setup.fullGapCount ?? (setup.fullGap === true ? 2 : 0);
         const heldCount = setup.fullCalendarHeld ?? (setup.fullGap === true ? 1 : 0);
         const serialized = JSON.parse(JSON.stringify(args.onProgress)) as unknown;
@@ -257,6 +304,9 @@ async function openDashboard(page: Page, setup: Setup = {}): Promise<void> {
       summary: { added: 0, updated: 0, removed: 0 }, changes: [],
     }));
   }
+  if (setup.historicalChanges === true) {
+    initial.history = [{ id: "historic-with-changes", source: "canvas", status: "succeeded", sourceComplete: true, startedAt: "2026-09-01T12:00:00Z", finishedAt: "2026-09-01T12:01:00Z", summary: { added: 2, updated: 1, removed: 0 }, changes: [{ kind: "changed", title: "Earlier item", detail: "Historical update." }] }, ...(initial.history as Record<string, unknown>[])];
+  }
   if (setup.malformedCalendarConfirmation === true) {
     (initial.coursework as Record<string, unknown>)._calendarConfirmation = {
       schema: 1,
@@ -266,7 +316,9 @@ async function openDashboard(page: Page, setup: Setup = {}): Promise<void> {
   }
   await page.addInitScript(installNativeMock, { setup, now: NOW, initial });
   await page.goto("/");
+  if (setup.initialLoadError !== true) await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
+  if (setup.mode !== undefined && setup.mode !== "none") await expect(page.locator(".top-actions .refresh-button")).toBeEnabled();
 }
 
 async function visit(page: Page, label: string): Promise<void> {
@@ -279,10 +331,10 @@ async function visit(page: Page, label: string): Promise<void> {
 
 async function selectNewestRefresh(page: Page): Promise<void> {
   const history = page.locator(".history-row");
-  await expect(history).toHaveCount(2);
-  // Reload preserves the selected prior run when it remains available.
+  expect(await history.count()).toBeGreaterThan(1);
+  // Reload preserves the oldest selected run when it remains available.
   await expect(history.first()).not.toHaveClass(/active/);
-  await expect(history.nth(1)).toHaveClass(/active/);
+  await expect(history.last()).toHaveClass(/active/);
   await history.first().click();
   await expect(history.first()).toHaveClass(/active/);
 }
@@ -356,9 +408,57 @@ test("Canvas refresh reloads every page from current synthetic store documents",
   await visit(page, "More");
   await expect(page.locator("[data-desktop-store=authoritative]")).toContainText("Last refresh");
   const commands = await page.evaluate(() => (window as unknown as { __refreshCalls: { command: string }[] }).__refreshCalls.map((call) => call.command));
-  expect(commands.filter((command) => command === "read_dashboard_documents")).toHaveLength(2);
-  expect(commands.filter((command) => command === "start_canvas_refresh")).toHaveLength(1);
+  expect(commands.filter((command) => command === "read_dashboard_documents")).toHaveLength(3);
+  expect(commands.filter((command) => command === "start_canvas_refresh")).toHaveLength(2);
   expect(commands).not.toContain("start_ical_refresh");
+});
+
+test("opening refreshes once and reports a Library-only change across pages", async ({ page }) => {
+  await openDashboard(page, { mode: "canvas", autoRefreshChanges: "library" });
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __refreshCalls: { command: string }[] }).__refreshCalls.filter((call) => call.command === "start_canvas_refresh").length)).toBe(1);
+  const alert = page.getByRole("alert").filter({ hasText: "Refresh found changes" });
+  await expect(alert).toHaveText("Refresh found changes · 1 added · 0 changed · 0 removed.Dismiss");
+  await expect(page.getByRole("heading", { name: "New automatic library file.pdf" })).toHaveCount(0);
+  await visit(page, "Library");
+  await expect(page.getByRole("heading", { name: "New automatic library file.pdf" })).toBeVisible();
+  await expect(alert).toContainText("1 added");
+  await alert.getByRole("button", { name: "Dismiss refresh changes alert" }).click();
+  await expect(alert).toHaveCount(0);
+});
+
+test("startup refresh does not mistake old history for new changes after an initial read failure", async ({ page }) => {
+  await openDashboard(page, { mode: "canvas", initialLoadError: true, historicalChanges: true });
+  await expect(page.getByRole("heading", { name: "Before Canvas deadline" })).toBeVisible();
+  await expect(page.locator(".load-error")).toHaveCount(0);
+  await expect(page.locator(".refresh-change-alert")).toHaveCount(0);
+});
+
+test("six-hour refresh catches up on wake and stays quiet when no source changed", async ({ page }) => {
+  await page.clock.install({ time: new Date(NOW) });
+  await openDashboard(page, { mode: "canvas", autoRefreshChanges: "none" });
+  const calls = () => page.evaluate(() => (window as unknown as { __refreshCalls: { command: string }[] }).__refreshCalls.filter((call) => call.command === "start_canvas_refresh").length);
+  await expect.poll(calls).toBe(1);
+  await expect(page.locator(".refresh-change-alert")).toHaveCount(0);
+
+  await page.clock.fastForward(6 * 60 * 60 * 1_000 + 1);
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect.poll(calls).toBe(2);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect.poll(calls).toBe(2);
+
+  await page.clock.fastForward(6 * 60 * 60 * 1_000 + 1);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect.poll(calls).toBe(3);
+  await expect(page.locator(".refresh-change-alert")).toHaveCount(0);
+});
+
+test("Inbox changes are detected from current conversations without delta records", async ({ page }) => {
+  await openDashboard(page, { mode: "canvas", autoRefreshChanges: "inbox" });
+  const alert = page.getByRole("alert").filter({ hasText: "Refresh found changes" });
+  await expect(alert).toContainText("1 added · 0 changed · 0 removed");
+  await visit(page, "Inbox");
+  await expect(alert).toBeVisible();
+  await expect(page.getByRole("button", { name: /Automatic inbox update/ })).toBeVisible();
 });
 
 test("full refresh uses the bundled browser command and updates every page without losing personal completion", async ({ page }) => {
@@ -382,7 +482,7 @@ test("full refresh uses the bundled browser command and updates every page witho
   const refresh = page.locator(".top-actions button.refresh-button");
   await expect(page.locator(".sync-note")).toContainText("Canvas and calendar refresh · Reading Canvas and checking files");
   await expect(refresh).toBeDisabled();
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __refreshCalls: { command: string }[] }).__refreshCalls.filter((call) => call.command === "start_full_refresh").length)).toBe(1);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __refreshCalls: { command: string }[] }).__refreshCalls.filter((call) => call.command === "start_full_refresh").length)).toBe(2);
   await page.evaluate(() => (window as unknown as { __releaseFullRefresh?: () => void }).__releaseFullRefresh?.());
   await expect(page.locator(".sync-note")).toContainText("Complete. Canvas and calendar updated.");
   await expect(page.locator(".sync-note")).toContainText("2 omissions recorded.");
@@ -416,8 +516,8 @@ test("full refresh uses the bundled browser command and updates every page witho
   await expect(store.getByRole("checkbox", { name: "Enable Canvas refresh" })).toHaveCount(0);
 
   const commands = await page.evaluate(() => (window as unknown as { __refreshCalls: { command: string }[] }).__refreshCalls.map((call) => call.command));
-  expect(commands.filter((command) => command === "read_dashboard_documents")).toHaveLength(2);
-  expect(commands.filter((command) => command === "start_full_refresh")).toHaveLength(1);
+  expect(commands.filter((command) => command === "read_dashboard_documents")).toHaveLength(3);
+  expect(commands.filter((command) => command === "start_full_refresh")).toHaveLength(2);
   expect(commands).not.toContain("start_canvas_refresh");
   expect(commands).not.toContain("start_ical_refresh");
 });
@@ -467,8 +567,8 @@ test("full refresh reports coverage gaps, reloads freshness, and rereads after c
   await expect(page.locator("#main").getByText("partial", { exact: true }).first()).toBeVisible();
   await expect(page.locator("#main").getByText("Canvas refresh was incomplete", { exact: true })).toBeVisible();
   let commands = await page.evaluate(() => (window as unknown as { __refreshCalls: { command: string }[] }).__refreshCalls.map((call) => call.command));
-  expect(commands.filter((command) => command === "read_dashboard_documents")).toHaveLength(2);
-  expect(commands.filter((command) => command === "start_full_refresh")).toHaveLength(1);
+  expect(commands.filter((command) => command === "read_dashboard_documents")).toHaveLength(3);
+  expect(commands.filter((command) => command === "start_full_refresh")).toHaveLength(2);
   expect(commands).not.toContain("start_canvas_refresh");
   expect(commands).not.toContain("start_ical_refresh");
 
@@ -478,8 +578,8 @@ test("full refresh reports coverage gaps, reloads freshness, and rereads after c
   await expect(failed.locator(".sync-note")).toHaveText("Full refresh failed. Latest saved data was reloaded.");
   await expect(failed.getByRole("heading", { name: "After full refresh deadline" })).toBeVisible();
   commands = await failed.evaluate(() => (window as unknown as { __refreshCalls: { command: string }[] }).__refreshCalls.map((call) => call.command));
-  expect(commands.filter((command) => command === "read_dashboard_documents")).toHaveLength(2);
-  expect(commands.filter((command) => command === "start_full_refresh")).toHaveLength(1);
+  expect(commands.filter((command) => command === "read_dashboard_documents")).toHaveLength(3);
+  expect(commands.filter((command) => command === "start_full_refresh")).toHaveLength(2);
 });
 
 test("a running refresh explains temporary hiding without an error warning", async ({ page }, testInfo) => {
@@ -562,7 +662,7 @@ test("calendar refresh changes only deadlines and labels its scope in Activity a
 
   await page.reload();
   await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();
-  await expect(page.locator(".sync-note")).toContainText("Calendar deadlines only");
+  await expect(page.locator(".sync-note")).toHaveText("Calendar refresh complete · 0 added · 0 updated · 0 held");
   await visit(page, "Activity");
   await expect(page.getByText("Calendar refresh updates deadlines only.", { exact: false })).toBeVisible();
 });

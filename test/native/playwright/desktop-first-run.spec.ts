@@ -61,6 +61,9 @@ function installTauriMock(setup: Scenario): void {
   const scope = window as unknown as Record<string, unknown>;
   const callbacks = new Map<number, Callback>();
   const calls: { command: string; args: Record<string, unknown> }[] = [];
+  let canvasRefreshCalls = 0;
+  let calendarRefreshCalls = 0;
+  let calendarJustConnected = false;
   let nextId = 1;
   let state = setup.state;
   let canvasRefreshEnabled = setup.canvasRefreshEnabled;
@@ -121,6 +124,8 @@ function installTauriMock(setup: Scenario): void {
         return { canvasRefreshEnabled, refreshAvailable: setup.availability === "ready" && state === "authoritative" && canvasRefreshEnabled && setup.helperReady };
       }
       if (command === "start_canvas_refresh") {
+        canvasRefreshCalls += 1;
+        if (canvasRefreshCalls === 1) return { status: "complete", updatedAt: "2026-09-23T12:00:00Z" };
         const statusNow = status();
         if (!statusNow.refreshAvailable) throw { code: "refresh-unavailable", message: "The synthetic Canvas refresh is unavailable." };
         const serializedChannel: unknown = JSON.parse(JSON.stringify(args.onProgress));
@@ -134,7 +139,13 @@ function installTauriMock(setup: Scenario): void {
         return { status: setup.refreshStatus, updatedAt: "2026-09-23T12:00:00Z" };
       }
       if (command === "start_ical_refresh") {
+        calendarRefreshCalls += 1;
         if (!status().icalRefreshAvailable) throw { code: "calendar-unavailable", message: "The synthetic calendar refresh is unavailable." };
+        if (state === "empty") calendarJustConnected = true;
+        else if (calendarRefreshCalls === 1 || calendarJustConnected) {
+          calendarJustConnected = false;
+          return { status: "complete", updatedAt: "2026-09-25T12:00:00Z", added: 0, updated: 0, held: 0, removed: 0 };
+        }
         const serializedChannel: unknown = JSON.parse(JSON.stringify(args.onProgress));
         const channel = typeof serializedChannel === "string" ? serializedChannel.match(/^__CHANNEL__:(\d+)$/) : null;
         if (channel === null) throw { code: "invalid-channel", message: "The synthetic progress channel is invalid." };
@@ -279,6 +290,8 @@ async function openDesktop(page: Page, setup: Scenario): Promise<string[]> {
   page.on("request", (request) => { if (new URL(request.url()).pathname.startsWith("/api/")) apiRequests.push(request.url()); });
   await page.addInitScript(installTauriMock, setup);
   await page.goto("/");
+  const refresh = page.locator(".top-actions .refresh-button");
+  if (await refresh.count() > 0) await expect(refresh).toBeEnabled();
   return apiRequests;
 }
 
@@ -347,10 +360,11 @@ for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "
       expect(await automaticAccessibilityViolations(page)).toEqual([]);
       await page.getByRole("button", { name: "Connect calendar" }).click();
       await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
+      await expect(page.locator(".top-actions .refresh-button")).toBeEnabled();
       await expect(page.locator(".top-actions .preview-badge")).toHaveCount(0);
       await expectNoHorizontalOverflow(page);
       const calls = await expectNoPathArguments(page);
-      expect(calls.map((call) => call.command)).toEqual(["store_status", "start_ical_refresh", "store_status", "read_dashboard_documents", "read_avatar_bytes"]);
+      expect(calls.map((call) => call.command)).toEqual(["store_status", "start_ical_refresh", "store_status", "read_dashboard_documents", "read_avatar_bytes", "start_ical_refresh", "read_dashboard_documents", "read_avatar_bytes", "store_status"]);
       expect(apiRequests).toEqual([]);
     });
 
@@ -467,7 +481,7 @@ for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "
       const calls = await expectNoPathArguments(page);
       const start = calls.find((call) => call.command === "start_canvas_refresh");
       expect(start?.args).toMatchObject({ onProgress: expect.stringMatching(/^__CHANNEL__:\d+$/) });
-      expect(calls.filter((call) => call.command === "read_dashboard_documents")).toHaveLength(2);
+      expect(calls.filter((call) => call.command === "read_dashboard_documents")).toHaveLength(3);
     });
 
     test("native refresh failure reports preserved data without exposing helper error detail", async ({ page }) => {
@@ -484,9 +498,10 @@ for (const viewport of [{ name: "desktop", width: 1280, height: 800 }, { name: "
       await page.locator(".top-actions").getByRole("button", { name: "Refresh" }).click();
       await expect(page.locator(".sync-note")).toHaveText("Calendar refresh complete · 2 added · 1 updated · 0 held");
       const calls = await expectNoPathArguments(page);
-      expect(calls.filter((call) => call.command === "start_ical_refresh")).toEqual([
+      expect(calls.filter((call) => call.command === "start_ical_refresh")).toHaveLength(2);
+      expect(calls.filter((call) => call.command === "start_ical_refresh").at(-1)).toEqual(
         { command: "start_ical_refresh", args: { onProgress: expect.stringMatching(/^__CHANNEL__:\d+$/) } },
-      ]);
+      );
       await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "More", exact: true }).click();
       await expect(page.locator("[data-desktop-store=authoritative]")).toContainText("Calendar feed");
       await expect(page.locator("[data-desktop-store=authoritative]")).toContainText("Available for native refresh.");

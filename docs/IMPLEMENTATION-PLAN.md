@@ -543,3 +543,13 @@ Confirmed in b34e38f: the browser assignment query had no rubric include, the ge
 2. Discover attachments and same-origin file links, deduplicate against the inventory, and record each bounded metadata read and body result.
 3. Carry those facts through native projection, Library, Timeline, coverage validation, diagnostics, and refresh summaries.
 4. Verify both capture paths with synthetic data, regenerate the checksums, and run the local gates without a commit.
+
+## 2026-11-23 automatic refresh while open
+
+Scope: start the existing source refresh after the authoritative dashboard first loads, repeat every six hours while the dashboard is mounted, and show an accessible in-app notice when a successful refresh finds added, changed, or removed source records. Avoid overlapping runs, ignore failed or incomplete source reads for change alerts, and clear timers on dashboard disposal. Existing refresh UI is used to show progress and any change notice.
+
+Confirmed: the desktop dashboard is mounted by `mountDesktop`, initial data loads in `mountDashboard`, and `refresh()` already executes the full browser refresh or available calendar/Canvas action. Dashboard refresh history carries per-source change entries. The app uses a shared dashboard view state and redraws page content through `draw()`.
+
+Implementation: trigger one refresh after the first dashboard read attempt when source refresh is available, so an initial read failure can recover; do not compare changes until a valid dashboard baseline exists. Arm a six-hour timeout after each completed attempt and catch up on focus or wake when overdue; keep change feedback in dashboard state so it survives navigation. Count coursework and grades from source history, compare Inbox conversations and messages directly, compare course and profile metadata only when current, and include Library additions and updates for projected current resources. Report removals only when their source is complete. Add synthetic UI and desktop runner coverage for launch, six-hour scheduling, no-change results, found changes, deduplication, concurrent runs, and disposal. Update README and changelog.
+
+Validation: full UI and desktop UI suites, typecheck, lint. No live Canvas data.
