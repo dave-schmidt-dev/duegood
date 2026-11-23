@@ -104,3 +104,10 @@ gate_test: npm run hooks:check, npm run test:membership
 threshold: 1
 always_active: true
 rationale: XCUITest runs, installed-app launches, and anything else that takes over the owner's screen (`npm run test:tauri:macos`, `npm run check:production-launch`, `npm run check:live-native`, and the cold-launch proofs inside `npm run install:tauri`) run only before a release, at an install for owner qualification, or for a walkthrough. They never run per phase, commit, or push, and no hook or default gate requires them or a record that they ran. Day-to-day and phase gates use headless equivalents: unit, model, and render tests, and headless Playwright against the local test server. The native suite stays small: launch, quit, and one or two end-to-end journeys.
+
+### INV-16 — Canvas instructions survive capture and native import
+area: ["scripts/canvas-browser-capture-sanitize.mjs", "scripts/canvas-browser-refresh-scope.mjs", "src-tauri/src/browser_import.rs", "src/ui/pages/timeline-event-card.ts"]
+gate_test: npm run test:local, npm run test:tauri, npm run test:ui, npm run test:desktop-ui
+threshold: 1
+always_active: true
+rationale: Each accessible assignment, topic, announcement, quiz and page carries safe HTML, structured text and the timestamps supplied by Canvas. An explicit empty body is verified. Missing or failed bodies keep refresh partial. Item details render inert text. After import, course-folder exports replace only changed, generator-marked files within the configured directory. Export outcomes contain counts and status only, and failures preserve the native import.

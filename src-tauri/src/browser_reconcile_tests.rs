@@ -24,6 +24,7 @@ fn fixture() -> (Value, Vec<CourseAssignments>) {
                 .as_array()
                 .expect("synthetic assignments")
                 .clone(),
+            discussions: vec![],
         })
         .collect();
     let item = latest["items"]

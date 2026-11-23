@@ -3,6 +3,7 @@ import { canvasFileReferenceFromLink } from "./canvas-browser-file-references.mj
 
 const ORIGIN = "https://marymount.instructure.com";
 const MAX_LINKS_PER_ITEM = 500;
+const MAX_BODY_BYTES = 512 * 1024;
 const FILE_METADATA_ENDPOINTS = new Set(["courseFiles", "personalFiles", "file", "personalFile"]);
 const CANVAS_FILE_PATH = /^\/(?:api\/v1\/)?(?:courses\/[1-9]\d*\/)?files\/[1-9]\d*(?:\/(?:download|preview))?\/?$/u;
 const RICH_TEXT_KEYS = /^(?:body|content|description|discussion|html|instructions|message|syllabus(?:_body)?)$/iu;
@@ -12,6 +13,19 @@ const RUBRIC_FIELDS = new Set(["id", "description", "long_description", "points"
 const RUBRIC_CONTAINER_FIELDS = new Set(["criteria"]);
 const RUBRIC_RATING_FIELDS = new Set(["description", "long_description", "points"]);
 const RUBRIC_SETTINGS_FIELDS = new Set(["title", "points_possible", "free_form_criterion_comments"]);
+const BODY_FIELD_BY_ENDPOINT = Object.freeze({
+  assignments: "description",
+  discussions: "message",
+  groupDiscussions: "message",
+  announcements: "message",
+  quizzes: "description",
+  quiz: "description",
+  pages: "body",
+  page: "body",
+  groupPages: "body",
+  groupPage: "body",
+});
+const BODY_DETAIL_ENDPOINTS = new Set(["pages", "groupPages", "quizzes"]);
 
 function captureError(code) {
   const error = new Error(code);
@@ -123,6 +137,9 @@ export async function sanitizeCanvasCaptureItem(item, {
   const seenLinks = new Set();
   const syllabusFileIds = new Set();
   const omitFileUrls = FILE_METADATA_ENDPOINTS.has(endpoint);
+  const bodyKey = BODY_FIELD_BY_ENDPOINT[endpoint];
+  let bodyCapture = null;
+  let bodyReason;
   let linksTruncated = false;
   let textTruncated = false;
   let visited = 0;
@@ -153,9 +170,51 @@ export async function sanitizeCanvasCaptureItem(item, {
       links.push(safeLink);
     }
   };
+  if (bodyKey !== undefined && !Object.hasOwn(item, bodyKey) && !BODY_DETAIL_ENDPOINTS.has(endpoint)) {
+    bodyReason = "BODY_MISSING";
+  } else if (bodyKey !== undefined && Object.hasOwn(item, bodyKey)) {
+    const rawBody = item[bodyKey];
+    if (rawBody === null || rawBody === "") {
+      bodyCapture = { html: "", text: "", empty: true };
+    } else if (typeof rawBody !== "string") {
+      bodyReason = "BODY_SANITIZE_FAILED";
+    } else {
+      try {
+        const parsed = await evaluatePage(htmlReader, {
+          html: rawBody,
+          options: {
+            source: `${sourcePrefix}/${bodyKey}`,
+            maxTextCharacters: MAX_BODY_BYTES,
+            baseUrl: `${ORIGIN}/`,
+          },
+        });
+        if (!isRecord(parsed) || typeof parsed.text !== "string" || typeof parsed.html !== "string"
+            || !Array.isArray(parsed.links) || typeof parsed.textTruncated !== "boolean"
+            || typeof parsed.linksTruncated !== "boolean" || parsed.textTruncated
+            || Buffer.byteLength(parsed.text) > MAX_BODY_BYTES || Buffer.byteLength(parsed.html) > MAX_BODY_BYTES) {
+          throw captureError("HTML_SANITIZATION_FAILED");
+        }
+        for (const link of parsed.links) {
+          if (!isRecord(link) || typeof link.source !== "string" || typeof link.title !== "string"
+              || (link.asciiHostname !== null && typeof link.asciiHostname !== "string")
+              || (link.safeTarget !== null && typeof link.safeTarget !== "string")
+              || typeof link.clickable !== "boolean") throw captureError("HTML_SANITIZATION_FAILED");
+          addLink(link);
+        }
+        if (parsed.linksTruncated) linksTruncated = true;
+        if (parsed.textTruncated) textTruncated = true;
+        bodyCapture = { html: parsed.html, text: parsed.text, empty: false };
+      } catch {
+        bodyReason = "BODY_SANITIZE_FAILED";
+      }
+    }
+  }
   const sanitizeValue = async (value, key, fieldPath, depth) => {
     visited += 1;
     if (visited > 100_000 || depth > 32) throw captureError("SANITIZE_BUDGET_EXCEEDED");
+    if (fieldPath === `/${bodyKey}` && bodyKey !== undefined) {
+      return bodyCapture === null ? undefined : bodyCapture.text;
+    }
     validateRubricNode(value, fieldPath, endpoint);
     if (Array.isArray(value)) {
       const entries = [];
@@ -171,6 +230,7 @@ export async function sanitizeCanvasCaptureItem(item, {
       for (const [childKey, childValue] of Object.entries(value)) {
         if (rubricFields && !rubricFields.has(childKey)) continue;
         if (childKey === "rubric_assessment") continue;
+        if (childKey.startsWith("_canvas")) continue;
         if (PRIVATE_VALUE_KEYS.test(childKey)) continue;
         validateRubricField(fieldPath, childKey, childValue, endpoint);
         const child = await sanitizeValue(childValue, childKey, `${fieldPath}/${childKey}`, depth + 1);
@@ -221,6 +281,8 @@ export async function sanitizeCanvasCaptureItem(item, {
       || Array.isArray(clean.rubric) && clean.rubric.length === 0)) clean.rubric = null;
   clean._canvasLinks = links;
   if (endpoint === "course") clean._canvasSyllabusFileIds = [...syllabusFileIds].slice(0, MAX_LINKS_PER_ITEM);
+  if (bodyCapture !== null) clean._canvasBody = bodyCapture;
+  if (bodyReason !== undefined) clean._canvasBodyReason = bodyReason;
   if (linksTruncated) clean._canvasLinksTruncated = true;
   if (textTruncated) clean._canvasTextTruncated = true;
   return clean;

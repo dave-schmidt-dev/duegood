@@ -109,9 +109,15 @@ fn complete_claim_accepts_omissions_and_rejects_failures_before_import() {
             .find(|resource| resource["endpoint"] == "fileBodies")
             .unwrap()["items"][0]["reason"] = json!(reason);
         assert!(validate_complete_claim(&bundle).is_ok());
-        let report = diagnostics::import_diagnostics(&bundle, 0, 1);
-        assert_eq!(report["fileReceipts"]["personalFileReceipts"]["optionalOmissionReceipts"], 1);
-        assert_eq!(report["fileReceipts"]["personalFileReceipts"]["failedReceipts"], 0);
+        let report = diagnostics::import_diagnostics(&bundle, 0, 1).unwrap();
+        assert_eq!(
+            report["fileReceipts"]["personalFileReceipts"]["optionalOmissionReceipts"],
+            1
+        );
+        assert_eq!(
+            report["fileReceipts"]["personalFileReceipts"]["failedReceipts"],
+            0
+        );
     }
 
     for resource in bundle.snapshot["resources"].as_array_mut().unwrap() {
@@ -126,7 +132,7 @@ fn complete_claim_accepts_omissions_and_rejects_failures_before_import() {
         .coverage
         .push(coverage_row("fileBodies", None, None, "gap", Some("empty")));
     assert!(validate_complete_claim(&bundle).is_ok());
-    let report = diagnostics::import_diagnostics(&bundle, 0, 1);
+    let report = diagnostics::import_diagnostics(&bundle, 0, 1).unwrap();
     let personal = &report["fileReceipts"]["personalFileReceipts"];
     assert_eq!(personal["optionalOmissionReceipts"], 1);
     assert_eq!(personal["archivedReceipts"], 0);
@@ -196,7 +202,7 @@ fn personal_file_body_failures_have_content_free_source_counts() {
         "fileId":77,"status":"gap","reason":"HELPER_DOWNLOAD_MIME_SIGNATURE_MISMATCH"
     }]);
 
-    let diagnostics = diagnostics::import_diagnostics(&bundle, 1, 0);
+    let diagnostics = diagnostics::import_diagnostics(&bundle, 1, 0).unwrap();
     assert_eq!(
         diagnostics["fileReceipts"]["personalFileReceipts"]["listed"],
         1

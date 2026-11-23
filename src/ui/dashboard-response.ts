@@ -20,6 +20,9 @@ import { parseCanvasRubric } from "../shared/canvas-rubric";
 function record(value: unknown): Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function text(value: unknown, fallback = ""): string { return typeof value === "string" ? value : fallback; }
 function optionalText(value: unknown): string | undefined { return typeof value === "string" && value.length > 0 ? value : undefined; }
+function optionalBodyText(value: unknown): string | undefined {
+  return typeof value === "string" && value.length <= 512 * 1024 && value.trim().length > 0 ? value : undefined;
+}
 function numeric(value: unknown, fallback = 0): number { return typeof value === "number" && Number.isFinite(value) ? value : fallback; }
 function nullableNumeric(value: unknown): number | null { return typeof value === "number" && Number.isFinite(value) ? value : null; }
 function nullableText(value: unknown): string | null { return typeof value === "string" ? value : null; }
@@ -46,15 +49,22 @@ function parseCourse(value: unknown): DashboardCourse | undefined {
 }
 
 function parseEvent(value: unknown): DashboardEvent | undefined {
-  const item = record(value); const id = text(item.id, text(item.sourceItemId)); const courseId = text(item.courseId); const courseCode = text(item.courseCode, text(item.course)); const startsAt = text(item.startsAt, text(item.at, text(item.dueAt))); const rawKind = text(item.kind, text(item.type, "deadline")); const rawType = text(item.type);
-  if (id.length === 0 || courseCode.length === 0 || startsAt.length === 0 || text(item.title).length === 0) return undefined;
+  const item = record(value); const id = text(item.id, text(item.sourceItemId)); const courseId = text(item.courseId); const courseCode = text(item.courseCode, text(item.course));
+  const dateValue = [item.startsAt, item.at, item.dueAt].find((candidate) => typeof candidate === "string" && candidate.length > 0);
+  const startsAt = typeof dateValue === "string" ? dateValue : null;
+  const rawKind = text(item.kind, text(item.type, "deadline")); const rawType = text(item.type);
   const kind = dashboardEventKind(rawKind, rawType);
+  const hasKnownNullDueDate = ["startsAt", "at", "dueAt"].some((field) => Object.hasOwn(item, field) && item[field] === null)
+    || item.dueAtState === "known_null";
+  if (id.length === 0 || courseCode.length === 0 || text(item.title).length === 0
+      || startsAt === null && (!(hasKnownNullDueDate || kind === "discussion") || kind === "class")) return undefined;
   return {
     id, ...(optionalText(item.sourceItemId) === undefined ? {} : { sourceItemId: optionalText(item.sourceItemId) }), courseId: courseId || courseCode, courseCode,
     kind, title: text(item.title), startsAt,
     ...(optionalText(item.endsAt ?? item.endAt) === undefined ? {} : { endsAt: optionalText(item.endsAt ?? item.endAt) }),
     ...(optionalText(item.location ?? item.place) === undefined ? {} : { location: optionalText(item.location ?? item.place) }),
     ...(optionalText(item.detail ?? item.description) === undefined ? {} : { detail: optionalText(item.detail ?? item.description) }),
+    ...(optionalText(item.assignmentDetail) === undefined ? {} : { assignmentDetail: optionalText(item.assignmentDetail) }),
     notes: typeof item.notes === "string" ? item.notes : null,
     completed: item.completed === true, completedAt: typeof item.completedAt === "number" ? item.completedAt : null,
     ...(item.rubric === undefined ? {} : { rubric: parseCanvasRubric(item.rubric) }),
@@ -78,7 +88,7 @@ function parseEvent(value: unknown): DashboardEvent | undefined {
 function parseResource(value: unknown): DashboardResource | undefined {
   const item = record(value); const id = text(item.id); const courseCode = text(item.courseCode, text(item.course)); const title = text(item.title, text(item.name));
   if (id.length === 0 || courseCode.length === 0 || title.length === 0) return undefined;
-  return { id, courseId: text(item.courseId, courseCode), courseCode, type: text(item.type, "Item"), title, ...(optionalText(item.context) === undefined ? {} : { context: optionalText(item.context) }), ...(timestamp(item.updatedAt ?? item.updated) === undefined ? {} : { updatedAt: timestamp(item.updatedAt ?? item.updated) }), ...(optionalText(item.openPath ?? item.localUrl ?? item.openUrl) === undefined ? {} : { localUrl: optionalText(item.openPath ?? item.localUrl ?? item.openUrl) }), ...(item.savedLocally === true ? { savedLocally: true } : {}) };
+  return { id, courseId: text(item.courseId, courseCode), courseCode, type: text(item.type, "Item"), title, ...(optionalText(item.context) === undefined ? {} : { context: optionalText(item.context) }), ...(timestamp(item.updatedAt ?? item.updated) === undefined ? {} : { updatedAt: timestamp(item.updatedAt ?? item.updated) }), ...(optionalText(item.openPath ?? item.localUrl ?? item.openUrl) === undefined ? {} : { localUrl: optionalText(item.openPath ?? item.localUrl ?? item.openUrl) }), ...(item.savedLocally === true ? { savedLocally: true } : {}), ...(optionalBodyText(item.bodyText) === undefined ? {} : { bodyText: optionalBodyText(item.bodyText) }) };
 }
 
 function participantLabel(value: unknown): string | undefined {

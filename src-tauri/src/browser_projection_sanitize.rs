@@ -103,6 +103,19 @@ pub(super) fn sanitize_text(text: &str) -> Result<String, ProjectionError> {
     if looks_like_html(text) {
         return Err(ProjectionError::UnsafeContent);
     }
+    sanitize_text_contents(text)
+}
+
+/// Sanitizes visible text recovered from parsed Canvas HTML.
+///
+/// A literal string such as `<p>` may be visible text from an escaped Canvas example, so
+/// structured body text bypasses the generic markup detector while retaining URL and secret
+/// redaction.
+pub(super) fn sanitize_structured_text(text: &str) -> Result<String, ProjectionError> {
+    sanitize_text_contents(text)
+}
+
+fn sanitize_text_contents(text: &str) -> Result<String, ProjectionError> {
     let mut output = strip_inline_urls(text);
     for key in [
         "access_token",

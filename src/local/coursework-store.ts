@@ -55,6 +55,7 @@ interface LocalTimelineEvent extends LocalGradeRecord {
   /** Original coursework kind; this remains distinct from the display type. */
   readonly kind: string | null;
   readonly detail: string | null;
+  readonly assignmentDetail?: string | null;
   readonly place: string | null;
   /** Local planning note; never source-writable. */
   readonly notes: string | null;
@@ -251,6 +252,7 @@ function validateAndProject(document: JsonObject): Omit<LocalSnapshot, "version"
       ...("endsAt" in item ? { endsAt: stringOrNull(item.endsAt) } : {}),
       kind: typeof item.kind === "string" ? item.kind : null,
       detail: stringOrNull(item.detail),
+      ...(typeof item.assignmentDetail === "string" ? { assignmentDetail: item.assignmentDetail } : {}),
       place: null,
       notes: stringOrNull(item.notes),
       discussionPostDone: item.discussionPostDone === true,

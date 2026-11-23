@@ -12,8 +12,12 @@ use std::time::SystemTime;
 
 use serde_json::{json, Map, Value};
 
+#[path = "reconcile_body.rs"]
+mod body;
 #[path = "reconcile_dates.rs"]
 mod dates;
+#[path = "reconcile_discussions.rs"]
+mod discussions;
 #[path = "reconcile_due_facts.rs"]
 mod due_facts;
 #[path = "reconcile_identity.rs"]
@@ -22,7 +26,8 @@ mod identity;
 use dates::new_york_date;
 use due_facts::{patch_due_at, patch_optional};
 use identity::{
-    append_canvas_reference, identity_key, item_matches_assignment, validate_source_references,
+    append_canvas_reference, identity_key, item_matches_assignment, revivable_archived_index,
+    same_canvas_identity, validate_source_references,
 };
 
 /// One fully captured course's assignment data.
@@ -34,6 +39,8 @@ pub struct CourseAssignments {
     pub groups: Vec<Value>,
     /// Complete Canvas assignments response, including each submission projection.
     pub assignments: Vec<Value>,
+    /// Complete accessible discussion topics not represented by a Canvas assignment.
+    pub discussions: Vec<Value>,
 }
 
 /// A malformed document or capture that cannot be reconciled without guessing.
@@ -108,11 +115,23 @@ pub fn reconcile_coursework(
             return Err(invalid("duplicate coursework item id"));
         }
         if object.get("source").and_then(Value::as_str) == Some("canvas") {
+            let canvas_type = object
+                .get("canvasResourceType")
+                .or_else(|| object.get("canvasType"))
+                .and_then(Value::as_str)
+                .unwrap_or("assignment");
+            if !matches!(canvas_type, "assignment" | "discussion") {
+                return Err(invalid("coursework Canvas item type is invalid"));
+            }
             if let (Some(course), Some(canvas_id)) = (
                 object.get("course").and_then(Value::as_str),
                 object.get("canvasId").and_then(identity_key),
             ) {
-                if !existing_canvas_ids.insert((course.to_owned(), canvas_id)) {
+                if !existing_canvas_ids.insert((
+                    course.to_owned(),
+                    canvas_type.to_owned(),
+                    canvas_id,
+                )) {
                     return Err(invalid("duplicate local Canvas assignment identity"));
                 }
             }
@@ -213,6 +232,15 @@ pub fn reconcile_coursework(
                 next_items.push(item);
                 continue;
             };
+            if object
+                .get("canvasResourceType")
+                .or_else(|| object.get("canvasType"))
+                .and_then(Value::as_str)
+                == Some("discussion")
+            {
+                next_items.push(item);
+                continue;
+            }
             let matched = capture.assignments.iter().find_map(|assignment| {
                 let id = assignment.get("id").and_then(identity_key)?;
                 (assignment_matches.get(&(key.clone(), id.clone())) == Some(&item_index))
@@ -310,8 +338,13 @@ pub fn reconcile_coursework(
             }
             // A republished assignment revives its archived record so completion, notes, and
             // extensions survive instead of being recreated as a not-done duplicate (INV-3).
-            let revived = revivable_archived_index(&archive_existing, &capture.key, &canvas_id)?
-                .map(|index| archive_existing.remove(index));
+            let revived = revivable_archived_index(
+                &archive_existing,
+                &capture.key,
+                "assignment",
+                &canvas_id,
+            )?
+            .map(|index| archive_existing.remove(index));
             let was_revived = revived.is_some();
             let item = match revived {
                 Some(mut archived_item) => {
@@ -356,6 +389,7 @@ pub fn reconcile_coursework(
         archived.extend(newly_archived);
         root.insert("archivedForecastItems".to_owned(), Value::Array(archived));
     }
+    discussions::merge(root, courses)?;
 
     if result == *base {
         return Ok(result);
@@ -425,6 +459,7 @@ fn validate_capture(capture: &CourseAssignments) -> Result<(), ReconcileError> {
             }
         }
     }
+    discussions::validate(&capture.discussions)?;
     Ok(())
 }
 
@@ -531,6 +566,10 @@ fn update_item(
     );
     target.insert("source".to_owned(), Value::String("canvas".to_owned()));
     target.insert(
+        "canvasResourceType".to_owned(),
+        Value::String("assignment".to_owned()),
+    );
+    target.insert(
         "confidence".to_owned(),
         Value::String("confirmed".to_owned()),
     );
@@ -539,6 +578,8 @@ fn update_item(
     patch_due_at(target, assignment, canvas_reference.as_ref(), captured_at)?;
     patch_optional(target, "points", assignment, "points_possible");
     patch_optional(target, "url", assignment, "html_url");
+    body::patch_assignment_metadata(target, assignment);
+    body::patch_body_and_timestamps(target, assignment);
     patch_group(target, assignment, capture)?;
     patch_submission(target, assignment)?;
     patch_rubric(target, assignment);
@@ -563,6 +604,7 @@ fn new_item(
         "kind": kind_for(assignment),
         "title": name,
         "source": "canvas",
+        "canvasResourceType": "assignment",
         "confidence": "confirmed",
         "flags": [],
         "detail": "",
@@ -581,6 +623,8 @@ fn new_item(
     patch_due_at(target, assignment, None, captured_at)?;
     patch_optional(target, "points", assignment, "points_possible");
     patch_optional(target, "url", assignment, "html_url");
+    body::patch_assignment_metadata(target, assignment);
+    body::patch_body_and_timestamps(target, assignment);
     patch_group(target, assignment, capture)?;
     patch_submission(target, assignment)?;
     patch_rubric(target, assignment);
@@ -682,41 +726,6 @@ fn patch_submission(
     Ok(())
 }
 
-fn canvas_identity(item: &Value) -> Option<(String, String)> {
-    Some((
-        item.get("course")?.as_str()?.to_owned(),
-        identity_key(item.get("canvasId")?)?,
-    ))
-}
-
-fn same_canvas_identity(old: &Value, fresh: &Value) -> bool {
-    old.get("source").and_then(Value::as_str) == Some("canvas")
-        && canvas_identity(old).is_some_and(|identity| Some(identity) == canvas_identity(fresh))
-}
-
-/// Index of the archived Canvas item for a reappearing assignment, if exactly one exists.
-fn revivable_archived_index(
-    archive: &[Value],
-    course: &str,
-    canvas_id: &str,
-) -> Result<Option<usize>, ReconcileError> {
-    let mut found = None;
-    for (index, item) in archive.iter().enumerate() {
-        if item.get("source").and_then(Value::as_str) != Some("canvas") {
-            continue;
-        }
-        if item.get("canvasId").and_then(identity_key).as_deref() != Some(canvas_id)
-            || item.get("course").and_then(Value::as_str) != Some(course)
-        {
-            continue;
-        }
-        if found.replace(index).is_some() {
-            return Err(invalid("archived Canvas assignment identity is duplicated"));
-        }
-    }
-    Ok(found)
-}
-
 fn is_personal_live_item(kind: &str, source: &str) -> bool {
     matches!(kind, "session" | "milestone") || source == "manual"
 }
@@ -771,3 +780,7 @@ fn kind_for(assignment: &Value) -> &'static str {
 #[cfg(test)]
 #[path = "reconcile_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "reconcile_content_tests.rs"]
+mod content_tests;

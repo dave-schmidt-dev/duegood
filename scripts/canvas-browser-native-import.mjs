@@ -116,6 +116,10 @@ function validateResult(frame) {
     "reusedBlobs",
     "bytesVerified",
     "alreadyCurrent",
+    "exportStatus",
+    "exportWritten",
+    "exportUnchanged",
+    "exportSkippedOwnerFiles",
   ];
   if (!exactKeys(frame, keys) || frame.type !== "result" || frame.status !== "complete"
       || !validCount(frame.runId, false)
@@ -124,7 +128,11 @@ function validateResult(frame) {
       || !validCount(frame.promotedBlobs)
       || !validCount(frame.reusedBlobs)
       || !validCount(frame.bytesVerified)
-      || typeof frame.alreadyCurrent !== "boolean") {
+      || typeof frame.alreadyCurrent !== "boolean"
+      || !["complete", "disabled", "failed"].includes(frame.exportStatus)
+      || !validCount(frame.exportWritten) || frame.exportWritten > 100_000
+      || !validCount(frame.exportUnchanged) || frame.exportUnchanged > 100_000
+      || !validCount(frame.exportSkippedOwnerFiles) || frame.exportSkippedOwnerFiles > 100_000) {
     throw importError("NATIVE_IMPORT_PROTOCOL_INVALID");
   }
   return frame;

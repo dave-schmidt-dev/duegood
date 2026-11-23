@@ -104,6 +104,7 @@ async function documentBundle(root: string): Promise<DashboardDocumentBundle> {
       pages: await optionalText(path.join(base, "api", "pages.json")),
       modules: await optionalText(path.join(base, "api", "modules.json")),
       announcements: await optionalText(path.join(base, "api", "announcements.json")),
+      quizzes: await optionalText(path.join(base, "api", "quizzes.json")),
       downloadManifest: await optionalText(path.join(base, "download-manifest.json")),
     };
   }
@@ -190,6 +191,22 @@ describe("shared dashboard projection parity", () => {
     // The fixture's Inbox is complete; the live browser source may say so.
     expect(served.sourceStatus.inbox).toBe("synced");
     expect(projected.sourceStatus.detail).toContain("Inbox synced");
+  });
+
+  it("projects assignment instructions alongside the discussion topic body", () => {
+    const coursework = JSON.parse(bundle.coursework.text) as { items: Record<string, unknown>[] };
+    const topic = coursework.items.find((item) => item.id === "syn-101-discussion-1");
+    expect(topic).toBeDefined();
+    topic!.detail = "Synthetic topic prompt.";
+    topic!.assignmentDetail = "Synthetic assignment instructions.";
+    const projected = projectDashboardDocuments({
+      ...bundle,
+      coursework: { ...bundle.coursework, text: JSON.stringify(coursework) },
+    }, nativeProjectionOptions("preview"));
+    expect(projected.events.find((event) => event.sourceItemId === "syn-101-discussion-1")).toMatchObject({
+      detail: "Synthetic topic prompt.",
+      assignmentDetail: "Synthetic assignment instructions.",
+    });
   });
 
   it("differs over the native documents only in the documented desktop fields", () => {

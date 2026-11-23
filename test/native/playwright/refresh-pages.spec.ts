@@ -104,9 +104,9 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
           profile: null,
           avatar: null,
           courseExports: {
-            "course-101": { files: JSON.stringify(documents.files), pages: JSON.stringify(documents.pages), modules: "[]", announcements: "[]", downloadManifest: "[]" },
-            "course-102": { files: "[]", pages: "[]", modules: "[]", announcements: "[]", downloadManifest: "[]" },
-            "course-103": { files: "[]", pages: "[]", modules: "[]", announcements: "[]", downloadManifest: "[]" },
+            "course-101": { files: JSON.stringify(documents.files), pages: JSON.stringify(documents.pages), modules: "[]", announcements: "[]", quizzes: "[]", downloadManifest: "[]" },
+            "course-102": { files: "[]", pages: "[]", modules: "[]", announcements: "[]", quizzes: "[]", downloadManifest: "[]" },
+            "course-103": { files: "[]", pages: "[]", modules: "[]", announcements: "[]", quizzes: "[]", downloadManifest: "[]" },
           },
           ...(freshness === undefined ? {} : { browserFreshness: freshness }),
         };
@@ -192,7 +192,7 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
           phase("browser-import"); phase("calendar"); phase("complete"); callback?.({ index, end: true });
           return {
             status: "incomplete", browserStatus: "failed", calendarStatus: "complete",
-            gapCount: 0, omissionCount: 0, rubricCount: 0, linkedFileCount: 0, calendarAdded: 0, calendarUpdated: 0, calendarHeld: 0,
+            gapCount: 0, omissionCount: 0, bodyCount: 5, emptyBodyCount: 1, bodyFailureReason: null, exportStatus: "disabled", exportWritten: 0, exportUnchanged: 0, exportSkippedOwnerFiles: 0, rubricCount: 0, linkedFileCount: 0, calendarAdded: 0, calendarUpdated: 0, calendarHeld: 0,
             updatedAt: null, errorCode: setup.fullErrorCode,
           };
         }
@@ -238,7 +238,7 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
           status: gapCount > 0 || heldCount > 0 ? "incomplete" : "complete",
           browserStatus: gapCount > 0 ? "incomplete" : "complete",
           calendarStatus: heldCount > 0 ? "incomplete" : "complete",
-          gapCount, omissionCount: setup.fullOmissionCount ?? 0, rubricCount: 1, linkedFileCount: 2,
+          gapCount, omissionCount: setup.fullOmissionCount ?? 0, bodyCount: 5, emptyBodyCount: 1, bodyFailureReason: null, exportStatus: "disabled", exportWritten: 0, exportUnchanged: 0, exportSkippedOwnerFiles: 0, rubricCount: 1, linkedFileCount: 2,
           calendarAdded: 1, calendarUpdated: 1, calendarHeld: heldCount,
           updatedAt: new Date(Date.now() + 3_000).toISOString(), ...(gapCount > 0 ? { errorCode: "coverage-gap" } : {}),
         };

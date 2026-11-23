@@ -62,7 +62,7 @@ describe("synthetic Canvas metadata collector", () => {
         if (request.endpoint === "discussions") {
           return {
             status: "ok", identity: { userId: USER_ID }, pages: 1,
-            items: [{ id: 6, title: "Welcome", published: true, assignment_id: 501, assignment: {
+            items: [{ id: 6, title: "Welcome", message: "<p>Synthetic prompt</p>", published: true, assignment_id: 501, assignment: {
               id: 501, rubric: [{ id: "discussion-criterion", description: "Participation", points: 4 }],
               rubric_settings: { title: "Participation rubric", points_possible: 4 }, use_rubric_for_grading: true,
             } }],
@@ -93,8 +93,8 @@ describe("synthetic Canvas metadata collector", () => {
 
     const unmatchedDeps = testDependencies({
       resultFor: (request) => request.endpoint === "discussions"
-        ? { status: "ok", identity: { userId: USER_ID }, pages: 1,
-          items: [{ id: 6, title: "Welcome", published: true, assignment_id: 999, assignment: { id: 999 } }] }
+          ? { status: "ok", identity: { userId: USER_ID }, pages: 1,
+          items: [{ id: 6, title: "Welcome", message: "<p>Synthetic prompt</p>", published: true, assignment_id: 999, assignment: { id: 999 } }] }
         : successfulResult(request),
     });
     const unmatchedCapture = await collectCanvasBrowserCapture({
@@ -510,7 +510,8 @@ describe("synthetic Canvas metadata collector", () => {
           return { status: "ok", identity: { userId: USER_ID }, pages: 1, items: [{ id: 2, state: "locked", published: true }] };
         }
         if (request.endpoint === "discussions" && request.courseId === COURSE_ID) {
-          return { status: "ok", identity: { userId: USER_ID }, pages: 1, items: [{ id: 6, published: false }] };
+          return { status: "ok", identity: { userId: USER_ID }, pages: 1,
+            items: [{ id: 6, message: "<p>Scheduled prompt</p>", published: false }] };
         }
         if (request.endpoint === "quizzes" && request.courseId === COURSE_ID) {
           return { status: "ok", identity: { userId: USER_ID }, pages: 1, items: [{ id: 101, published: false }] };
@@ -556,6 +557,10 @@ describe("synthetic Canvas metadata collector", () => {
 
     expect(capture.coverage).toContainEqual({ endpoint: "page", courseId: COURSE_ID,
       status: "gap", reason: expectedReason });
+    const listedPage = capture.resources.find((resource) => resource.endpoint === "pages"
+      && resource.courseId === COURSE_ID)?.items[0];
+    if (expectedReason === "not-found") expect(listedPage?._canvasBodyOmissionReason).toBe("not-found");
+    else expect(listedPage).not.toHaveProperty("_canvasBodyOmissionReason");
   });
 
   it("uses a safe Canvas page slug for the detail request and preserves only its route identity", async () => {

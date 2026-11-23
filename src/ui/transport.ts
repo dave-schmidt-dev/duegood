@@ -422,6 +422,7 @@ function parseCourseExports(value: unknown): Readonly<Record<string, CourseExpor
       pages: nullableString(texts.pages, "course export"),
       modules: nullableString(texts.modules, "course export"),
       announcements: nullableString(texts.announcements, "course export"),
+      quizzes: texts.quizzes === undefined ? null : nullableString(texts.quizzes, "course export"),
       downloadManifest: nullableString(texts.downloadManifest, "course export"),
     };
   }

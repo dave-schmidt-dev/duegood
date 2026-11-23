@@ -26,9 +26,14 @@ export function fullRefreshFeedback(result: FullRefreshResult, fileNotices: read
     : `Calendar: ${String(result.calendarAdded)} added, ${String(result.calendarUpdated)} updated.${result.calendarHeld > 0
       ? ` ${String(result.calendarHeld)} calendar item${result.calendarHeld === 1 ? " was" : "s were"} left unchanged because ${result.calendarHeld === 1 ? "it could" : "they could"} not be safely matched or dated.` : ""}`;
   const omissions = ` ${String(result.omissionCount)} omission${result.omissionCount === 1 ? "" : "s"} recorded.`;
-  const captureCounts = result.browserStatus === "failed" ? "" : ` Rubrics on ${String(result.rubricCount)} assignment${result.rubricCount === 1 ? "" : "s"}. Metadata retrieved for ${String(result.linkedFileCount)} additional linked file${result.linkedFileCount === 1 ? "" : "s"}.`;
+  const captureCounts = result.browserStatus === "failed" ? "" : ` Bodies kept for ${String(result.bodyCount)} items (${String(result.emptyBodyCount)} empty). Rubrics on ${String(result.rubricCount)} assignments. Metadata retrieved for ${String(result.linkedFileCount)} additional linked files.`;
+  const bodyIssue = result.bodyFailureReason === "BODY_MISSING" ? " Some Canvas item bodies were missing from the response."
+    : result.bodyFailureReason === "BODY_SANITIZE_FAILED" ? " Some Canvas item bodies could not be sanitized." : "";
+  const exportSummary = result.exportStatus === "complete"
+    ? ` Course exports: ${String(result.exportWritten)} written, ${String(result.exportUnchanged)} unchanged, ${String(result.exportSkippedOwnerFiles)} owner files skipped.`
+    : result.exportStatus === "failed" ? " Course exports failed." : " Course exports disabled.";
   const reasons = result.gapCount > 0 && fileNotices.length > 0 ? ` ${fileNotices.slice(0, 3).join(" ")}` : "";
   const headline = complete ? "Complete. Canvas and calendar updated." : failed ? "Refresh could not finish." : "Refresh finished with items needing attention.";
-  const detail = `${headline} ${complete ? "" : `${canvas} `}${calendar}${reasons}${omissions}${captureCounts}${state === "complete" ? "" : " See Activity for details."}`;
+  const detail = `${headline} ${complete ? "" : `${canvas} `}${calendar}${reasons}${bodyIssue}${omissions}${captureCounts}${exportSummary}${state === "complete" ? "" : " See Activity for details."}`;
   return { state, detail };
 }

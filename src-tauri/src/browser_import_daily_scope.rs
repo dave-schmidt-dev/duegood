@@ -33,6 +33,13 @@ const DAILY_OMISSION_REASONS: [&str; 6] = [
     "unpublished",
 ];
 const MAX_ARCHIVED_FILE_BYTES: u64 = 256 * 1024 * 1024;
+pub(super) fn summarize_body_coverage(
+    snapshot: &Value,
+    active_course_ids: &BTreeSet<u64>,
+) -> Result<crate::browser_body_coverage::BodyCoverageCounts, BrowserImportError> {
+    crate::browser_body_coverage::summarize(snapshot, active_course_ids)
+        .map_err(|_| BrowserImportError::Stage)
+}
 
 pub(super) fn summarize_daily_scope(
     snapshot: &Value,
@@ -50,6 +57,7 @@ pub(super) fn summarize_daily_scope(
     let mut required_gaps = 0usize;
     let mut omissions = 0usize;
     let mut required_rows = BTreeSet::new();
+    required_gaps += summarize_body_coverage(snapshot, &active_ids)?.active_failure_count;
 
     for course in active_courses {
         for endpoint in DAILY_COURSE_ENDPOINTS {
@@ -383,7 +391,11 @@ pub(super) fn has_capture_failures(
         }
         !is_confirmed_omission(row, coverage, row.course_id)
     });
-    Ok(coverage_failure || !file_bodies_complete(snapshot, coverage)?)
+    let body_failures = summarize_body_coverage(snapshot, &BTreeSet::new())?;
+    Ok(coverage_failure
+        || body_failures.missing_count > 0
+        || body_failures.sanitize_failed_count > 0
+        || !file_bodies_complete(snapshot, coverage)?)
 }
 
 fn has_calendar_event_resource(

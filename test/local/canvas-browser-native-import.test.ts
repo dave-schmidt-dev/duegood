@@ -24,6 +24,10 @@ type ImportResult = {
   reusedBlobs: number;
   bytesVerified: number;
   alreadyCurrent: boolean;
+  exportStatus: "complete" | "disabled" | "failed";
+  exportWritten: number;
+  exportUnchanged: number;
+  exportSkippedOwnerFiles: number;
 };
 
 type FakeChild = EventEmitter & {
@@ -66,7 +70,7 @@ const resultFrame: ImportResult = {
   promotedBlobs: 4,
   reusedBlobs: 2,
   bytesVerified: 1234,
-  alreadyCurrent: false,
+  alreadyCurrent: false, exportStatus: "complete", exportWritten: 2, exportUnchanged: 1, exportSkippedOwnerFiles: 0,
 };
 
 function fakeChild({

@@ -31,6 +31,16 @@ The private coursework, grades, messages, feed URL, credentials, and screenshots
 
 ## Private Canvas capture
 
+Open **Timeline → Details** to read an item's Canvas instructions with paragraphs, line breaks and lists. Undated items appear under **No due date**. Completed items have a **Details** disclosure on **Done**. When a graded discussion has a distinct assignment description, the details and the Markdown export include both texts. Library details show the available bodies for pages, quizzes and announcements. A refresh counts bodies Canvas supplied, including explicitly empty bodies. A missing or unreadable body makes the refresh partial.
+
+To keep readable copies, create `class-folders.json` in the Due Good app data root. For example, this synthetic mapping assigns one Canvas course to a local folder:
+
+```json
+{"schemaVersion":1,"courses":{"123":"/absolute/path/to/example-class"}}
+```
+
+Both app Refresh and `npm run canvas:session -- refresh` export after native import. Look under `assignments/<title-slug>/source/README.md` for the item title, source metadata, timestamps in Eastern time and UTC, rubric and formatted instructions. Due Good replaces its marked copies only when content changes. Keep personal notes in a separate file, or remove the first-line generator marker to keep a copy under your control. A missing or invalid mapping disables export. Export problems leave the import in place.
+
 Refresh starts Chrome headless using the private capture profile. If automatic sign-in needs help, Due Good explains why, opens Chrome and retries once. Finish sign-in or dismiss the survey there. Refresh closes the window it started after the retry and starts headless again next time. For first-time account binding, start Chrome with `--headed`, sign in, confirm the account ID reported by `identity`, and bind that ID locally. Refresh reuses an owner-started window until you stop it. See [Okta sign-in setup](docs/OKTA-AUTO-SIGN-IN.md).
 
 The desktop installer prepares three native helpers in the private DueGood Application Support directory: `duegood-capture-state` (capture run/lease), `duegood-capture-download` (bounded file transfer), and `duegood-browser-import` (native import). For CLI-only setup, run `npm run canvas:prepare-helper` from the source checkout before binding the account. After desktop installation, start with the session command below.

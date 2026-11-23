@@ -29,9 +29,13 @@ async function setup(): Promise<{ root: string; store: DashboardStore }> {
   await mkdir(materials, { recursive: true });
   await Promise.all([
     writeFile(path.join(api, "files.json"), JSON.stringify([{ id: 10, display_name: "Guide.pdf", filename: "guide.pdf", size: 12, updated_at: "2030-01-01T00:00:00Z", url: "https://canvas.invalid/file?token=secret" }])),
-    writeFile(path.join(api, "pages.json"), JSON.stringify([{ page_id: 20, title: "Reference page", body: "private body", updated_at: "2030-01-02T00:00:00Z" }])),
+    writeFile(path.join(api, "pages.json"), JSON.stringify([
+      { page_id: 20, title: "Reference page", bodyHtml: "<h2>Page heading</h2>", detail: "## Synthetic page heading\n\nPage paragraph.\n\n1. First step\n- Bullet item", bodyEmpty: false, updated_at: "2030-01-02T00:00:00Z" },
+      { page_id: 21, title: "Unknown body page", body: "raw body without sanitizer evidence" },
+    ])),
     writeFile(path.join(api, "modules.json"), JSON.stringify([{ id: 30, name: "Module one", items_count: 1, items: [{ id: 31, type: "ExternalUrl", title: "External reading", external_url: "https://third-party.invalid/?secret=yes" }] }])),
-    writeFile(path.join(api, "announcements.json"), JSON.stringify([{ id: 40, title: "Class notice", message: "private body", posted_at: "2030-01-03T00:00:00Z" }])),
+    writeFile(path.join(api, "announcements.json"), JSON.stringify([{ id: 40, title: "Class notice", bodyHtml: "<p>Announcement</p>", detail: "Synthetic announcement text.", bodyEmpty: false, posted_at: "2030-01-03T00:00:00Z" }])),
+    writeFile(path.join(api, "quizzes.json"), JSON.stringify([{ id: 50, title: "Knowledge check", bodyHtml: "<p>Quiz</p>", detail: "Synthetic quiz instructions.", bodyEmpty: false, updated_at: "2030-01-04T00:00:00Z" }])),
     writeFile(path.join(root, "classes", "synthetic-course-a", "canvas-export", "download-manifest.json"), JSON.stringify([{ id: 10, filename: "guide.pdf", status: "downloaded" }])),
     writeFile(path.join(materials, "guide.pdf"), "synthetic pdf"),
     writeFile(path.join(root, "coursework-refresh-history.json"), JSON.stringify({ schema: 1, events: [{ id: "r1", status: "succeeded", sourceComplete: true, startedAt: "2030-01-03T00:00:00Z", finishedAt: "2030-01-03T00:01:00Z", summary: { added: 1, updated: 2, removed: 1 }, changes: [{ kind: "changed", title: "Synthetic item", course: "SYN-101", fields: [{ field: "at", before: null, after: "2030-01-04T17:30:00Z" }, { field: "submissionState", before: "unsubmitted", after: "pending" }, { field: "points", before: 10, after: 20 }, { field: "assignmentGroupWeight", before: null, after: 60 }] }, { kind: "changed", title: "Future state item", course: "SYN-101", fields: [{ field: "submissionState", before: null, after: "future_canvas_state" }] }, { kind: "added", title: "New item", course: "SYN-101" }, { kind: "removed", title: "Removed item", course: "SYN-101" }, { kind: "notice", title: "Earlier grade history recovered", detail: "An earlier Due Good refresh omitted item-level history." }] }] })),
@@ -91,14 +95,18 @@ describe("DashboardStore", () => {
     expect(withDailyGap.summary.removed).toBe(0);
   });
 
-  it("projects sanitized resource metadata and only local file open paths", async () => {
+  it("projects known structured bodies and only local file open paths", async () => {
     const { store } = await setup();
     const resources = await store.resources([COURSE]);
-    expect(resources.map((item) => item.type).sort()).toEqual(["Announcement", "File", "Link", "Module", "Page"]);
+    expect(resources.map((item) => item.type).sort()).toEqual(["Announcement", "File", "Link", "Module", "Page", "Page", "Quiz"]);
     expect(resources.find((item) => item.type === "File")?.openPath).toContain("/api/local/resources/");
     expect(resources.find((item) => item.type === "Link")?.openPath).toBeNull();
+    expect(resources.find((item) => item.type === "Page")?.bodyText).toContain("1. First step\n- Bullet item");
+    expect(resources.find((item) => item.type === "Announcement")?.bodyText).toBe("Synthetic announcement text.");
+    expect(resources.find((item) => item.type === "Quiz")?.bodyText).toBe("Synthetic quiz instructions.");
+    expect(resources.find((item) => item.title === "Unknown body page")?.bodyText).toBeUndefined();
     expect(JSON.stringify(resources)).not.toContain("secret");
-    expect(JSON.stringify(resources)).not.toContain("private body");
+    expect(JSON.stringify(resources)).not.toContain("<h2>");
   });
 
   it("projects refresh history and resolves only manifested local files", async () => {

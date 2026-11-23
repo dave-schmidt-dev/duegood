@@ -6,6 +6,9 @@ import type { ConversationAttachment, ConversationMessage, NormalizedConversatio
 import type { AssignmentListItem } from "../db/types";
 import { parseCanvasRubric } from "./canvas-rubric";
 import type { LocalCourse, LocalSnapshot } from "./coursework-types";
+import { finalizeResources, parseCourseExportDocuments, projectCourseResources, type CourseExportTexts, type LocalResource } from "./dashboard-library-projection";
+export { LOCAL_RESOURCE_PREFIX, finalizeResources, projectCourseResources } from "./dashboard-library-projection";
+export type { CourseExportTexts, LocalResource } from "./dashboard-library-projection";
 import { pendingSourceLinks } from "./pending-links";
 import { canvasHistoryOutcome } from "./refresh-daily-scope";
 import {
@@ -25,27 +28,10 @@ type LocalGradeGroup = NonNullable<LocalCourse["gradeGroups"]>[number];
 type LocalGradeRecord = LocalSnapshot["assignments"][number];
 type LocalTimelineEvent = LocalSnapshot["events"][number];
 
-/** Loopback route prefix for downloaded Canvas files in browser mode. */
-export const LOCAL_RESOURCE_PREFIX = "/api/local/resources/";
 /** Largest avatar the dashboard shows (matches `src/canvas/profile-sync.ts`). */
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
 const AVATAR_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"] as const;
 type AvatarContentType = (typeof AVATAR_CONTENT_TYPES)[number];
-
-export interface LocalResource {
-  readonly id: string;
-  readonly courseId: string;
-  readonly courseCode: string | null;
-  readonly type: "File" | "Page" | "Link" | "Module" | "Announcement";
-  readonly title: string;
-  readonly context: string | null;
-  readonly updatedAt: string | null;
-  readonly openPath: string | null;
-  /** Native mode only: the manifest records a local copy, which opens through a later handler. */
-  readonly savedLocally?: true;
-  /** Internal freshness evidence for a file captured through a course content link. */
-  readonly linkedCaptureRunId?: number;
-}
 
 interface LocalRefreshChange {
   readonly kind: "added" | "changed" | "removed" | "notice";
@@ -73,24 +59,6 @@ export interface LocalConversationSnapshot {
 export interface LocalProfile {
   readonly displayName: string;
   readonly avatarPath?: string;
-}
-
-/** Parsed Canvas export documents of one course folder; `null` when absent or malformed. */
-export interface CourseExportDocuments {
-  readonly files: unknown;
-  readonly pages: unknown;
-  readonly modules: unknown;
-  readonly announcements: unknown;
-  readonly downloadManifest: unknown;
-}
-
-/** Raw text of one course folder's export documents, as the Rust store returns them. */
-export interface CourseExportTexts {
-  readonly files: string | null;
-  readonly pages: string | null;
-  readonly modules: string | null;
-  readonly announcements: string | null;
-  readonly downloadManifest: string | null;
 }
 
 /** Size and leading bytes of the avatar sidecar; enough to check the image signature. */
@@ -237,10 +205,6 @@ function number(value: unknown): number {
 
 function entries(value: unknown, max = 1_000): JsonObject[] {
   return Array.isArray(value) ? value.slice(0, max).map(object).filter((item): item is JsonObject => item !== null) : [];
-}
-
-function resourceId(courseId: string, type: string, value: unknown): string {
-  return `${courseId}:${type}:${String(value).slice(0, 100)}`;
 }
 
 /** Parses JSON text like the Node reader: absent or malformed documents become `null`. */
@@ -498,6 +462,7 @@ function projectCoursework(value: unknown, version: string): ProjectedSnapshot {
       kind: typeof item.kind === "string" ? item.kind : null,
       independentDue: hasIndependentIcalDue(item),
       detail: stringOrNull(item.detail),
+      ...(typeof item.assignmentDetail === "string" ? { assignmentDetail: item.assignmentDetail } : {}),
       place: null,
       notes: stringOrNull(item.notes),
       discussionPostDone: item.discussionPostDone === true,
@@ -511,73 +476,6 @@ function projectCoursework(value: unknown, version: string): ProjectedSnapshot {
   assignments.sort((left, right) => (left.dueAt ?? "9999").localeCompare(right.dueAt ?? "9999"));
   events.sort((left, right) => (left.dueAt ?? "9999").localeCompare(right.dueAt ?? "9999"));
   return { version, courses: [...coursesByKey.values()], assignments, events, pendingSourceLinks: pendingSourceLinks(document) };
-}
-
-// --- Library resources ------------------------------------------------------------------------
-
-/** Projects one course's Canvas export lists into Library resources (unsorted, uncapped). */
-export function projectCourseResources(course: Pick<LocalCourse, "id" | "courseCode">, documents: CourseExportDocuments, resourceOpenPrefix: string | null): LocalResource[] {
-  const resources: LocalResource[] = [];
-  const manifest = entries(documents.downloadManifest);
-  const localFilesByCanvasId = new Set(manifest.flatMap((item) => {
-    if ((item.status === "downloaded" || item.status === "reused") && (typeof item.id === "string" || typeof item.id === "number")) return [String(item.id)];
-    const fileId = item.fileId;
-    const contentType = typeof item.contentType === "string" ? item.contentType : "";
-    const validNativeReceipt = item.status === "saved"
-      && (typeof fileId === "number" && Number.isSafeInteger(fileId) && fileId > 0 || typeof fileId === "string" && /^[1-9][0-9]{0,15}$/.test(fileId))
-      && typeof item.sha256 === "string" && /^[0-9a-f]{64}$/.test(item.sha256)
-      && typeof item.byteCount === "number" && Number.isSafeInteger(item.byteCount) && item.byteCount > 0
-      && item.sourceAuthenticity === "unverified"
-      && contentType.length <= 120 && /^[a-z0-9.+-]+\/[a-z0-9.+-]+(?:\s*;\s*[a-z0-9._=+-]+)*$/i.test(contentType);
-    return validNativeReceipt ? [String(fileId)] : [];
-  }));
-
-  for (const item of entries(documents.files)) {
-    const title = text(item.display_name) ?? text(item.filename);
-    if (title === null) continue;
-    const id = resourceId(course.id, "file", item.id);
-    const saved = localFilesByCanvasId.has(String(item.id));
-    const linkedCaptureRunId = typeof item.linkedCaptureRunId === "number"
-      && Number.isSafeInteger(item.linkedCaptureRunId) && item.linkedCaptureRunId > 0
-      ? item.linkedCaptureRunId : undefined;
-    resources.push({
-      id, courseId: course.id, courseCode: course.courseCode, type: "File", title,
-      context: typeof item.size === "number" ? `${String(item.size)} bytes` : null,
-      updatedAt: text(item.updated_at, 80),
-      openPath: saved && resourceOpenPrefix !== null ? `${resourceOpenPrefix}${encodeURIComponent(id)}` : null,
-      ...(saved && resourceOpenPrefix === null ? { savedLocally: true as const } : {}),
-      ...(linkedCaptureRunId === undefined ? {} : { linkedCaptureRunId }),
-    });
-  }
-  for (const item of entries(documents.pages)) {
-    const title = text(item.title); if (title === null) continue;
-    resources.push({ id: resourceId(course.id, "page", item.page_id ?? item.url), courseId: course.id, courseCode: course.courseCode, type: "Page", title, context: "Canvas page", updatedAt: text(item.updated_at, 80), openPath: null });
-  }
-  for (const item of entries(documents.modules)) {
-    const title = text(item.name); if (title === null) continue;
-    resources.push({ id: resourceId(course.id, "module", item.id), courseId: course.id, courseCode: course.courseCode, type: "Module", title, context: typeof item.items_count === "number" ? `${String(item.items_count)} items` : null, updatedAt: null, openPath: null });
-    for (const child of entries(item.items, 250).filter((candidate) => candidate.type === "ExternalUrl")) {
-      const childTitle = text(child.title); if (childTitle === null) continue;
-      resources.push({ id: resourceId(course.id, "link", child.id), courseId: course.id, courseCode: course.courseCode, type: "Link", title: childTitle, context: `In ${title}`, updatedAt: null, openPath: null });
-    }
-  }
-  for (const item of entries(documents.announcements)) {
-    const title = text(item.title); if (title === null) continue;
-    resources.push({ id: resourceId(course.id, "announcement", item.id), courseId: course.id, courseCode: course.courseCode, type: "Announcement", title, context: "Course announcement", updatedAt: text(item.posted_at, 80), openPath: null });
-  }
-  return resources;
-}
-
-/** Caps the Library at 2,000 items in course order, then sorts newest first and by title. */
-export function finalizeResources(resources: readonly LocalResource[]): readonly LocalResource[] {
-  return resources
-    .slice(0, 2_000)
-    .map((item) => {
-      const resource = { ...item };
-      delete resource.linkedCaptureRunId;
-      return resource;
-    })
-    .sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? "") || left.title.localeCompare(right.title));
 }
 
 // --- Activity (refresh history plus Inbox changes) --------------------------------------------
@@ -716,16 +614,6 @@ function projectProfile(value: unknown, avatar: AvatarHeader | null, avatarPath:
 
 // --- Whole dashboard ------------------------------------------------------------------------------
 
-function exportDocuments(texts: CourseExportTexts): CourseExportDocuments {
-  return {
-    files: parseJsonText(texts.files),
-    pages: parseJsonText(texts.pages),
-    modules: parseJsonText(texts.modules),
-    announcements: parseJsonText(texts.announcements),
-    downloadManifest: parseJsonText(texts.downloadManifest),
-  };
-}
-
 /**
  * Projects the desktop store's raw documents into the `/api/dashboard` body. With the browser
  * options this equals the loopback server's response for the same files (the parity test in
@@ -741,7 +629,7 @@ export function projectDashboardDocuments(bundle: DashboardDocumentBundle, optio
     if (slug === null || !Object.hasOwn(bundle.courseExports, slug)) continue;
     const texts = bundle.courseExports[slug];
     if (texts === undefined) continue;
-    for (const resource of projectCourseResources(course, exportDocuments(texts), options.resourceOpenPrefix)) collected.push(resource);
+    for (const resource of projectCourseResources(course, parseCourseExportDocuments(texts), options.resourceOpenPrefix)) collected.push(resource);
   }
   const resources = finalizeResources(bundle.browserFreshness === undefined
     ? collected

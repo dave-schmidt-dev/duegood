@@ -52,8 +52,8 @@ function nativeBundle(browserFreshness?: unknown, canvasCourseId: unknown = 530)
     profile: null,
     avatar: null,
     courseExports: {
-      it530: { files: JSON.stringify([{ id: 501, display_name: "Current file.pdf" }]), pages: "[]", modules: "[]", announcements: "[]", downloadManifest: "[]" },
-      "archive-42": { files: JSON.stringify([{ id: 4201, display_name: "Archived file.pdf" }]), pages: "[]", modules: "[]", announcements: "[]", downloadManifest: JSON.stringify([{ fileId: 4201, status: "saved", sha256: "a".repeat(64), byteCount: 4096, contentType: "application/pdf", sourceAuthenticity: "unverified" }]) },
+      it530: { files: JSON.stringify([{ id: 501, display_name: "Current file.pdf" }]), pages: "[]", modules: "[]", announcements: "[]", quizzes: JSON.stringify([{ id: 601, title: "Synthetic quiz prompt", detail: "Synthetic quiz body.", bodyEmpty: false }]), downloadManifest: "[]" },
+      "archive-42": { files: JSON.stringify([{ id: 4201, display_name: "Archived file.pdf" }]), pages: "[]", modules: "[]", announcements: "[]", quizzes: "[]", downloadManifest: JSON.stringify([{ fileId: 4201, status: "saved", sha256: "a".repeat(64), byteCount: 4096, contentType: "application/pdf", sourceAuthenticity: "unverified" }]) },
     },
     ...(browserFreshness === undefined ? {} : { browserFreshness }),
   };
@@ -181,6 +181,13 @@ describe("browser freshness projection", () => {
     expect(dashboard.sourceStatus.library).toBe("synced");
     expect(dashboard.events.find((event) => event.sourceItemId === "canvas-item")?.grade).toBe("90%");
     expect(dashboard.resources.some((resource) => resource.title === "Current file.pdf")).toBe(true);
+    expect(dashboard.resources.some((resource) => resource.title === "Synthetic quiz prompt")).toBe(false);
+    const quizzesCurrent = parseDocumentBundle(nativeBundle({
+      ...CURRENT,
+      sections: [...CURRENT.sections, { courseId: 530, endpoint: "quizzes", current: true }],
+    }));
+    expect(projectDashboardDocuments(quizzesCurrent, nativeProjectionOptions(quizzesCurrent.storeState)).resources)
+      .toContainEqual(expect.objectContaining({ title: "Synthetic quiz prompt", bodyText: "Synthetic quiz body." }));
     expect(parseDashboard(dashboard).sourceStatus.browserFreshness).toEqual(CURRENT);
   });
 

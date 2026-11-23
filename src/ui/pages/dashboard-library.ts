@@ -9,16 +9,17 @@ export interface LibraryPageRenderers {
   readonly formatted: (value: string | number | null | undefined, withTime?: boolean) => string;
   readonly code: (value: string) => string;
   readonly color: (courses: readonly DashboardCourse[], courseCode: string) => string;
+  readonly structuredBody: (text: string) => readonly ElementDescriptor[];
 }
 
 /** Renders resource actions beside the Library item they affect. */
 export function renderLibraryPage(state: DashboardState, handlers: DashboardHandlers, renderers: LibraryPageRenderers): ElementDescriptor {
-  const { el, heading, empty, safeLocalHref, formatted, code, color } = renderers;
-  const types = ["all", "File", "Page", "Link", "Module", "Announcement"];
+  const { el, heading, empty, safeLocalHref, formatted, code, color, structuredBody } = renderers;
+  const types = ["all", "File", "Page", "Link", "Module", "Announcement", "Quiz"];
   const resources = state.data.resources.filter((item) => state.resourceFilter === "all" || item.type.toLowerCase() === state.resourceFilter.toLowerCase());
   const toolbar = el("div", undefined, { class: "resource-toolbar" }, [
     el("div", undefined, { class: "resource-types", "aria-label": "Canvas item types" }, types.map((type) => ({
-      tag: "button", attrs: { type: "button", class: state.resourceFilter === type ? "active" : "" }, text: type === "all" ? "All" : `${type}s`, on: { click: () => handlers.onResourceFilter(type) },
+      tag: "button", attrs: { type: "button", class: state.resourceFilter === type ? "active" : "" }, text: type === "all" ? "All" : type === "Quiz" ? "Quizzes" : `${type}s`, on: { click: () => handlers.onResourceFilter(type) },
     }))),
   ]);
   const list = resources.length === 0
@@ -33,6 +34,10 @@ export function renderLibraryPage(state: DashboardState, handlers: DashboardHand
           el("h2", resource.title, { class: "resource-title" }),
           el("p", `${code(resource.courseCode)}${resource.context ? ` · ${resource.context}` : ""}`, { class: "resource-meta" }),
           ...(feedback === undefined ? [] : [el("p", feedback.message, { class: "resource-action-feedback", role: "status", "aria-live": "polite", "data-resource-action": resource.id })]),
+          ...(typeof resource.bodyText !== "string" || resource.bodyText.trim().length === 0 ? [] : [el("details", undefined, { class: "resource-body" }, [
+            el("summary", "Read body", { class: "resource-body__summary" }),
+            el("div", undefined, { class: "event-body resource-body__content" }, structuredBody(resource.bodyText)),
+          ])]),
         ]),
         el("time", formatted(resource.updatedAt, true), { class: "resource-updated" }),
         ...(resource.savedLocally === true && handlers.onOpenResource !== undefined
@@ -40,5 +45,5 @@ export function renderLibraryPage(state: DashboardState, handlers: DashboardHand
           : href !== undefined ? [el("a", "Open", { class: "more-action", href })] : resource.savedLocally === true ? [el("span", "Saved locally", { class: "resource-saved" })] : [el("span", "No local copy", { class: "resource-unavailable" })]),
       ]);
     }));
-  return el("section", undefined, { class: "page" }, [heading("Imported from Canvas", "Library", "Files, pages, links, modules, and announcements from your courses.", `${resources.length} items`), toolbar, list]);
+  return el("section", undefined, { class: "page" }, [heading("Imported from Canvas", "Library", "Files, pages, links, modules, quizzes, and announcements from your courses.", `${resources.length} items`), toolbar, list]);
 }

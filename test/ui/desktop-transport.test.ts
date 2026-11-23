@@ -60,6 +60,12 @@ describe("desktop transport and first-run screen", () => {
     expect(body.sourceStatus.label).toBe("Desktop preview copy");
     expect(body.profile).toEqual({ displayName: "Synthetic Learner" });
     expect(body.resources.map((item) => [item.title, item.openPath, item.savedLocally])).toEqual([["Handout", null, undefined], ["Syllabus", null, true]]);
+    const legacyBundle = nativeBundle();
+    delete (legacyBundle.courseExports as Record<string, Record<string, unknown>>)["syn-101"]?.quizzes;
+    expect(parseDocumentBundle(legacyBundle).courseExports["syn-101"]?.quizzes).toBeNull();
+    const malformedBundle = nativeBundle();
+    (malformedBundle.courseExports as Record<string, Record<string, unknown>>)["syn-101"]!.quizzes = 7;
+    expect(() => parseDocumentBundle(malformedBundle)).toThrow();
     const parsed = parseDashboard(body);
     expect(parsed.version).toBe(DIGEST);
     expect(parsed.resources.find((item) => item.title === "Syllabus")).toMatchObject({ savedLocally: true });
@@ -111,13 +117,13 @@ describe("desktop transport and first-run screen", () => {
       if (command === "start_full_refresh") {
         receiveProgress?.({ phase: "browser-capture" });
         receiveProgress?.({ phase: "private course title" });
-        return { status: "incomplete", browserStatus: "incomplete", calendarStatus: "complete", gapCount: 2, omissionCount: 0, rubricCount: 3, linkedFileCount: 4, calendarAdded: 1, calendarUpdated: 0, calendarHeld: 3, updatedAt: null, errorCode: "coverage-gap" };
+        return { status: "incomplete", browserStatus: "incomplete", calendarStatus: "complete", gapCount: 2, omissionCount: 0, bodyCount: 5, emptyBodyCount: 1, bodyFailureReason: null, exportStatus: "disabled", exportWritten: 0, exportUnchanged: 0, exportSkippedOwnerFiles: 0, rubricCount: 3, linkedFileCount: 4, calendarAdded: 1, calendarUpdated: 0, calendarHeld: 3, updatedAt: null, errorCode: "coverage-gap" };
       }
       throw new Error(`unexpected ${command}`);
     }, (onMessage) => { receiveProgress = onMessage; return { channel: "calendar" }; });
     await expect(transport.startIcalRefresh((progress) => phases.push(progress.phase))).resolves.toMatchObject({ added: 2, updated: 1, held: 3, removed: 0 });
     const fullPhases: string[] = [];
-    await expect(transport.startFullRefresh((progress) => fullPhases.push(progress.phase))).resolves.toMatchObject({ status: "incomplete", browserStatus: "incomplete", calendarStatus: "complete", gapCount: 2, omissionCount: 0, rubricCount: 3, linkedFileCount: 4, calendarHeld: 3, errorCode: "coverage-gap" });
+    await expect(transport.startFullRefresh((progress) => fullPhases.push(progress.phase))).resolves.toMatchObject({ status: "incomplete", browserStatus: "incomplete", calendarStatus: "complete", gapCount: 2, omissionCount: 0, bodyCount: 5, emptyBodyCount: 1, bodyFailureReason: null, exportStatus: "disabled", exportWritten: 0, exportUnchanged: 0, exportSkippedOwnerFiles: 0, rubricCount: 3, linkedFileCount: 4, calendarHeld: 3, errorCode: "coverage-gap" });
     expect(phases).toEqual(["waiting-for-calendar"]);
     expect(fullPhases).toEqual(["browser-capture"]);
     expect(calls).toEqual([
@@ -233,7 +239,7 @@ describe("desktop transport and first-run screen", () => {
 
     bundle = nativeBundle({ coursework: { text: "{}", version: "not-a-digest" } });
     await expect(transport.loadDashboardBody(false)).rejects.toMatchObject({ code: "malformed-response" });
-    bundle = nativeBundle({ courseExports: { "../escape": { files: null, pages: null, modules: null, announcements: null, downloadManifest: null } } });
+    bundle = nativeBundle({ courseExports: { "../escape": { files: null, pages: null, modules: null, announcements: null, quizzes: null, downloadManifest: null } } });
     await expect(transport.loadDashboardBody(false)).rejects.toMatchObject({ code: "malformed-response" });
     bundle = nativeBundle({ avatar: { sizeBytes: 69, head: new Array(17).fill(0) } });
     await expect(transport.loadDashboardBody(false)).rejects.toMatchObject({ code: "malformed-response" });

@@ -39,6 +39,7 @@ export async function collectCanvasAccountCapture({
   readEndpoint,
   addResource,
   addNotAttemptedGap,
+  markBodyDetailOmission,
   reserveDetailRequest,
   courseFileIds,
   courseIds,
@@ -131,7 +132,10 @@ export async function collectCanvasAccountCapture({
         }
         if (!reserveDetailRequest("groupPage", null, groupId)) continue;
         const pageDetail = await readEndpoint("groupPage", { groupId, pageSlug: page.url });
-        if (pageDetail.gap) continue;
+        if (pageDetail.gap) {
+          markBodyDetailOmission("pages", "groupPage", null, page.page_id, "page_id", groupId);
+          continue;
+        }
         if (pageDetail.result.items.length !== 1 || pageDetail.result.items[0].url !== page.url) {
           throw accountError("GROUP_PAGE_IDENTITY_MISMATCH");
         }

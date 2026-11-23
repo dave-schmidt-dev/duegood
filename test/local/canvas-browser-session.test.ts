@@ -227,19 +227,25 @@ function syntheticCompleteSnapshot(userId: number) {
   };
 }
 
+function syntheticBody(empty = false) {
+  return empty
+    ? { html: "", text: "", empty: true }
+    : { html: "<p>synthetic body</p>", text: "synthetic body", empty: false };
+}
+
 function syntheticDetailSnapshot(userId: number) {
   const snapshot = syntheticSnapshot(userId);
   return {
     ...snapshot,
     resources: [...snapshot.resources,
     { endpoint: "assignments", courseId: 17, pages: 1, items: [
-      { id: 101, rubric: [{ id: "r1" }] },
-      { id: 102, rubric: null },
+      { id: 101, rubric: [{ id: "r1" }], _canvasBody: syntheticBody() },
+      { id: 102, rubric: null, _canvasBody: syntheticBody(true) },
     ] },
     { endpoint: "discussions", courseId: 17, pages: 1, items: [
-      { id: 201, assignment: { id: 101, rubric: [{ id: "r1" }] } },
-      { id: 202, assignment: { id: 103, rubric: [{ id: "r2" }] } },
-      { id: 203, assignment_id: 103, assignment: { rubric: [{ id: "r2" }] } },
+      { id: 201, assignment: { id: 101, rubric: [{ id: "r1" }] }, _canvasBody: syntheticBody() },
+      { id: 202, assignment: { id: 103, rubric: [{ id: "r2" }] }, _canvasBody: syntheticBody() },
+      { id: 203, assignment_id: 103, assignment: { rubric: [{ id: "r2" }] }, _canvasBody: syntheticBody() },
     ] },
     { endpoint: "personalFiles", courseId: null, pages: 1, items: [{ id: 301 }] },
     { endpoint: "personalFile", courseId: null, pages: 1, items: [{ id: 301 }] },
@@ -555,7 +561,8 @@ describe("Canvas session broker process protocol", () => {
 
       await waitForReady(socketPath);
       const detailCounts = await sendCommand(socketPath, { command: "capture", expectedUserId: 46 });
-      expect(detailCounts.final).toMatchObject({ status: "PARTIAL", rubricCount: 2, linkedFileCount: 1 });
+      expect(detailCounts.final).toMatchObject({ status: "PARTIAL", bodyCount: 5, emptyBodyCount: 1,
+        bodyFailureReason: null, rubricCount: 2, linkedFileCount: 1 });
 
       await waitForReady(socketPath);
       expect((await sendCommand(socketPath, "stop")).final).toEqual({ status: "STOPPING" });

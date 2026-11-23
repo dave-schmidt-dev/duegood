@@ -23,6 +23,7 @@ fn fixture_capture() -> (Value, Vec<CourseAssignments>) {
                 .filter(|value| value.is_object() && value.get("id").is_some())
                 .cloned()
                 .collect(),
+            discussions: vec![],
         })
         .collect();
     (base, captures)
@@ -69,7 +70,11 @@ fn fixture_reconciles_assignment_fields_and_keeps_personal_state() {
 #[test]
 fn rubric_round_trips_through_assignment_reconciliation() {
     let (base, mut captures) = fixture_capture();
-    let assignment = &mut captures[0].assignments[0];
+    let capture = captures
+        .iter_mut()
+        .find(|capture| capture.key == "demo-alpha")
+        .unwrap();
+    let assignment = &mut capture.assignments[0];
     assignment["rubric"] = json!([{
         "id": "criterion-1",
         "description": "Evidence",
@@ -101,6 +106,160 @@ fn rubric_round_trips_through_assignment_reconciliation() {
         true
     );
     assert_eq!(item["rubric"]["useForGrading"], true);
+}
+
+#[test]
+fn body_html_structured_text_and_canvas_timestamps_round_trip() {
+    let (base, mut captures) = fixture_capture();
+    let assignment = &mut captures[0].assignments[0];
+    assignment["detail"] = json!("First paragraph.\n\n- First item\n- Second item");
+    assignment["bodyHtml"] = json!("<p>First paragraph.</p><ul><li>First item</li><li>Second item</li></ul>");
+    assignment["bodyEmpty"] = json!(false);
+    assignment["due_at"] = json!("2026-11-28T04:59:00Z");
+    assignment["created_at"] = json!("2026-11-01T15:00:00Z");
+    assignment["updated_at"] = json!("2026-11-20T18:00:00Z");
+    assignment["posted_at"] = json!("2026-11-20T18:05:00Z");
+    assignment["delayed_post_at"] = json!("2026-11-20T18:05:00Z");
+    assignment["unlock_at"] = json!("2026-11-20T18:05:00Z");
+    assignment["lock_at"] = json!("2026-11-29T04:59:00Z");
+
+    let result = reconcile_coursework(&base, &captures, captured_at()).expect("reconcile");
+    let item = result["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["canvasId"] == json!(70001))
+        .expect("reconciled assignment");
+    assert_eq!(
+        item["detail"],
+        "First paragraph.\n\n- First item\n- Second item"
+    );
+    assert_eq!(
+        item["bodyHtml"],
+        "<p>First paragraph.</p><ul><li>First item</li><li>Second item</li></ul>"
+    );
+    assert_eq!(item["dueAtUtc"], "2026-11-28T04:59:00Z");
+    assert_eq!(item["createdAt"], "2026-11-01T15:00:00Z");
+    assert_eq!(item["updatedAt"], "2026-11-20T18:00:00Z");
+    assert_eq!(item["postedAt"], "2026-11-20T18:05:00Z");
+    assert_eq!(item["delayedPostAt"], "2026-11-20T18:05:00Z");
+    assert_eq!(item["unlockAt"], "2026-11-20T18:05:00Z");
+    assert_eq!(item["lockAt"], "2026-11-29T04:59:00Z");
+}
+
+#[test]
+fn omitted_body_preserves_previous_body_but_known_empty_body_is_recorded() {
+    let (mut base, mut captures) = fixture_capture();
+    let prior = base["items"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|item| item["canvasId"] == 70001)
+        .unwrap();
+    prior["detail"] = json!("Previously imported body");
+    prior["bodyHtml"] = json!("<p>Previously imported body</p>");
+    let alpha_index = captures
+        .iter_mut()
+        .position(|capture| capture.key == "demo-alpha")
+        .unwrap();
+    let assignment_index = captures[alpha_index]
+        .assignments
+        .iter()
+        .position(|assignment| assignment["id"] == 70001)
+        .unwrap();
+    for field in ["detail", "bodyHtml", "bodyEmpty"] {
+        captures[alpha_index].assignments[assignment_index]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+    }
+    let missing = reconcile_coursework(&base, &captures, captured_at()).expect("reconcile");
+    let retained = missing["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["canvasId"] == 70001)
+        .unwrap();
+    assert_eq!(retained["detail"], "Previously imported body");
+    assert_eq!(retained["bodyHtml"], "<p>Previously imported body</p>");
+
+    captures[alpha_index].assignments[assignment_index]["detail"] = json!("");
+    captures[alpha_index].assignments[assignment_index]["bodyHtml"] = json!("");
+    captures[alpha_index].assignments[assignment_index]["bodyEmpty"] = json!(true);
+    let known_empty = reconcile_coursework(&base, &captures, captured_at()).expect("empty body");
+    let cleared = known_empty["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["canvasId"] == 70001)
+        .unwrap();
+    assert_eq!(cleared["detail"], "");
+    assert_eq!(cleared["bodyHtml"], "");
+    assert_eq!(cleared["bodyEmpty"], true);
+}
+
+#[test]
+fn discussion_and_assignment_with_same_canvas_id_keep_separate_identities() {
+    let (base, mut captures) = fixture_capture();
+    let alpha_index = captures
+        .iter_mut()
+        .position(|capture| capture.key == "demo-alpha")
+        .unwrap();
+    captures[alpha_index].discussions = vec![json!({
+        "id": 70001,
+        "title": "Synthetic ungraded topic",
+        "detail": "Original discussion text",
+        "bodyHtml": "<p>Original discussion text</p>",
+        "bodyEmpty": false,
+        "created_at": "2026-11-01T15:00:00Z",
+        "posted_at": "2026-11-20T18:05:00Z",
+        "delayed_post_at": "2026-11-20T18:05:00Z",
+        "unlock_at": "2026-11-20T18:05:00Z",
+        "lock_at": "2026-11-29T04:59:00Z",
+        "due_at": "2026-11-28T04:59:00Z"
+    })];
+
+    let first = reconcile_coursework(&base, &captures, captured_at()).expect("first refresh");
+    let discussion_id = "demo-alpha-canvas-discussion-70001";
+    let discussion = first["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == discussion_id)
+        .expect("standalone discussion");
+    assert_eq!(discussion["canvasResourceType"], "discussion");
+    assert_eq!(discussion["canvasId"], 70001);
+    assert_eq!(discussion["dueAtUtc"], "2026-11-28T04:59:00Z");
+    assert!(first["items"].as_array().unwrap().iter().any(|item| {
+        item["canvasResourceType"] == "assignment" && item["canvasId"] == 70001
+    }));
+
+    captures[alpha_index].discussions[0]["detail"] = json!("Updated discussion text");
+    captures[alpha_index].discussions[0]["bodyHtml"] = json!("<p>Updated discussion text</p>");
+    let second = reconcile_coursework(&first, &captures, captured_at()).expect("second refresh");
+    let discussions = second["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["canvasResourceType"] == "discussion")
+        .collect::<Vec<_>>();
+    assert_eq!(discussions.len(), 1);
+    assert_eq!(discussions[0]["detail"], "Updated discussion text");
+    assert_eq!(discussions[0]["bodyHtml"], "<p>Updated discussion text</p>");
+
+    let omitted = CourseAssignments {
+        key: captures[alpha_index].key.clone(),
+        groups: captures[alpha_index].groups.clone(),
+        assignments: captures[alpha_index].assignments.clone(),
+        discussions: vec![],
+    };
+    let after_omission = reconcile_coursework(&second, &[omitted], captured_at())
+        .expect("omitted discussion remains");
+    assert!(after_omission["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["id"] == discussion_id));
 }
 
 #[test]
@@ -513,6 +672,7 @@ fn error_display_does_not_include_course_identity() {
         key: "SYNTHETIC_PRIVATE_COURSE_KEY".to_owned(),
         groups: Vec::new(),
         assignments: Vec::new(),
+        discussions: Vec::new(),
     };
     let error = reconcile_coursework(&base, &[capture], captured_at()).unwrap_err();
     assert!(!error.to_string().contains("SYNTHETIC_PRIVATE_COURSE_KEY"));

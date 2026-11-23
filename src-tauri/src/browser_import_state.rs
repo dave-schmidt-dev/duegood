@@ -212,7 +212,7 @@ pub(super) fn import_status(
         &bundle.coverage,
     )?;
     let diagnostics =
-        diagnostics::import_diagnostics(bundle, required_gap_count, optional_omission_count);
+        diagnostics::import_diagnostics(bundle, required_gap_count, optional_omission_count)?;
     Ok(json!({
         "format": STATUS_FORMAT, "version": STATUS_VERSION,
         "runId": bundle.run_id, "generationId": bundle.generation_id, "userId": bundle.user_id,

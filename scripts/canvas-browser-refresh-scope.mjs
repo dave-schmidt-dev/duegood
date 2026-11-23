@@ -18,6 +18,21 @@ const SINGLETON_LIST_ENDPOINTS = new Set([
   "inbox", "inboxAll", "conversationsSent", "conversationsArchived", "groupFolders",
   "groupPages", "groupDiscussions", "calendarEvents",
 ]);
+const BODY_ENDPOINT_FAMILY = new Map([
+  ["assignments", "assignment"],
+  ["discussions", "discussion"],
+  ["announcements", "announcement"],
+  ["quizzes", "quiz"],
+  ["quiz", "quiz"],
+  ["pages", "page"],
+  ["page", "page"],
+  ["groupDiscussions", "group-discussion"],
+  ["groupPages", "group-page"],
+  ["groupPage", "group-page"],
+]);
+const BODY_OMISSION_REASONS = new Set([
+  "forbidden-optional", "locked", "not-applicable", "not-found", "unpublished",
+]);
 const COVERAGE_REASONS = new Set([
   "capture-budget", "disabled", "detail-budget", "forbidden-optional", "invalid-slug",
   "locked", "not-applicable", "not-attempted", "not-found", "pagination-budget",
@@ -125,6 +140,133 @@ function bounded(value) {
   return value;
 }
 
+function validCanvasBody(value) {
+  if (!isRecord(value) || Object.keys(value).length !== 3 || typeof value.html !== "string"
+      || typeof value.text !== "string" || typeof value.empty !== "boolean") return false;
+  const encoder = new TextEncoder();
+  if (encoder.encode(value.html).length > 512 * 1024
+      || encoder.encode(value.text).length > 512 * 1024) return false;
+  return !value.empty || value.html.length === 0 && value.text.length === 0;
+}
+
+function bodyIdentity(resource, item, index) {
+  const family = BODY_ENDPOINT_FAMILY.get(resource.endpoint);
+  const scope = [resource.courseId ?? null, resource.groupId ?? null, resource.contextCode ?? null];
+  const id = item?.id ?? item?.page_id ?? item?.url;
+  return JSON.stringify([family, ...scope, id ?? `${resource.endpoint}:${index}`]);
+}
+
+function inaccessibleBodyListing(endpoint, item) {
+  return ["pages", "groupPages", "quizzes"].includes(endpoint)
+    && (item?.locked_for_user === true || item?.locked === true || item?.published === false);
+}
+
+function activeBodyScope(resource, activeCourseIds, activeGroupIds) {
+  if (positiveId(resource.courseId)) return activeCourseIds.has(resource.courseId);
+  if (positiveId(resource.groupId)) return activeGroupIds.has(resource.groupId);
+  const courseContext = /^course_([1-9]\d*)$/u.exec(resource.contextCode ?? "");
+  if (courseContext) return activeCourseIds.has(Number(courseContext[1]));
+  const groupContext = /^group_([1-9]\d*)$/u.exec(resource.contextCode ?? "");
+  return groupContext !== null && activeGroupIds.has(Number(groupContext[1]));
+}
+
+function bodyListingOmission(resource, item, credits) {
+  const detailEndpoint = {
+    pages: resource.groupId == null ? "page" : "groupPage",
+    quizzes: "quiz",
+    groupPages: "groupPage",
+  }[resource.endpoint];
+  if (detailEndpoint === undefined) return false;
+  const marker = BODY_OMISSION_REASONS.has(item?._canvasBodyOmissionReason)
+    ? item._canvasBodyOmissionReason : null;
+  const inferred = item?.locked_for_user === true || item?.locked === true ? "locked"
+    : item?.published === false ? "unpublished" : null;
+  const reason = marker ?? inferred;
+  if (reason === null) return false;
+  const key = JSON.stringify([detailEndpoint, resource.courseId ?? null, resource.groupId ?? null,
+    resource.contextCode ?? null, reason]);
+  const available = credits.get(key) ?? 0;
+  if (available === 0) return false;
+  credits.set(key, available - 1);
+  return true;
+}
+
+function bodyOmissionCredits(coverage) {
+  const credits = new Map();
+  for (const row of coverage) {
+    if (row.status !== "gap" || !BODY_OMISSION_REASONS.has(row.reason)
+        || !["page", "quiz", "groupPage"].includes(row.endpoint)) continue;
+    const endpoint = row.endpoint === "page" && row.groupId != null ? "groupPage" : row.endpoint;
+    const key = JSON.stringify([endpoint, row.courseId ?? null, row.groupId ?? null,
+      row.contextCode ?? null, row.reason]);
+    credits.set(key, (credits.get(key) ?? 0) + 1);
+  }
+  return credits;
+}
+
+/** Counts successful body envelopes and failures without exposing body text. */
+function summarizeBodyCoverage(resources, activeCourseIds, coverage) {
+  const activeGroups = new Set();
+  for (const resource of resources.filter((candidate) => candidate.endpoint === "groups")) {
+    for (const group of resource.items) {
+      const courseId = group?.course_id ?? group?.courseId;
+      if (positiveId(group?.id) && positiveId(courseId) && activeCourseIds.has(courseId)) {
+        activeGroups.add(group.id);
+      }
+    }
+  }
+  const grouped = new Map();
+  const omissionCredits = bodyOmissionCredits(coverage);
+  for (const resource of resources) {
+    if (!BODY_ENDPOINT_FAMILY.has(resource.endpoint) || !Array.isArray(resource.items)) continue;
+    resource.items.forEach((item, index) => {
+      const key = bodyIdentity(resource, item, index);
+      const body = item?._canvasBody;
+      const valid = validCanvasBody(body);
+      const bodyReason = item?._canvasBodyReason;
+      const reason = bodyReason === "BODY_MISSING" ? "BODY_MISSING"
+        : bodyReason === "BODY_SANITIZE_FAILED" ? "BODY_SANITIZE_FAILED"
+          : bodyReason !== undefined ? "BODY_SANITIZE_FAILED"
+            : body === undefined ? "BODY_MISSING" : valid ? null : "BODY_SANITIZE_FAILED";
+      const entry = grouped.get(key) ?? { validBody: null, failureReason: null, omitted: false, active: false };
+      const omissionConfirmed = bodyListingOmission(resource, item, omissionCredits);
+      if (omissionConfirmed && (inaccessibleBodyListing(resource.endpoint, item) || reason === "BODY_MISSING")) {
+        if (entry.validBody === null && entry.failureReason !== "BODY_SANITIZE_FAILED") entry.omitted = true;
+        entry.active ||= activeBodyScope(resource, activeCourseIds, activeGroups);
+        grouped.set(key, entry);
+        return;
+      }
+      if (valid && reason === null) {
+        entry.validBody = body;
+        entry.omitted = false;
+      } else if (reason === "BODY_SANITIZE_FAILED") {
+        entry.failureReason = reason;
+        entry.omitted = false;
+      } else if (entry.failureReason === null) entry.failureReason = reason;
+      entry.active ||= activeBodyScope(resource, activeCourseIds, activeGroups);
+      grouped.set(key, entry);
+    });
+  }
+  let bodyCount = 0;
+  let emptyBodyCount = 0;
+  let requiredFailures = 0;
+  let missingCount = 0;
+  let sanitizeFailedCount = 0;
+  for (const entry of grouped.values()) {
+    if (entry.validBody !== null) {
+      bodyCount += 1;
+      if (entry.validBody.empty) emptyBodyCount += 1;
+    } else if (!entry.omitted && entry.failureReason === "BODY_MISSING") {
+      missingCount += 1;
+      if (entry.active) requiredFailures += 1;
+    } else if (!entry.omitted && entry.failureReason === "BODY_SANITIZE_FAILED") {
+      sanitizeFailedCount += 1;
+      if (entry.active) requiredFailures += 1;
+    }
+  }
+  return { bodyCount, emptyBodyCount, requiredFailures, missingCount, sanitizeFailedCount };
+}
+
 /**
  * Summarizes the fixed daily pages independently of the full archive.
  * Only bounded counts cross the local broker and app bridge; source values stay in the archive.
@@ -139,6 +281,7 @@ export function summarizeCanvasRefreshScope(snapshot) {
   let requiredGapCount = 0;
   let omissionCount = 0;
   const requiredListRows = new Set();
+  const bodyCoverage = summarizeBodyCoverage(resources, activeCourseIds, coverage);
   const addGap = (count = 1) => { requiredGapCount += count; };
 
   for (const courseId of snapshot.activeCourses.courseIds) {
@@ -153,6 +296,7 @@ export function summarizeCanvasRefreshScope(snapshot) {
       for (const row of rows) requiredListRows.add(row);
     }
   }
+  addGap(bodyCoverage.requiredFailures);
   for (const endpoint of REQUIRED_ACCOUNT_ENDPOINTS) {
     const rows = scopeRows(coverage, endpoint, null);
     if (rows.length !== 1 || rows[0]?.status !== "complete"
@@ -304,6 +448,8 @@ export function summarizeCanvasRefreshScope(snapshot) {
   return {
     requiredGapCount: bounded(requiredGapCount),
     omissionCount: bounded(omissionCount),
+    bodyCount: bounded(bodyCoverage.bodyCount),
+    emptyBodyCount: bounded(bodyCoverage.emptyBodyCount),
   };
 }
 
@@ -315,6 +461,11 @@ export function summarizeCanvasCaptureOutcome(snapshot) {
   }
 
   const dailyScope = summarizeCanvasRefreshScope(snapshot);
+  const bodyCoverage = summarizeBodyCoverage(
+    snapshot.resources,
+    new Set(snapshot.activeCourses.courseIds),
+    snapshot.coverage,
+  );
   const fileMetadataIds = new Set();
   const zeroSizes = new Set();
   const otherSizes = new Set();
@@ -349,6 +500,7 @@ export function summarizeCanvasCaptureOutcome(snapshot) {
 
   let failureGapCount = 0;
   let omissionCount = 0;
+  failureGapCount += bodyCoverage.missingCount + bodyCoverage.sanitizeFailedCount;
   failureGapCount += invalidFileMetadataCount;
   for (const row of snapshot.coverage) {
     if (row.status === "complete") continue;
@@ -501,17 +653,26 @@ export function summarizeCanvasCaptureOutcome(snapshot) {
     omissionCount: bounded(omissionCount),
     fileBodiesIncomplete,
     personalFileBodyFailureCount: bounded(personalFileBodyFailureCount),
+    bodyCount: dailyScope.bodyCount,
+    emptyBodyCount: dailyScope.emptyBodyCount,
+    bodyFailureReason: bodyCoverage.sanitizeFailedCount > 0 ? "BODY_SANITIZE_FAILED"
+      : bodyCoverage.missingCount > 0 ? "BODY_MISSING" : null,
   };
 }
 
 /** Strict broker-boundary validation for the content-free summary. */
 export function validCanvasRefreshScopeSummary(value) {
-  return isRecord(value) && Object.keys(value).length === 2
+  return isRecord(value) && Object.keys(value).length === 4
     && Object.hasOwn(value, "requiredGapCount") && Object.hasOwn(value, "omissionCount")
+    && Object.hasOwn(value, "bodyCount") && Object.hasOwn(value, "emptyBodyCount")
     && Number.isSafeInteger(value.requiredGapCount) && value.requiredGapCount >= 0
     && value.requiredGapCount <= MAX_SUMMARY_COUNT
     && Number.isSafeInteger(value.omissionCount) && value.omissionCount >= 0
-    && value.omissionCount <= MAX_SUMMARY_COUNT;
+    && value.omissionCount <= MAX_SUMMARY_COUNT
+    && Number.isSafeInteger(value.bodyCount) && value.bodyCount >= 0
+    && value.bodyCount <= MAX_SUMMARY_COUNT
+    && Number.isSafeInteger(value.emptyBodyCount) && value.emptyBodyCount >= 0
+    && value.emptyBodyCount <= value.bodyCount;
 }
 
 export function isCanvasCoverageEntry(value) {

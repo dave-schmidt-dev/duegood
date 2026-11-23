@@ -182,6 +182,7 @@ fn subsequent_assignment_reconciliation_retains_imported_sessions() {
         key: "synthetic-a".into(),
         groups: vec![],
         assignments: vec![],
+        discussions: vec![],
     };
     let reconciled = reconcile_coursework(&first, &[captured], SystemTime::now()).unwrap();
     assert_eq!(imported(&reconciled), imported(&first));

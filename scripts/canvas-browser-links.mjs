@@ -28,7 +28,7 @@ export function extractCanvasHtmlInPage(input) {
       links: options.maxLinks ?? limits.links,
     };
     if (!Number.isSafeInteger(requested.htmlBytes) || requested.htmlBytes < 1 || requested.htmlBytes > limits.htmlBytes
-        || !Number.isSafeInteger(requested.textCharacters) || requested.textCharacters < 1 || requested.textCharacters > limits.textCharacters
+        || !Number.isSafeInteger(requested.textCharacters) || requested.textCharacters < 1 || requested.textCharacters > limits.htmlBytes
         || !Number.isSafeInteger(requested.links) || requested.links < 1 || requested.links > limits.links) {
       fail("INVALID_LIMIT");
     }
@@ -42,6 +42,15 @@ export function extractCanvasHtmlInPage(input) {
     .replace(/[\u00a0\s]+/gu, " ")
     .trim()
     .slice(0, maxLength);
+  const cleanBodyText = (value, preserveWhitespace = false) => {
+    const cleaned = String(value ?? "")
+      .replace(/\b(?:https?:)?\/\/[^\s<>"'`]+/giu, "[link]")
+      .replace(/\b(?:javascript|data):[^\s<>"'`]+/giu, "[link]")
+      .replace(/(?:^|\s)(?:\/|\.{1,2}\/)[^\s<>"'`]*\?[^\s<>"'`#]*(?:verifier|token|signature|sig|access_token|auth|credential|password|x-amz-)[^\s<>"'`#]*/giu, " [link]")
+      .replace(/\b(?:verifier|(?:access[_-]?)?token|signature|sig|auth(?:orization)?|credential|password|policy|expires|awsaccesskeyid|(?:x-amz|x-goog)-[a-z0-9_-]+|se|sp|sv)\s*[:=]\s*[^\s&;,<>"'`]+/giu, "[redacted]")
+      .replace(/\u00a0/gu, " ");
+    return preserveWhitespace ? cleaned : cleaned.replace(/[ \t\f\v]+/gu, " ");
+  };
   const safeSource = (value) => cleanLabel(value || "unknown", limits.sourceCharacters) || "unknown";
   const publicQueryKeys = Object.freeze({
     "marymount.instructure.com": new Set(["page", "per_page", "tab"]),
@@ -166,12 +175,111 @@ export function extractCanvasHtmlInPage(input) {
     links.push(sanitizeLink(href, { source, title, baseUrl: options.baseUrl }));
   }
 
-  const rawText = document.body?.textContent ?? "";
-  const text = cleanLabel(rawText, bounded.textCharacters);
+  const allowedTags = new Set([
+    "p", "br", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "strong", "em", "b", "i", "u",
+    "a", "table", "thead", "tbody", "tr", "th", "td", "blockquote", "pre", "code", "span",
+  ]);
+  const removedTags = new Set(["script", "style", "template", "noscript", "iframe", "object", "embed", "form"]);
+  const escapeHtml = (value) => String(value).replace(/[&<>"']/gu, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
+  })[character]);
+  const sanitizeNode = (node, preserveWhitespace = false) => {
+    if (node.nodeType === 3) return escapeHtml(cleanBodyText(node.nodeValue, preserveWhitespace));
+    if (node.nodeType !== 1) return "";
+    const element = node;
+    const tag = element.tagName.toLowerCase();
+    if (removedTags.has(tag) || element.hasAttribute("hidden")
+        || element.getAttribute("aria-hidden") === "true") return "";
+    const children = [...element.childNodes].map((child) => sanitizeNode(child, preserveWhitespace || tag === "pre")).join("");
+    if (tag === "div") return `\n${children}\n`;
+    if (!allowedTags.has(tag)) return children;
+    if (tag === "br") return "<br>";
+    if (tag === "a") {
+      const href = element.getAttribute("href");
+      if (href === null || href.trim() === "") return children;
+      const link = sanitizeLink(href, { source, title: cleanLabel(element.textContent, limits.titleCharacters), baseUrl: options.baseUrl });
+      if (!link.clickable || typeof link.safeTarget !== "string") return children;
+      try {
+        const target = new URL(link.safeTarget);
+        if (target.hostname === "marymount.instructure.com"
+            && /^\/(?:api\/v1\/)?(?:courses\/[1-9]\d*\/)?files\/[1-9]\d*(?:\/(?:download|preview))?\/?$/u.test(target.pathname)) {
+          return children;
+        }
+      } catch {
+        return children;
+      }
+      return `<a href="${escapeHtml(link.safeTarget)}">${children}</a>`;
+    }
+    return `<${tag}>${children}</${tag}>`;
+  };
+  const safeHtml = [...(document.body?.childNodes ?? [])].map((node) => sanitizeNode(node)).join("");
+  const sanitizedDocument = new globalThis.DOMParser().parseFromString(safeHtml, "text/html");
+  const inlineText = (node, preserveWhitespace = false) => {
+    if (node.nodeType === 3) return cleanBodyText(node.nodeValue, preserveWhitespace);
+    if (node.nodeType !== 1) return "";
+    const tag = node.tagName.toLowerCase();
+    if (tag === "br") return "\n";
+    return [...node.childNodes].map((child) => inlineText(child, preserveWhitespace || tag === "pre")).join("");
+  };
+  const trimBlock = (value) => value.replace(/^[ \t\n]+|[ \t\n]+$/gu, "");
+  const isBlockTag = (tag) => ["p", "ul", "ol", "blockquote", "pre", "table"].includes(tag)
+    || /^h[1-6]$/u.test(tag);
+  const renderFlow = (nodes) => {
+    const blocks = [];
+    let inline = "";
+    const flushInline = () => {
+      const value = trimBlock(inline);
+      if (value) blocks.push(value);
+      inline = "";
+    };
+    for (const node of nodes) {
+      if (node.nodeType === 1 && isBlockTag(node.tagName.toLowerCase())) {
+        flushInline();
+        blocks.push(renderBlock(node));
+      } else {
+        inline += inlineText(node);
+      }
+    }
+    flushInline();
+    return blocks.filter(Boolean).join("\n\n");
+  };
+  const listText = (list, depth = 0) => {
+    const ordered = list.tagName.toLowerCase() === "ol";
+    let index = 0;
+    const rows = [];
+    for (const item of [...list.children].filter((child) => child.tagName.toLowerCase() === "li")) {
+      index += 1;
+      const nestedLists = [...item.children].filter((child) => ["ul", "ol"].includes(child.tagName.toLowerCase()));
+      const inline = renderFlow([...item.childNodes].filter((child) => !nestedLists.includes(child)));
+      const prefix = ordered ? `${index}. ` : "- ";
+      if (inline) rows.push(`${"  ".repeat(depth)}${prefix}${inline}`);
+      for (const nested of nestedLists) rows.push(listText(nested, depth + 1));
+    }
+    return rows.join("\n");
+  };
+  const renderBlock = (node) => {
+    if (node.nodeType === 3) return trimBlock(inlineText(node));
+    if (node.nodeType !== 1) return "";
+    const tag = node.tagName.toLowerCase();
+    if (tag === "ul" || tag === "ol") return listText(node);
+    if (/^h[1-6]$/u.test(tag)) return `${"#".repeat(Number(tag[1]))} ${trimBlock(inlineText(node))}`;
+    if (tag === "blockquote") return renderFlow([...node.childNodes]).split("\n").map((line) => `> ${line}`).join("\n");
+    if (tag === "pre") return `\`\`\`\n${inlineText(node)}\n\`\`\``;
+    if (tag === "table") {
+      const rows = [...node.querySelectorAll("tr")].map((row) => `| ${[...row.children]
+        .map((cell) => trimBlock(inlineText(cell)).replace(/\|/gu, "\\|")).join(" | ")} |`);
+      return rows.join("\n");
+    }
+    if (["p"].includes(tag)) return trimBlock(inlineText(node));
+    return renderFlow([...node.childNodes]);
+  };
+  const rawText = renderFlow([...(sanitizedDocument.body?.childNodes ?? [])]);
+  const text = rawText.slice(0, bounded.textCharacters);
   return {
     text,
+    html: safeHtml,
     links,
-    textTruncated: text.length === bounded.textCharacters && cleanLabel(rawText, bounded.textCharacters + 1).length > text.length,
+    textTruncated: rawText.length > text.length,
     linksTruncated,
   };
 }

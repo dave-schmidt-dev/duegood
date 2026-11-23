@@ -62,6 +62,7 @@ const COURSE_ENDPOINTS = Object.freeze([
 const DEDUPED_GAP_REASONS = new Set([
   "capture-budget", "detail-budget", "not-attempted", "pagination-budget",
 ]);
+const BODY_OMISSION_REASONS = new Set(["locked", "unpublished", "forbidden-optional", "not-found"]);
 const FILE_REFERENCE_ENDPOINTS = new Set([
   "assignments", "pages", "page", "discussions", "discussionEntries", "discussionReplies", "announcements",
   "groupPages", "groupPage", "groupDiscussions", "groupDiscussionEntries", "groupDiscussionReplies",
@@ -345,6 +346,19 @@ export async function collectCanvasBrowserCapture({
     const safeItems = [];
     for (let index = 0; index < result.items.length; index += 1) {
       const item = result.items[index];
+      const itemLinkedFiles = new Map();
+      const rememberLinkedHref = (reference) => {
+        rememberLinkedFile(reference);
+        if (!positiveId(reference?.fileId)) return;
+        const referenceCourseId = positiveId(reference.courseId) ? reference.courseId : null;
+        const referenceGroupId = positiveId(reference.groupId) ? reference.groupId : null;
+        const key = `${referenceCourseId ?? ""}:${referenceGroupId ?? ""}:${reference.fileId}`;
+        itemLinkedFiles.set(key, {
+          ...(referenceCourseId === null ? {} : { courseId: referenceCourseId }),
+          ...(referenceGroupId === null ? {} : { groupId: referenceGroupId }),
+          fileId: reference.fileId,
+        });
+      };
       if (FILE_REFERENCE_ENDPOINTS.has(endpoint)) {
         const attachments = canvasAttachmentFileReferences(item, { courseId, groupId });
         for (const reference of attachments.references) rememberLinkedFile(reference);
@@ -359,8 +373,14 @@ export async function collectCanvasBrowserCapture({
         groupId,
         allowedCourseIds: capturedCourseIds,
         ...(FILE_REFERENCE_ENDPOINTS.has(endpoint)
-          ? { onFileReference: rememberLinkedFile } : {}),
+          ? { onFileReference: rememberLinkedHref } : {}),
       });
+      if (itemLinkedFiles.size > 0) {
+        safeItem._canvasLinkedFiles = [...itemLinkedFiles.values()].sort((left, right) =>
+          (left.courseId ?? 0) - (right.courseId ?? 0)
+          || (left.groupId ?? 0) - (right.groupId ?? 0)
+          || left.fileId - right.fileId);
+      }
       if (FILE_REFERENCE_ENDPOINTS.has(endpoint) && safeItem._canvasLinksTruncated === true) {
         addNotAttemptedGap("file", courseId, groupId, "detail-budget");
       }
@@ -375,6 +395,19 @@ export async function collectCanvasBrowserCapture({
       ...(groupId === undefined ? {} : { groupId }),
       ...(contextCode === undefined ? {} : { contextCode }),
       items: safeItems, pages: result.pages });
+  };
+
+  const markBodyDetailOmission = (listEndpoint, detailEndpoint, courseId, itemId, idField = "id", groupId = undefined) => {
+    const gap = coverage[coverage.length - 1];
+    if (gap?.endpoint !== detailEndpoint || gap.courseId !== courseId || gap.groupId !== groupId
+        || gap.status !== "gap" || !BODY_OMISSION_REASONS.has(gap.reason)) return;
+    const resource = resources.find((row) => row.endpoint === listEndpoint && row.courseId === courseId
+      && row.groupId === groupId);
+    const item = resource?.items.find((row) => row[idField] === itemId);
+    if (item === undefined || isRecord(item._canvasBody)
+        && typeof item._canvasBody.html === "string" && typeof item._canvasBody.text === "string"
+        && typeof item._canvasBody.empty === "boolean") return;
+    item._canvasBodyOmissionReason = gap.reason;
   };
 
   let output;
@@ -503,7 +536,10 @@ export async function collectCanvasBrowserCapture({
             courseId,
             ...(safeSlug ? { pageSlug: slug } : { pageId }),
           });
-          if (gap) continue;
+          if (gap) {
+            markBodyDetailOmission("pages", "page", courseId, pageId, "page_id");
+            continue;
+          }
           if (result.items.length !== 1 || result.items[0].page_id !== pageId
               || safeSlug && result.items[0].url !== slug) throw captureError("PAGE_IDENTITY_MISMATCH");
           await addResource("page", courseId, result);
@@ -609,7 +645,10 @@ export async function collectCanvasBrowserCapture({
           }
           if (!reserveDetailRequest("quiz", courseId)) continue;
           const { result, gap } = await readEndpoint("quiz", { courseId, quizId: quiz.id });
-          if (gap) continue;
+          if (gap) {
+            markBodyDetailOmission("quizzes", "quiz", courseId, quiz.id);
+            continue;
+          }
           if (result.items.length !== 1 || result.items[0].id !== quiz.id) throw captureError("QUIZ_IDENTITY_MISMATCH");
           await addResource("quiz", courseId, result);
         }
@@ -625,6 +664,7 @@ export async function collectCanvasBrowserCapture({
       readEndpoint,
       addResource,
       addNotAttemptedGap,
+      markBodyDetailOmission,
       reserveDetailRequest,
       courseFileIds,
       courseIds,

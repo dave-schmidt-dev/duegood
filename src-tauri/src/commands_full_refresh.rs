@@ -41,8 +41,15 @@ pub(super) struct FullRefreshResult {
     pub calendar_status: &'static str,
     pub gap_count: u64,
     pub omission_count: u64,
+    pub body_count: u64,
+    pub empty_body_count: u64,
+    pub body_failure_reason: Option<&'static str>,
     pub rubric_count: u64,
     pub linked_file_count: u64,
+    pub export_status: &'static str,
+    pub export_written: u64,
+    pub export_unchanged: u64,
+    pub export_skipped_owner_files: u64,
     pub calendar_added: u64,
     pub calendar_updated: u64,
     pub calendar_held: u64,
@@ -65,8 +72,15 @@ enum RuntimeMessage {
         item_count: u64,
         gap_count: u64,
         omission_count: u64,
+        body_count: u64,
+        empty_body_count: u64,
+        body_failure_reason: String,
         rubric_count: u64,
         linked_file_count: u64,
+        export_status: String,
+        export_written: u64,
+        export_unchanged: u64,
+        export_skipped_owner_files: u64,
         imported_courses: u64,
         archived_courses: u64,
         promoted_blobs: u64,
@@ -80,9 +94,35 @@ enum RuntimeMessage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BrowserOutcome {
-    Complete { gaps: u64, omissions: u64, rubrics: u64, linked_files: u64 },
-    Incomplete { gaps: u64, omissions: u64, rubrics: u64, linked_files: u64 },
-    Failed { code: &'static str },
+    Complete {
+        gaps: u64,
+        omissions: u64,
+        bodies: u64,
+        empty_bodies: u64,
+        body_failure_reason: Option<&'static str>,
+        rubrics: u64,
+        linked_files: u64,
+        export_status: &'static str,
+        export_written: u64,
+        export_unchanged: u64,
+        export_skipped_owner_files: u64,
+    },
+    Incomplete {
+        gaps: u64,
+        omissions: u64,
+        bodies: u64,
+        empty_bodies: u64,
+        body_failure_reason: Option<&'static str>,
+        rubrics: u64,
+        linked_files: u64,
+        export_status: &'static str,
+        export_written: u64,
+        export_unchanged: u64,
+        export_skipped_owner_files: u64,
+    },
+    Failed {
+        code: &'static str,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -138,12 +178,18 @@ impl Inner {
             if !self.ical_refresh_available(store) {
                 return Ok(CalendarOutcome::Unavailable);
             }
-            if !(report.borrow_mut())(FullRefreshProgress { phase: "calendar", reason: None }) {
+            if !(report.borrow_mut())(FullRefreshProgress {
+                phase: "calendar",
+                reason: None,
+            }) {
                 self.terminate_refresh_process();
                 return Err(());
             }
             let result = self.refresh_ical_under_refresh_guard(&mut |_| {
-                (report.borrow_mut())(FullRefreshProgress { phase: "calendar", reason: None })
+                (report.borrow_mut())(FullRefreshProgress {
+                    phase: "calendar",
+                    reason: None,
+                })
             });
             match result {
                 Ok(result) if result.held == 0 => Ok(CalendarOutcome::Complete(result)),
@@ -162,7 +208,10 @@ impl Inner {
                 "Full refresh was stopped before it completed.",
             )
         })?;
-        if !(report.borrow_mut())(FullRefreshProgress { phase: "complete", reason: None }) {
+        if !(report.borrow_mut())(FullRefreshProgress {
+            phase: "complete",
+            reason: None,
+        }) {
             return Err(CommandError::new(
                 "refresh-cancelled",
                 "Full refresh was stopped before it completed.",
@@ -183,12 +232,90 @@ where
 }
 
 fn combine_outcomes(browser: BrowserOutcome, calendar: CalendarOutcome) -> FullRefreshResult {
-    let (browser_status, browser_gaps, omissions, rubrics, linked_files, browser_error) = match browser {
-        BrowserOutcome::Complete { gaps, omissions, rubrics, linked_files } =>
-            ("complete", gaps, omissions, rubrics, linked_files, None),
-        BrowserOutcome::Incomplete { gaps, omissions, rubrics, linked_files } =>
-            ("incomplete", gaps, omissions, rubrics, linked_files, None),
-        BrowserOutcome::Failed { code } => ("failed", 0, 0, 0, 0, Some(code)),
+    let (
+        browser_status,
+        browser_gaps,
+        omissions,
+        bodies,
+        empty_bodies,
+        body_failure_reason,
+        rubrics,
+        linked_files,
+        export_status,
+        export_written,
+        export_unchanged,
+        export_skipped_owner_files,
+        browser_error,
+    ) = match browser {
+        BrowserOutcome::Complete {
+            gaps,
+            omissions,
+            bodies,
+            empty_bodies,
+            body_failure_reason,
+            rubrics,
+            linked_files,
+            export_status,
+            export_written,
+            export_unchanged,
+            export_skipped_owner_files,
+        } => (
+            "complete",
+            gaps,
+            omissions,
+            bodies,
+            empty_bodies,
+            body_failure_reason,
+            rubrics,
+            linked_files,
+            export_status,
+            export_written,
+            export_unchanged,
+            export_skipped_owner_files,
+            None,
+        ),
+        BrowserOutcome::Incomplete {
+            gaps,
+            omissions,
+            bodies,
+            empty_bodies,
+            body_failure_reason,
+            rubrics,
+            linked_files,
+            export_status,
+            export_written,
+            export_unchanged,
+            export_skipped_owner_files,
+        } => (
+            "incomplete",
+            gaps,
+            omissions,
+            bodies,
+            empty_bodies,
+            body_failure_reason,
+            rubrics,
+            linked_files,
+            export_status,
+            export_written,
+            export_unchanged,
+            export_skipped_owner_files,
+            None,
+        ),
+        BrowserOutcome::Failed { code } => (
+            "failed",
+            0,
+            0,
+            0,
+            0,
+            None,
+            0,
+            0,
+            "disabled",
+            0,
+            0,
+            0,
+            Some(code),
+        ),
     };
     let (calendar_status, added, updated, held, updated_at, calendar_error) = match calendar {
         CalendarOutcome::Complete(result) => (
@@ -223,8 +350,15 @@ fn combine_outcomes(browser: BrowserOutcome, calendar: CalendarOutcome) -> FullR
         calendar_status,
         gap_count: browser_gaps,
         omission_count: omissions,
+        body_count: bodies,
+        empty_body_count: empty_bodies,
+        body_failure_reason,
         rubric_count: rubrics,
         linked_file_count: linked_files,
+        export_status,
+        export_written,
+        export_unchanged,
+        export_skipped_owner_files,
         calendar_added: added,
         calendar_updated: updated,
         calendar_held: held,
@@ -346,12 +480,17 @@ fn run_browser_client_with_timeout(
                             failed = Some("browser-output-invalid");
                             break;
                         }
-                        let Some((ui_phase, ui_reason)) = runtime_progress_phase(&phase, reason.as_deref()) else {
+                        let Some((ui_phase, ui_reason)) =
+                            runtime_progress_phase(&phase, reason.as_deref())
+                        else {
                             failed = Some("browser-output-invalid");
                             break;
                         };
                         if last_ui_phase != Some(ui_phase) {
-                            if !report(FullRefreshProgress { phase: ui_phase, reason: ui_reason }) {
+                            if !report(FullRefreshProgress {
+                                phase: ui_phase,
+                                reason: ui_reason,
+                            }) {
                                 inner.terminate_refresh_process();
                                 return Err(BrowserRunError::Cancelled);
                             }
@@ -364,8 +503,15 @@ fn run_browser_client_with_timeout(
                         item_count,
                         gap_count,
                         omission_count,
+                        body_count,
+                        empty_body_count,
+                        body_failure_reason,
                         rubric_count,
                         linked_file_count,
+                        export_status,
+                        export_written,
+                        export_unchanged,
+                        export_skipped_owner_files,
                         imported_courses,
                         archived_courses,
                         promoted_blobs,
@@ -379,8 +525,19 @@ fn run_browser_client_with_timeout(
                         && item_count <= 100_000
                         && gap_count <= 100_000
                         && omission_count <= 100_000
+                        && body_count <= 100_000
+                        && empty_body_count <= body_count
+                        && matches!(
+                            body_failure_reason.as_str(),
+                            "none" | "BODY_MISSING" | "BODY_SANITIZE_FAILED"
+                        )
+                        && (status != "complete" || body_failure_reason == "none")
                         && rubric_count <= 100_000
                         && linked_file_count <= 100_000
+                        && matches!(export_status.as_str(), "complete" | "disabled" | "failed")
+                        && export_written <= 100_000
+                        && export_unchanged <= 100_000
+                        && export_skipped_owner_files <= 100_000
                         && imported_courses <= 100_000
                         && archived_courses <= 100_000
                         && promoted_blobs <= 100_000
@@ -393,15 +550,49 @@ fn run_browser_client_with_timeout(
                             ("complete", _) => BrowserOutcome::Complete {
                                 gaps: gap_count,
                                 omissions: omission_count,
+                                bodies: body_count,
+                                empty_bodies: empty_body_count,
+                                body_failure_reason: match body_failure_reason.as_str() {
+                                    "none" => None,
+                                    "BODY_MISSING" => Some("BODY_MISSING"),
+                                    "BODY_SANITIZE_FAILED" => Some("BODY_SANITIZE_FAILED"),
+                                    _ => unreachable!("body failure reason was validated"),
+                                },
                                 rubrics: rubric_count,
                                 linked_files: linked_file_count,
+                                export_status: match export_status.as_str() {
+                                    "complete" => "complete",
+                                    "disabled" => "disabled",
+                                    "failed" => "failed",
+                                    _ => unreachable!("export status was validated"),
+                                },
+                                export_written,
+                                export_unchanged,
+                                export_skipped_owner_files,
                             },
                             ("incomplete", None | Some("CAPTURE_GAPS")) => {
                                 BrowserOutcome::Incomplete {
                                     gaps: gap_count,
                                     omissions: omission_count,
+                                    bodies: body_count,
+                                    empty_bodies: empty_body_count,
+                                    body_failure_reason: match body_failure_reason.as_str() {
+                                        "none" => None,
+                                        "BODY_MISSING" => Some("BODY_MISSING"),
+                                        "BODY_SANITIZE_FAILED" => Some("BODY_SANITIZE_FAILED"),
+                                        _ => unreachable!("body failure reason was validated"),
+                                    },
                                     rubrics: rubric_count,
                                     linked_files: linked_file_count,
+                                    export_status: match export_status.as_str() {
+                                        "complete" => "complete",
+                                        "disabled" => "disabled",
+                                        "failed" => "failed",
+                                        _ => unreachable!("export status was validated"),
+                                    },
+                                    export_written,
+                                    export_unchanged,
+                                    export_skipped_owner_files,
                                 }
                             }
                             ("incomplete", Some("HELPER_STALE")) => BrowserOutcome::Failed {
@@ -488,17 +679,25 @@ fn valid_runtime_error_code(value: Option<&str>) -> bool {
     })
 }
 
-fn runtime_progress_phase(phase: &str, reason: Option<&str>) -> Option<(&'static str, Option<&'static str>)> {
+fn runtime_progress_phase(
+    phase: &str,
+    reason: Option<&str>,
+) -> Option<(&'static str, Option<&'static str>)> {
     match (phase, reason) {
         ("sign-in-window", Some(reason)) => Some(("sign-in-window", Some(sign_in_reason(reason)?))),
-        ("broker-starting" | "waiting-for-canvas" | "capturing", None) => Some(("browser-capture", None)),
+        ("broker-starting" | "waiting-for-canvas" | "capturing", None) => {
+            Some(("browser-capture", None))
+        }
         ("importing" | "complete", None) => Some(("browser-import", None)),
         _ => None,
     }
 }
 
 fn sign_in_reason(value: &str) -> Option<&'static str> {
-    SIGN_IN_REASONS.iter().copied().find(|reason| *reason == value)
+    SIGN_IN_REASONS
+        .iter()
+        .copied()
+        .find(|reason| *reason == value)
 }
 
 #[tauri::command]

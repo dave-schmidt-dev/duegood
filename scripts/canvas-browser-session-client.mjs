@@ -318,6 +318,9 @@ function importStatusView(result) {
       || !Number.isSafeInteger(result.runId) || result.runId <= 0
       || !["importedCourses", "archivedCourses", "promotedBlobs", "reusedBlobs", "bytesVerified"]
         .every((key) => Number.isSafeInteger(result[key]) && result[key] >= 0)
+      || !["exportWritten", "exportUnchanged", "exportSkippedOwnerFiles"]
+        .every((key) => Number.isSafeInteger(result[key]) && result[key] >= 0 && result[key] <= 100_000)
+      || !["complete", "disabled", "failed"].includes(result.exportStatus)
       || typeof result.alreadyCurrent !== "boolean") throw new Error("NATIVE_IMPORT_PROTOCOL_INVALID");
   return {
     status: "IMPORTED",
@@ -327,6 +330,10 @@ function importStatusView(result) {
     reusedBlobs: result.reusedBlobs,
     bytesVerified: result.bytesVerified,
     alreadyCurrent: result.alreadyCurrent,
+    exportStatus: result.exportStatus,
+    exportWritten: result.exportWritten,
+    exportUnchanged: result.exportUnchanged,
+    exportSkippedOwnerFiles: result.exportSkippedOwnerFiles,
   };
 }
 
@@ -337,14 +344,18 @@ function safeImportErrorCode(error) {
 
 function captureSummary(frame, invalidResponse = "INVALID_CAPTURE_RESPONSE") {
   const keys = ["status", "resourceCount", "itemCount", "gapCount", "dailyGapCount", "omissionCount",
-    "rubricCount", "linkedFileCount", "fileBodiesIncomplete"];
+    "bodyCount", "emptyBodyCount", "bodyFailureReason", "rubricCount", "linkedFileCount", "fileBodiesIncomplete"];
   if (!frame || typeof frame !== "object" || Array.isArray(frame)
       || Object.keys(frame).length !== keys.length || keys.some((key) => !Object.hasOwn(frame, key))
       || !["COMPLETE", "PARTIAL"].includes(frame.status) || typeof frame.fileBodiesIncomplete !== "boolean"
+      || (frame.bodyFailureReason !== null
+        && !["BODY_MISSING", "BODY_SANITIZE_FAILED"].includes(frame.bodyFailureReason))
+      || (frame.status === "COMPLETE" && frame.bodyFailureReason !== null)
       || (frame.status === "COMPLETE"
         && (frame.gapCount !== 0 || frame.dailyGapCount !== 0 || frame.fileBodiesIncomplete))
+      || frame.emptyBodyCount > frame.bodyCount
       || !["resourceCount", "itemCount", "gapCount", "dailyGapCount", "omissionCount",
-        "rubricCount", "linkedFileCount"].every((key) =>
+        "bodyCount", "emptyBodyCount", "rubricCount", "linkedFileCount"].every((key) =>
         Number.isSafeInteger(frame[key]) && frame[key] >= 0 && frame[key] <= 100_000)) {
     throw new Error(invalidResponse);
   }
@@ -355,6 +366,9 @@ function captureSummary(frame, invalidResponse = "INVALID_CAPTURE_RESPONSE") {
     gapCount: frame.gapCount,
     dailyGapCount: frame.dailyGapCount,
     omissionCount: frame.omissionCount,
+    bodyCount: frame.bodyCount,
+    emptyBodyCount: frame.emptyBodyCount,
+    bodyFailureReason: frame.bodyFailureReason,
     rubricCount: frame.rubricCount,
     linkedFileCount: frame.linkedFileCount,
     fileBodiesIncomplete: frame.fileBodiesIncomplete,
@@ -371,6 +385,8 @@ function captureSummary(frame, invalidResponse = "INVALID_CAPTURE_RESPONSE") {
  * @property {(options: {confirmedFirstUserId: number, progress: (status: string) => void}) => Promise<{
  *   type: string, status: string, runId: number, importedCourses: number, archivedCourses: number,
  *   promotedBlobs: number, reusedBlobs: number, bytesVerified: number, alreadyCurrent: boolean
+ *   exportStatus: "complete" | "disabled" | "failed", exportWritten: number,
+ *   exportUnchanged: number, exportSkippedOwnerFiles: number
  * }>} [nativeImport]
  * @property {(verb: "begin" | "fail", runId?: number) => Promise<{runId: number}>} [stateCommand]
  * @property {(status: string) => void} [reportImportProgress]

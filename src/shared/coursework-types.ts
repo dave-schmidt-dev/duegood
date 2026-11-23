@@ -32,6 +32,7 @@ interface LocalTimelineEvent extends LocalGradeRecord {
   readonly kind: string | null;
   readonly endsAt?: string | null;
   readonly detail: string | null;
+  readonly assignmentDetail?: string | null;
   readonly place: string | null;
   readonly notes: string | null;
   readonly discussionPostDone: boolean;

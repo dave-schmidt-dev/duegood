@@ -17,16 +17,24 @@ use crate::reconcile::CourseAssignments;
 
 #[path = "browser_projection_calendar.rs"]
 mod calendar;
+#[path = "browser_projection_content.rs"]
+mod content;
 #[path = "browser_projection_documents.rs"]
 mod documents;
+#[path = "browser_projection_group_discussions.rs"]
+mod group_discussions;
 #[path = "browser_projection_sanitize.rs"]
 pub(crate) mod sanitize;
 
-use documents::{project_course, project_document_item, project_file_receipts, put_json};
+use content::{
+    document_item_id, index_detail_records, project_assignments, project_course_files,
+    project_document_item_with_detail, project_linked_file_names, project_standalone_discussions,
+};
+use documents::{project_course, project_file_receipts, put_json};
 use sanitize::{project_fields, sanitize_value};
 
 const REQUIRED_ENDPOINTS: [&str; 4] = ["course", "assignments", "assignmentGroups", "submissions"];
-const COURSE_DOCS: [(&str, &str); 10] = [
+const COURSE_DOCS: [(&str, &str); 11] = [
     ("courseTabs", "tabs"),
     ("pages", "pages"),
     ("modules", "modules"),
@@ -34,6 +42,7 @@ const COURSE_DOCS: [(&str, &str); 10] = [
     ("assignments", "assignments"),
     ("discussions", "discussions"),
     ("announcements", "announcements"),
+    ("quizzes", "quizzes"),
     ("courseFiles", "files"),
     ("folders", "folders"),
     ("course", "course"),
@@ -120,14 +129,19 @@ pub fn project_snapshot(
             return Err(ProjectionError::DuplicateScope);
         }
     }
+    let active_course_ids: HashSet<u64> = scope_by_id.keys().copied().collect();
+    let group_topic_rows = group_discussions::group_discussion_rows(resources, &active_course_ids)?;
 
     let supported: HashSet<&str> = COURSE_DOCS
         .iter()
         .map(|(endpoint, _)| *endpoint)
         .chain(REQUIRED_ENDPOINTS)
+        .chain(["page", "quiz"])
         .collect();
     let mut by_course: HashMap<(u64, String), &Value> = HashMap::new();
     let mut linked_file_resources: HashMap<u64, Vec<&Value>> = HashMap::new();
+    let mut page_detail_resources: HashMap<u64, Vec<&Value>> = HashMap::new();
+    let mut quiz_detail_resources: HashMap<u64, Vec<&Value>> = HashMap::new();
     let mut file_receipts: Option<&Value> = None;
     for resource in resources {
         let endpoint = resource
@@ -153,6 +167,23 @@ pub fn project_snapshot(
                 }
             } else if !course_id_value.is_null() {
                 return Err(ProjectionError::InvalidResource);
+            }
+            continue;
+        }
+        if matches!(endpoint, "page" | "quiz") {
+            let Some(course_id) = positive_id(course_id_value) else {
+                if course_id_value.is_null() {
+                    continue;
+                }
+                return Err(ProjectionError::InvalidResource);
+            };
+            if scope_by_id.contains_key(&course_id) {
+                let details = if endpoint == "page" {
+                    &mut page_detail_resources
+                } else {
+                    &mut quiz_detail_resources
+                };
+                details.entry(course_id).or_default().push(resource);
             }
             continue;
         }
@@ -195,21 +226,68 @@ pub fn project_snapshot(
         let assignments_raw = items(endpoint_resources["assignments"])?;
         let groups_raw = items(endpoint_resources["assignmentGroups"])?;
         let submissions_raw = items(endpoint_resources["submissions"])?;
+        let linked_file_names = project_linked_file_names(
+            linked_file_resources.get(&scope.canvas_course_id),
+            scope.canvas_course_id,
+        )?;
+        let mut discussions_raw = by_course
+            .get(&(scope.canvas_course_id, "discussions".to_owned()))
+            .copied()
+            .map(items)
+            .transpose()?
+            .unwrap_or_default()
+            .to_vec();
+        content::merge_group_discussions(
+            &mut discussions_raw,
+            &group_topic_rows,
+            scope.canvas_course_id,
+        )?;
+        let announcements_raw = by_course
+            .get(&(scope.canvas_course_id, "announcements".to_owned()))
+            .copied()
+            .map(items)
+            .transpose()?
+            .unwrap_or_default()
+            .to_vec();
+        let course_topics = content::merge_course_announcements(
+            &discussions_raw,
+            &announcements_raw,
+            scope.canvas_course_id,
+        )?;
+        let page_details = index_detail_records(
+            page_detail_resources.get(&scope.canvas_course_id),
+            "page",
+            scope.canvas_course_id,
+        )?;
+        let quiz_details = index_detail_records(
+            quiz_detail_resources.get(&scope.canvas_course_id),
+            "quiz",
+            scope.canvas_course_id,
+        )?;
         let groups = project_groups(groups_raw, scope.canvas_course_id)?;
         let assignments = project_assignments(
             assignments_raw,
             submissions_raw,
+            &course_topics,
             scope.canvas_course_id,
             snapshot
                 .get("identity")
                 .and_then(|identity| identity.get("userId"))
                 .and_then(positive_id),
             &groups,
+            &linked_file_names,
+        )?;
+        let standalone_discussions = project_standalone_discussions(
+            &course_topics,
+            &assignments,
+            scope.canvas_course_id,
+            &linked_file_names,
         )?;
         coursework.push(CourseAssignments {
             key: scope.key.clone(),
             groups: groups.clone(),
             assignments: assignments.clone(),
+            discussions: standalone_discussions,
         });
 
         let mut inventory = Map::new();
@@ -251,12 +329,24 @@ pub fn project_snapshot(
                 .copied()
             {
                 let raw_items = items(resource)?;
+                let details = match endpoint {
+                    "pages" => Some(&page_details),
+                    "quizzes" => Some(&quiz_details),
+                    _ => None,
+                };
                 Value::Array(
                     raw_items
                         .iter()
                         .map(|item| {
                             validate_course_identity(item, scope.canvas_course_id)?;
-                            project_document_item(endpoint, item)
+                            project_document_item_with_detail(
+                                endpoint,
+                                item,
+                                details.and_then(|records| {
+                                    document_item_id(endpoint, item).and_then(|id| records.get(&id))
+                                }),
+                                &linked_file_names,
+                            )
                         })
                         .collect::<Result<Vec<_>, _>>()?,
                 )
@@ -304,76 +394,6 @@ pub fn project_snapshot(
     })
 }
 
-fn project_course_files(
-    listed_files: Option<&Value>,
-    linked_files: Option<&Vec<&Value>>,
-    course_id: u64,
-    run_id: Option<u64>,
-) -> Result<Option<Vec<Value>>, ProjectionError> {
-    if listed_files.is_none() && linked_files.is_none() {
-        return Ok(None);
-    }
-    let mut files = Vec::new();
-    let mut indexes = HashMap::new();
-    if let Some(resource) = listed_files {
-        for item in items(resource)? {
-            validate_course_identity(item, course_id)?;
-            insert_projected_file(
-                &mut files,
-                &mut indexes,
-                project_document_item("courseFiles", item)?,
-            )?;
-        }
-    }
-    if let Some(resources) = linked_files {
-        for resource in resources {
-            for item in items(resource)? {
-                validate_course_identity(item, course_id)?;
-                let mut projected = project_document_item("file", item)?;
-                if let (Some(run_id), Some(object)) = (run_id, projected.as_object_mut()) {
-                    object.insert("linkedCaptureRunId".into(), Value::from(run_id));
-                }
-                insert_projected_file(
-                    &mut files,
-                    &mut indexes,
-                    projected,
-                )?;
-            }
-        }
-    }
-    Ok(Some(files))
-}
-
-fn insert_projected_file(
-    files: &mut Vec<Value>,
-    indexes: &mut HashMap<u64, usize>,
-    file: Value,
-) -> Result<(), ProjectionError> {
-    let id = file
-        .get("id")
-        .and_then(positive_id)
-        .ok_or(ProjectionError::InvalidResource)?;
-    if let Some(index) = indexes.get(&id).copied() {
-        let mut previous = files[index]
-            .as_object()
-            .cloned()
-            .ok_or(ProjectionError::InvalidResource)?;
-        let mut candidate = file
-            .as_object()
-            .cloned()
-            .ok_or(ProjectionError::InvalidResource)?;
-        previous.remove("linkedCaptureRunId");
-        candidate.remove("linkedCaptureRunId");
-        if previous != candidate {
-            return Err(ProjectionError::InvalidResource);
-        }
-        return Ok(());
-    }
-    indexes.insert(id, files.len());
-    files.push(file);
-    Ok(())
-}
-
 fn capture_truncation_gaps(
     scope: &BrowserCourseScope,
     resources: &HashMap<(u64, String), &Value>,
@@ -419,14 +439,14 @@ fn safe_component(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
-fn positive_id(value: &Value) -> Option<u64> {
+pub(super) fn positive_id(value: &Value) -> Option<u64> {
     let id = value
         .as_u64()
         .or_else(|| value.as_str().and_then(|text| text.parse().ok()))?;
     (id > 0).then_some(id)
 }
 
-fn items(resource: &Value) -> Result<&[Value], ProjectionError> {
+pub(super) fn items(resource: &Value) -> Result<&[Value], ProjectionError> {
     resource
         .get("items")
         .and_then(Value::as_array)
@@ -455,125 +475,7 @@ fn project_groups(groups: &[Value], course_id: u64) -> Result<Vec<Value>, Projec
         .collect()
 }
 
-fn project_assignments(
-    assignments: &[Value],
-    submissions: &[Value],
-    course_id: u64,
-    expected_user_id: Option<u64>,
-    groups: &[Value],
-) -> Result<Vec<Value>, ProjectionError> {
-    let mut group_ids = HashSet::new();
-    for group in groups {
-        if let Some(id) = group.get("id").and_then(positive_id) {
-            group_ids.insert(id);
-        }
-    }
-    let mut submission_by_assignment = HashMap::<u64, Map<String, Value>>::new();
-    for submission in submissions {
-        validate_course_identity(submission, course_id)?;
-        if let (Some(expected), Some(actual)) = (
-            expected_user_id,
-            submission.get("user_id").and_then(positive_id),
-        ) {
-            if expected != actual {
-                return Err(ProjectionError::IdentityMismatch);
-            }
-        }
-        let assignment_id = submission
-            .get("assignment_id")
-            .and_then(positive_id)
-            .ok_or(ProjectionError::InvalidResource)?;
-        let projected = project_fields(
-            submission,
-            &[
-                "workflow_state",
-                "submitted_at",
-                "graded_at",
-                "grade",
-                "score",
-                "excused",
-                "missing",
-                "late",
-            ],
-        )?;
-        if submission_by_assignment
-            .insert(assignment_id, projected)
-            .is_some()
-        {
-            return Err(ProjectionError::InvalidResource);
-        }
-    }
-
-    let mut seen = HashSet::new();
-    let mut output = Vec::with_capacity(assignments.len());
-    for assignment in assignments {
-        validate_course_identity(assignment, course_id)?;
-        let id = assignment
-            .get("id")
-            .and_then(positive_id)
-            .ok_or(ProjectionError::InvalidResource)?;
-        if assignment.get("name").and_then(Value::as_str).is_none() {
-            return Err(ProjectionError::InvalidResource);
-        }
-        if !seen.insert(id) {
-            return Err(ProjectionError::InvalidResource);
-        }
-        if let Some(group) = assignment.get("assignment_group_id") {
-            if !group.is_null() {
-                let group_id = positive_id(group).ok_or(ProjectionError::InvalidResource)?;
-                if !group_ids.contains(&group_id) {
-                    return Err(ProjectionError::IdentityMismatch);
-                }
-            }
-        }
-        let mut projected = project_fields(
-            assignment,
-            &[
-                "id",
-                "name",
-                "due_at",
-                "points_possible",
-                "assignment_group_id",
-                "html_url",
-                "submission_types",
-                "links",
-            ],
-        )?;
-        projected.extend(crate::canvas_rubric::assignment_rubric_fields(assignment)?);
-        if let Some(nested) = assignment.get("submission") {
-            projected.insert(
-                "submission".into(),
-                if nested.is_null() {
-                    Value::Null
-                } else {
-                    Value::Object(project_fields(
-                        nested,
-                        &[
-                            "workflow_state",
-                            "submitted_at",
-                            "graded_at",
-                            "grade",
-                            "score",
-                            "excused",
-                            "missing",
-                            "late",
-                        ],
-                    )?)
-                },
-            );
-        }
-        if let Some(submission) = submission_by_assignment.remove(&id) {
-            projected.insert("submission".into(), Value::Object(submission));
-        }
-        output.push(Value::Object(projected));
-    }
-    if !submission_by_assignment.is_empty() {
-        return Err(ProjectionError::IdentityMismatch);
-    }
-    Ok(output)
-}
-
-fn validate_course_identity(item: &Value, expected: u64) -> Result<(), ProjectionError> {
+pub(super) fn validate_course_identity(item: &Value, expected: u64) -> Result<(), ProjectionError> {
     let object = item.as_object().ok_or(ProjectionError::InvalidResource)?;
     for field in ["course_id", "courseId"] {
         if let Some(value) = object.get(field) {

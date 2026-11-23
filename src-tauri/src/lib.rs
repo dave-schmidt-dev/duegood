@@ -6,6 +6,7 @@
 //! The store lives in the fixed application-data folder for the bundle identifier.
 
 mod browser_account_projection;
+pub(crate) mod browser_body_coverage;
 mod browser_bundle;
 mod browser_export;
 mod browser_export_io;
@@ -18,6 +19,7 @@ mod browser_reconcile;
 mod browser_resources;
 mod browser_resources_io;
 mod canvas;
+mod canvas_item_export;
 mod capture;
 mod capture_archive;
 mod capture_media;

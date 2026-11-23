@@ -192,6 +192,7 @@ pub fn capture_all(
             key: scope.key.clone(),
             groups: captured.groups,
             assignments: captured.assignments,
+            discussions: Vec::new(),
         });
         progress(RefreshProgress::new(
             RefreshPhase::Fetch,

@@ -14,6 +14,52 @@ pub(super) fn identity_key(value: &Value) -> Option<String> {
     }
 }
 
+pub(super) fn canvas_identity(item: &Value) -> Option<(String, String, String)> {
+    Some((
+        item.get("course")?.as_str()?.to_owned(),
+        item.get("canvasResourceType")
+            .or_else(|| item.get("canvasType"))
+            .and_then(Value::as_str)
+            .unwrap_or("assignment")
+            .to_owned(),
+        identity_key(item.get("canvasId")?)?,
+    ))
+}
+
+pub(super) fn same_canvas_identity(old: &Value, fresh: &Value) -> bool {
+    old.get("source").and_then(Value::as_str) == Some("canvas")
+        && canvas_identity(old).is_some_and(|identity| Some(identity) == canvas_identity(fresh))
+}
+
+pub(super) fn revivable_archived_index(
+    archive: &[Value],
+    course: &str,
+    canvas_type: &str,
+    canvas_id: &str,
+) -> Result<Option<usize>, ReconcileError> {
+    let mut found = None;
+    for (index, item) in archive.iter().enumerate() {
+        if item.get("source").and_then(Value::as_str) != Some("canvas") {
+            continue;
+        }
+        if item.get("canvasId").and_then(identity_key).as_deref() != Some(canvas_id)
+            || item.get("course").and_then(Value::as_str) != Some(course)
+            || item
+                .get("canvasResourceType")
+                .or_else(|| item.get("canvasType"))
+                .and_then(Value::as_str)
+                .unwrap_or("assignment")
+                != canvas_type
+        {
+            continue;
+        }
+        if found.replace(index).is_some() {
+            return Err(invalid("archived Canvas assignment identity is duplicated"));
+        }
+    }
+    Ok(found)
+}
+
 pub(super) fn reference_key(
     reference: &Map<String, Value>,
 ) -> Result<(String, String, String, String, Option<String>), ReconcileError> {
@@ -98,6 +144,14 @@ pub(super) fn item_matches_assignment(
     canvas_id: &str,
 ) -> Result<bool, ReconcileError> {
     if item.get("course").and_then(Value::as_str) != Some(course) {
+        return Ok(false);
+    }
+    if item
+        .get("canvasResourceType")
+        .or_else(|| item.get("canvasType"))
+        .and_then(Value::as_str)
+        .is_some_and(|item_type| item_type != "assignment")
+    {
         return Ok(false);
     }
     if item.get("canvasId").and_then(identity_key).as_deref() == Some(canvas_id) {

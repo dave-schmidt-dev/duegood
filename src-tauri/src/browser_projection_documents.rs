@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{Map, Value};
 
-use super::sanitize::{project_fields, sanitize_text, sanitize_value};
+use super::sanitize::{project_fields, sanitize_structured_text, sanitize_text, sanitize_value};
 use super::{items, positive_id, ProjectionError};
 
 pub(super) fn project_course(course: &Value) -> Result<Map<String, Value>, ProjectionError> {
@@ -38,26 +38,61 @@ pub(super) fn project_document_item(
 ) -> Result<Value, ProjectionError> {
     let fields: &[&str] = match endpoint {
         "courseTabs" => &["id", "label", "position", "visibility", "hidden", "links"],
-        "pages" => &["page_id", "title", "url", "updated_at", "body", "links"],
+        "pages" => &[
+            "page_id",
+            "title",
+            "url",
+            "created_at",
+            "updated_at",
+            "body",
+            "links",
+        ],
         "modules" => &["id", "name", "items_count", "items", "links"],
         "discussions" => &[
             "id",
             "title",
             "discussion_type",
+            "created_at",
+            "updated_at",
             "posted_at",
+            "delayed_post_at",
+            "unlock_at",
+            "lock_at",
             "due_at",
             "html_url",
             "assignment_id",
             "is_announcement",
+            "require_initial_post",
             "links",
         ],
         "announcements" => &[
             "id",
             "title",
+            "created_at",
+            "updated_at",
             "posted_at",
+            "delayed_post_at",
+            "unlock_at",
+            "lock_at",
+            "due_at",
             "message",
             "html_url",
             "context_code",
+            "links",
+        ],
+        "quizzes" => &[
+            "id",
+            "title",
+            "created_at",
+            "updated_at",
+            "posted_at",
+            "delayed_post_at",
+            "unlock_at",
+            "lock_at",
+            "due_at",
+            "description",
+            "html_url",
+            "points_possible",
             "links",
         ],
         "courseFiles" | "file" => &[
@@ -80,7 +115,27 @@ pub(super) fn project_document_item(
         ],
         _ => return Err(ProjectionError::InvalidResource),
     };
-    let mut projected = project_fields(item, fields)?;
+    let body_field = match endpoint {
+        "pages" => Some("body"),
+        "discussions" | "announcements" => Some("message"),
+        "quizzes" => Some("description"),
+        _ => None,
+    };
+    let projected_fields: Vec<&str> = fields
+        .iter()
+        .copied()
+        .filter(|field| Some(*field) != body_field)
+        .collect();
+    let mut projected = project_fields(item, &projected_fields)?;
+    if let Some(linked_files) = project_linked_files(item, &HashMap::new())? {
+        projected.insert("linkedFiles".into(), Value::Array(linked_files));
+    }
+    if let Some(attachments) = project_attachments(item)? {
+        projected.insert("attachments".into(), Value::Array(attachments));
+    }
+    if let Some(body_field) = body_field {
+        project_body_fields(item, body_field, &mut projected)?;
+    }
     if matches!(endpoint, "courseFiles" | "file") && item.get("url").is_some() {
         projected.insert("url".into(), Value::Null);
     }
@@ -104,6 +159,144 @@ pub(super) fn project_document_item(
         }
     }
     Ok(Value::Object(projected))
+}
+
+/// Projects the browser sanitizer's retained HTML and structured text together.
+///
+/// Older captures contain only the sanitizer's plain-text replacement. Those remain readable,
+/// while captures without a body leave the local item untouched during reconciliation.
+pub(super) fn project_body_fields(
+    item: &Value,
+    legacy_field: &str,
+    projected: &mut Map<String, Value>,
+) -> Result<(), ProjectionError> {
+    if let Some(body) = item.get("_canvasBody") {
+        let body = body.as_object().ok_or(ProjectionError::InvalidResource)?;
+        let html = body
+            .get("html")
+            .and_then(Value::as_str)
+            .ok_or(ProjectionError::InvalidResource)?;
+        let text = body
+            .get("text")
+            .and_then(Value::as_str)
+            .ok_or(ProjectionError::InvalidResource)?;
+        let empty = body
+            .get("empty")
+            .and_then(Value::as_bool)
+            .ok_or(ProjectionError::InvalidResource)?;
+        if body.len() != 3
+            || html.len() > 512 * 1024
+            || text.len() > 512 * 1024
+            || empty && (!html.is_empty() || !text.is_empty())
+        {
+            return Err(ProjectionError::InvalidResource);
+        }
+        let text = sanitize_structured_text(text)?;
+        projected.insert("detail".into(), Value::String(text.clone()));
+        projected.insert(legacy_field.into(), Value::String(text));
+        projected.insert("bodyHtml".into(), Value::String(html.to_owned()));
+        projected.insert("bodyEmpty".into(), Value::Bool(empty));
+        return Ok(());
+    }
+
+    // Coverage gaps and sanitizer failures must not fall back to a different body field.
+    // Reconciliation can then preserve the previously imported Canvas content.
+    if item.get("_canvasBodyReason").is_some() {
+        return Ok(());
+    }
+
+    let Some(body) = item.get(legacy_field) else {
+        return Ok(());
+    };
+    let text = match body {
+        Value::Null => String::new(),
+        Value::String(text) => sanitize_structured_text(text)?,
+        _ => return Err(ProjectionError::InvalidResource),
+    };
+    projected.insert("detail".into(), Value::String(text.clone()));
+    projected.insert(legacy_field.into(), Value::String(text.clone()));
+    projected.insert("bodyEmpty".into(), Value::Bool(text.is_empty()));
+    Ok(())
+}
+
+pub(super) fn project_linked_files(
+    item: &Value,
+    names: &HashMap<u64, String>,
+) -> Result<Option<Vec<Value>>, ProjectionError> {
+    let Some(references) = item.get("_canvasLinkedFiles") else {
+        return Ok(None);
+    };
+    let references = references
+        .as_array()
+        .ok_or(ProjectionError::InvalidResource)?;
+    let mut seen = std::collections::HashSet::new();
+    let mut output = Vec::new();
+    for reference in references {
+        let object = reference
+            .as_object()
+            .ok_or(ProjectionError::InvalidResource)?;
+        let id = object
+            .get("fileId")
+            .and_then(positive_id)
+            .ok_or(ProjectionError::InvalidResource)?;
+        if !seen.insert(id) {
+            continue;
+        }
+        let mut file = Map::new();
+        file.insert("fileId".into(), Value::from(id));
+        let name = names
+            .get(&id)
+            .map(String::as_str)
+            .or_else(|| object.get("name").and_then(Value::as_str));
+        if let Some(name) = name {
+            file.insert("name".into(), Value::String(sanitize_text(name)?));
+        }
+        output.push(Value::Object(file));
+    }
+    Ok(Some(output))
+}
+
+pub(super) fn project_attachments(item: &Value) -> Result<Option<Vec<Value>>, ProjectionError> {
+    let source = item.get("attachments").or_else(|| item.get("attachment"));
+    let Some(source) = source else {
+        return Ok(None);
+    };
+    let attachments = if let Some(attachments) = source.as_array() {
+        attachments.iter().collect::<Vec<_>>()
+    } else if source.is_object() {
+        vec![source]
+    } else if source.is_null() {
+        return Ok(Some(Vec::new()));
+    } else {
+        return Err(ProjectionError::InvalidResource);
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut output = Vec::new();
+    for attachment in attachments {
+        let object = attachment
+            .as_object()
+            .ok_or(ProjectionError::InvalidResource)?;
+        let id = object
+            .get("id")
+            .or_else(|| object.get("fileId"))
+            .and_then(positive_id)
+            .ok_or(ProjectionError::InvalidResource)?;
+        if !seen.insert(id) {
+            continue;
+        }
+        let mut projected = Map::new();
+        projected.insert("fileId".into(), Value::from(id));
+        if let Some(name) = object
+            .get("display_name")
+            .or_else(|| object.get("filename"))
+            .or_else(|| object.get("name"))
+            .and_then(Value::as_str)
+        {
+            projected.insert("name".into(), Value::String(sanitize_text(name)?));
+        }
+        output.push(Value::Object(projected));
+    }
+    Ok(Some(output))
 }
 
 pub(super) fn project_file_receipts(

@@ -350,6 +350,103 @@ describe("dashboard production UI contract", () => {
     expect(handlers.onToggleEvent).toHaveBeenLastCalledWith("a");
   });
 
+  it("renders structured Canvas body blocks as safe DOM text", () => {
+    const event = {
+      ...DATA.events[0]!,
+      detail: "# Main idea\n\nA paragraph\nwith a line break.\n\n1. First action\n2. Second action\n\n- Evidence\n- Reflection\n\n<em>Literal text</em>\n\n# \nPlain after malformed heading",
+    };
+    const dashboard = renderDashboard({
+      ...state("timeline"),
+      data: { ...DATA, events: [event] },
+      expandedEventIds: new Set([event.id]),
+    }, handlers);
+    const body = findAll(dashboard, (item) => item.attrs?.class === "event-body")[0]!;
+
+    expect(findAll(body, (item) => item.tag === "h3").map((item) => item.text)).toEqual(["Main idea"]);
+    expect(findAll(body, (item) => item.tag === "p").flatMap((item) => findAll(item, (child) => child.tag === "span").map((child) => child.text))).toContain("A paragraph");
+    expect(findAll(body, (item) => item.tag === "ol").flatMap((item) => findAll(item, (child) => child.tag === "li").map((child) => child.text))).toEqual(["First action", "Second action"]);
+    expect(findAll(body, (item) => item.tag === "ul").flatMap((item) => findAll(item, (child) => child.tag === "li").map((child) => child.text))).toEqual(["Evidence", "Reflection"]);
+    expect(findAll(body, (item) => item.tag === "em")).toHaveLength(0);
+    expect(words(body)).toContain("<em>Literal text</em>");
+    expect(words(body)).toContain("#");
+    expect(words(body)).toContain("Plain after malformed heading");
+  });
+
+  it("keeps undated Canvas assignments and discussions reachable after dashboard decoding", () => {
+    const decoded = parseDashboard({
+      version: "synthetic-version",
+      courses: [{ id: "course-1", courseCode: "SYN101", title: "Synthetic Course" }],
+      events: [
+        { id: "null-assignment", courseId: "course-1", courseCode: "SYN101", type: "deadline", kind: "assignment", title: "Undated assignment", dueAt: null, dueAtState: "known_null", detail: "# Assignment prompt\n\nRead the instructions." },
+        { id: "standalone-discussion", courseId: "course-1", courseCode: "SYN101", type: "deadline", kind: "discussion", title: "Standalone discussion", dueAtState: "not_returned", detail: "# Discussion prompt\n\nPost your response." },
+        { id: "completed-undated", courseId: "course-1", courseCode: "SYN101", type: "deadline", kind: "assignment", title: "Completed undated", dueAt: null, dueAtState: "known_null", detail: "# Completed prompt\n\nKeep this body available." , completed: true, completedAt: NOW },
+        { id: "completed-dated", courseId: "course-1", courseCode: "SYN101", type: "deadline", kind: "assignment", title: "Completed dated", dueAt: "2026-09-21T15:00:00Z", detail: "# Dated prompt\n\nKeep this dated body available.", completed: true, completedAt: NOW },
+        { id: "undated-class", courseId: "course-1", courseCode: "SYN101", type: "class", kind: "class", title: "Class without time", dueAt: null },
+        { id: "missing-date-assignment", courseId: "course-1", courseCode: "SYN101", type: "deadline", kind: "assignment", title: "Date evidence absent", detail: "Not admitted without a null date fact." },
+      ],
+      sourceStatus: { coursework: "synced" },
+    });
+
+    expect(decoded.events.map((event) => [event.id, event.startsAt])).toEqual([
+      ["null-assignment", null],
+      ["standalone-discussion", null],
+      ["completed-undated", null],
+      ["completed-dated", "2026-09-21T15:00:00Z"],
+    ]);
+    expect(formatAssignmentCopyText(decoded.events[0]!)).toContain("Due date: No due date");
+    const timeline = renderDashboard({
+      ...state("timeline"),
+      data: decoded,
+      expandedEventIds: new Set(["null-assignment", "standalone-discussion"]),
+    }, handlers);
+    const undated = findAll(timeline, (item) => item.attrs?.class === "undated-events")[0]!;
+    const undatedCards = findAll(undated, (item) => item.attrs?.class?.includes("event-card") === true);
+    expect(undatedCards).toHaveLength(2);
+    expect(undatedCards.map(words).join(" ")).toContain("No due date");
+    expect(undatedCards.map((card) => findAll(card, (item) => item.tag === "time"))).toEqual([[], []]);
+    expect(words(undated)).toContain("Assignment prompt");
+    expect(words(undated)).toContain("Discussion prompt");
+
+    const completed = renderDashboard({ ...state("completed"), data: decoded }, handlers);
+    const completedDetails = findAll(completed, (item) => item.attrs?.class === "completed-body-details");
+    expect(completedDetails).toHaveLength(2);
+    expect(completedDetails.map(words).join(" ")).toContain("Keep this body available.");
+    expect(completedDetails.map(words).join(" ")).toContain("Keep this dated body available.");
+  });
+
+  it("shows distinct paired discussion instructions once in details and copied text", () => {
+    const decoded = parseDashboard({
+      courses: [{ id: "course-1", courseCode: "SYN101", title: "Synthetic Course" }],
+      events: [
+        { id: "paired", courseId: "course-1", courseCode: "SYN101", type: "deadline", kind: "discussion", title: "Graded discussion", dueAt: "2026-09-25T23:59:00Z", detail: "# Topic prompt\n\nRespond to the question.", assignmentDetail: "# Assignment instructions\n\nPost first, then reply." },
+        { id: "duplicate", courseId: "course-1", courseCode: "SYN101", type: "deadline", kind: "discussion", title: "Duplicate body", dueAt: "2026-09-25T23:59:00Z", detail: "# Shared body\n\nOne copy only.", assignmentDetail: "# Shared body\n\nOne copy only." },
+      ],
+    });
+    expect(decoded.events[0]?.assignmentDetail).toBe("# Assignment instructions\n\nPost first, then reply.");
+    const dashboard = renderDashboard({
+      ...state("timeline"),
+      data: decoded,
+      expandedEventIds: new Set(["paired", "duplicate"]),
+    }, handlers);
+    const cards = findAll(dashboard, (item) => item.attrs?.class?.includes("event-card") === true);
+    const pairedCard = cards.find((card) => words(card).includes("Graded discussion"))!;
+    const pairedLabels = findAll(pairedCard, (item) => item.attrs?.class === "event-body-section__label").map((item) => item.text);
+    expect(pairedLabels).toEqual(["Discussion prompt", "Assignment instructions"]);
+    expect(formatAssignmentCopyText(decoded.events[0]!)).toContain("Assignment instructions: # Assignment instructions\n\nPost first, then reply.");
+    const completedDiscussion = { ...decoded.events[0]!, completed: true, completedAt: NOW };
+    const completedPage = renderDashboard({ ...state("completed"), data: { ...decoded, events: [completedDiscussion] } }, handlers);
+    const completedBody = findAll(completedPage, (item) => item.attrs?.class === "completed-body-details")[0]!;
+    expect(findAll(completedBody, (item) => item.attrs?.class === "event-body-section__label").map((item) => item.text))
+      .toEqual(["Discussion prompt", "Assignment instructions"]);
+
+    const duplicateCard = cards.find((card) => words(card).includes("Duplicate body"))!;
+    expect(findAll(duplicateCard, (item) => item.attrs?.class === "event-body-section__label")).toHaveLength(0);
+    expect(findAll(duplicateCard, (item) => item.attrs?.class === "event-body")).toHaveLength(1);
+    const duplicateCopy = formatAssignmentCopyText(decoded.events[1]!);
+    expect(duplicateCopy.match(/One copy only\./gu)).toHaveLength(1);
+    expect(duplicateCopy).not.toContain("Assignment instructions:");
+  });
+
   it("shows the captured rubric inside expanded assignment details", () => {
     const event = {
       ...DATA.events[0]!,
@@ -569,6 +666,12 @@ describe("dashboard production UI contract", () => {
       "Replies to classmates: Not completed",
       "Assignment details: No additional details were supplied.",
     ].join("\n"));
+
+    const invalidDate = formatAssignmentCopyText({
+      ...DATA.events[0]!,
+      startsAt: "2026-02-30",
+    });
+    expect(invalidDate).toContain("Due date: Unknown");
   });
 
   it("renders the Copy assignment action on deadline and discussion cards and rail items, excluding class meetings", () => {

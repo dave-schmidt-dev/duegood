@@ -13,6 +13,13 @@ import {
 import { runCanvasAppRefresh } from "../../scripts/canvas-browser-app-refresh.mjs";
 import { readRuntimeBuildIdentity } from "../../scripts/canvas-runtime-build-identity.mjs";
 
+const exportResultCounts = {
+  exportStatus: "complete" as const,
+  exportWritten: 2,
+  exportUnchanged: 1,
+  exportSkippedOwnerFiles: 0,
+};
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const RUNTIME = path.join(ROOT, "dist", "browser-runtime");
 
@@ -124,7 +131,7 @@ describe.sequential("packaged browser runtime", () => {
           gapCount: 0,
           dailyGapCount: 0,
           omissionCount: 3,
-          rubricCount: 2,
+          bodyCount: 5, emptyBodyCount: 1, bodyFailureReason: null, rubricCount: 2,
           linkedFileCount: 1,
           fileBodiesIncomplete: false,
           snapshotPath: privateSentinel,
@@ -136,7 +143,7 @@ describe.sequential("packaged browser runtime", () => {
             promotedBlobs: 3,
             reusedBlobs: 4,
             bytesVerified: 128,
-            alreadyCurrent: false,
+            alreadyCurrent: false, ...exportResultCounts,
             snapshotPath: privateSentinel,
           },
         };
@@ -155,14 +162,14 @@ describe.sequential("packaged browser runtime", () => {
         itemCount: 4,
         gapCount: 0,
         omissionCount: 3,
-        rubricCount: 2,
+        bodyCount: 5, emptyBodyCount: 1, bodyFailureReason: "none", rubricCount: 2,
         linkedFileCount: 1,
         importedCourses: 2,
         archivedCourses: 1,
         promotedBlobs: 3,
         reusedBlobs: 4,
         bytesVerified: 128,
-        alreadyCurrent: false,
+        alreadyCurrent: false, ...exportResultCounts,
       },
     ]);
     expect(JSON.stringify(frames)).not.toContain(privateSentinel);
@@ -185,10 +192,10 @@ describe.sequential("packaged browser runtime", () => {
         process.stderr.write("CANVAS_CAPTURE_PROGRESS=CAPTURE_RUNNING\n");
         return {
           status: "COMPLETE", resourceCount: 1, itemCount: 1, gapCount: 0, dailyGapCount: 0,
-          omissionCount: 0, rubricCount: 0, linkedFileCount: 0, fileBodiesIncomplete: false,
+          omissionCount: 0, bodyCount: 5, emptyBodyCount: 1, bodyFailureReason: null, rubricCount: 0, linkedFileCount: 0, fileBodiesIncomplete: false,
           nativeImport: {
             status: "IMPORTED", importedCourses: 1, archivedCourses: 0, promotedBlobs: 0,
-            reusedBlobs: 0, bytesVerified: 0, alreadyCurrent: false,
+            reusedBlobs: 0, bytesVerified: 0, alreadyCurrent: false, ...exportResultCounts,
           },
         };
       },
@@ -217,7 +224,7 @@ describe.sequential("packaged browser runtime", () => {
         gapCount: 2,
         dailyGapCount: 2,
         omissionCount: 0,
-        rubricCount: 0,
+        bodyCount: 5, emptyBodyCount: 1, bodyFailureReason: null, rubricCount: 0,
         linkedFileCount: 0,
         fileBodiesIncomplete: true,
         snapshotPath: "/private/snapshot.json",
@@ -237,7 +244,7 @@ describe.sequential("packaged browser runtime", () => {
         gapCount: 0,
         dailyGapCount: 0,
         omissionCount: 0,
-        rubricCount: 0,
+        bodyCount: 5, emptyBodyCount: 1, bodyFailureReason: null, rubricCount: 0,
         linkedFileCount: 0,
         nativeImport: {
           status: "IMPORTED",
@@ -246,7 +253,7 @@ describe.sequential("packaged browser runtime", () => {
           promotedBlobs: 0,
           reusedBlobs: 0,
           bytesVerified: 0,
-          alreadyCurrent: false,
+          alreadyCurrent: false, ...exportResultCounts,
         },
       }),
     });
@@ -278,7 +285,7 @@ describe.sequential("packaged browser runtime", () => {
         gapCount: 3,
         dailyGapCount: 0,
         omissionCount: 0,
-        rubricCount: 0,
+        bodyCount: 5, emptyBodyCount: 1, bodyFailureReason: null, rubricCount: 0,
         linkedFileCount: 0,
         fileBodiesIncomplete: true,
         nativeImport: {
@@ -288,7 +295,7 @@ describe.sequential("packaged browser runtime", () => {
           promotedBlobs: 0,
           reusedBlobs: 0,
           bytesVerified: 0,
-          alreadyCurrent: false,
+          alreadyCurrent: false, ...exportResultCounts,
         },
       }),
     });

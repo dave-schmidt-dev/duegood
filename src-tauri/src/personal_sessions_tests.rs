@@ -273,6 +273,7 @@ fn source_refresh_retains_manual_session() {
             key: "synthetic-a".into(),
             groups: vec![],
             assignments: vec![],
+            discussions: vec![],
         }],
         SystemTime::now(),
     )

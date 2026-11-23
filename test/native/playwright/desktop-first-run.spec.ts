@@ -185,7 +185,7 @@ function installTauriMock(setup: Scenario): void {
           courseExports: {
             "syn-101": {
               files: JSON.stringify([{ id: 1, display_name: "Synthetic syllabus", updated_at: "2026-09-01T00:00:00Z" }, { id: 2, display_name: "Synthetic handout", updated_at: "2026-09-02T00:00:00Z" }]),
-              pages: null, modules: null, announcements: null,
+              pages: null, modules: null, announcements: null, quizzes: null,
               downloadManifest: JSON.stringify([{ id: 1, status: "downloaded", filename: "syllabus.pdf" }]),
             },
           },

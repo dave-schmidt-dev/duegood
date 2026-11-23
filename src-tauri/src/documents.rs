@@ -154,6 +154,7 @@ pub struct CourseExportTexts {
     pub pages: Option<String>,
     pub modules: Option<String>,
     pub announcements: Option<String>,
+    pub quizzes: Option<String>,
     pub download_manifest: Option<String>,
 }
 
@@ -266,6 +267,7 @@ pub fn read_dashboard_documents(
             pages: reader.text(&format!("{base}/api/pages.json"))?,
             modules: reader.text(&format!("{base}/api/modules.json"))?,
             announcements: reader.text(&format!("{base}/api/announcements.json"))?,
+            quizzes: reader.text(&format!("{base}/api/quizzes.json"))?,
             download_manifest: reader.text(&format!("{base}/download-manifest.json"))?,
         };
         course_exports.insert(folder, texts);
@@ -433,6 +435,11 @@ mod tests {
                 texts.announcements,
                 source_text(&source, &format!("{base}/api/announcements.json")),
                 "{folder} announcements"
+            );
+            assert_eq!(
+                texts.quizzes,
+                source_text(&source, &format!("{base}/api/quizzes.json")),
+                "{folder} quizzes"
             );
             assert_eq!(
                 texts.download_manifest,

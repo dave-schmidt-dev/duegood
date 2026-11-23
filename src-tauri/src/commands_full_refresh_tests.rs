@@ -85,7 +85,7 @@ fn browser_runtime_requires_exact_manifest_tree_hashes_and_package_pins() {
 fn browser_client_uses_fixed_entrypoint_and_sanitizes_content_free_frames() {
     let result_frame = serde_json::json!({
         "type": "result", "status": "complete", "resourceCount": 3, "itemCount": 8,
-        "gapCount": 0, "omissionCount": 2, "rubricCount": 3, "linkedFileCount": 4,
+        "gapCount": 0, "omissionCount": 2, "bodyCount": 5, "emptyBodyCount": 1, "bodyFailureReason": "none", "rubricCount": 3, "linkedFileCount": 4, "exportStatus": "complete", "exportWritten": 2, "exportUnchanged": 1, "exportSkippedOwnerFiles": 3,
         "importedCourses": 3, "archivedCourses": 0, "promotedBlobs": 2,
         "reusedBlobs": 4, "bytesVerified": 1234, "alreadyCurrent": false,
     });
@@ -102,7 +102,22 @@ fn browser_client_uses_fixed_entrypoint_and_sanitizes_content_free_frames() {
         true
     })
     .expect("well-formed helper result");
-    assert_eq!(outcome, BrowserOutcome::Complete { gaps: 0, omissions: 2, rubrics: 3, linked_files: 4 });
+    assert_eq!(
+        outcome,
+        BrowserOutcome::Complete {
+            gaps: 0,
+            omissions: 2,
+            bodies: 5,
+            empty_bodies: 1,
+            body_failure_reason: None,
+            rubrics: 3,
+            linked_files: 4,
+            export_status: "complete",
+            export_written: 2,
+            export_unchanged: 1,
+            export_skipped_owner_files: 3
+        }
+    );
     assert_eq!(
         *phases.lock().unwrap(),
         vec!["browser-capture", "browser-import"]
@@ -116,8 +131,15 @@ fn complete_browser_capture_keeps_omission_count_in_full_refresh_result() {
         BrowserOutcome::Complete {
             gaps: 0,
             omissions: 14,
+            bodies: 5,
+            empty_bodies: 1,
+            body_failure_reason: None,
             rubrics: 2,
             linked_files: 5,
+            export_status: "complete",
+            export_written: 2,
+            export_unchanged: 1,
+            export_skipped_owner_files: 3,
         },
         CalendarOutcome::Complete(IcalRefreshResult {
             status: "complete",
@@ -136,6 +158,13 @@ fn complete_browser_capture_keeps_omission_count_in_full_refresh_result() {
     assert_eq!(result.omission_count, 14);
     assert_eq!(result.rubric_count, 2);
     assert_eq!(result.linked_file_count, 5);
+    assert_eq!(result.body_count, 5);
+    assert_eq!(result.empty_body_count, 1);
+    assert_eq!(result.body_failure_reason, None);
+    assert_eq!(result.export_status, "complete");
+    assert_eq!(result.export_written, 2);
+    assert_eq!(result.export_unchanged, 1);
+    assert_eq!(result.export_skipped_owner_files, 3);
 }
 
 #[test]
@@ -155,8 +184,14 @@ fn browser_progress_requires_an_allowlisted_reason_for_the_sign_in_window() {
         );
     }
     assert_eq!(runtime_progress_phase("sign-in-window", None), None);
-    assert_eq!(runtime_progress_phase("sign-in-window", Some("PRIVATE_PAGE_CONTENT")), None);
-    assert_eq!(runtime_progress_phase("capturing", Some("VERIFICATION_REQUIRED")), None);
+    assert_eq!(
+        runtime_progress_phase("sign-in-window", Some("PRIVATE_PAGE_CONTENT")),
+        None
+    );
+    assert_eq!(
+        runtime_progress_phase("capturing", Some("VERIFICATION_REQUIRED")),
+        None
+    );
 }
 
 #[test]
@@ -206,7 +241,7 @@ fn malformed_or_oversized_helper_output_fails_closed() {
 fn incomplete_capture_gaps_are_distinct_from_browser_import_failure() {
     let frame = serde_json::json!({
         "type": "result", "status": "incomplete", "resourceCount": 3, "itemCount": 8,
-        "gapCount": 2, "omissionCount": 3, "rubricCount": 0, "linkedFileCount": 0,
+        "gapCount": 2, "omissionCount": 3, "bodyCount": 5, "emptyBodyCount": 1, "bodyFailureReason": "none", "rubricCount": 0, "linkedFileCount": 0, "exportStatus": "disabled", "exportWritten": 0, "exportUnchanged": 0, "exportSkippedOwnerFiles": 0,
         "importedCourses": 3, "archivedCourses": 0, "promotedBlobs": 2,
         "reusedBlobs": 4, "bytesVerified": 1234, "alreadyCurrent": false,
         "errorCode": "CAPTURE_GAPS",
@@ -219,7 +254,22 @@ fn incomplete_capture_gaps_are_distinct_from_browser_import_failure() {
     let (_app_root, app) = app_with_store("full-refresh-gaps");
     let outcome = run_browser_client(&app.shared, &runtime, &mut |_| true)
         .expect("partial capture is a valid result");
-    assert_eq!(outcome, BrowserOutcome::Incomplete { gaps: 2, omissions: 3, rubrics: 0, linked_files: 0 });
+    assert_eq!(
+        outcome,
+        BrowserOutcome::Incomplete {
+            gaps: 2,
+            omissions: 3,
+            bodies: 5,
+            empty_bodies: 1,
+            body_failure_reason: None,
+            rubrics: 0,
+            linked_files: 0,
+            export_status: "disabled",
+            export_written: 0,
+            export_unchanged: 0,
+            export_skipped_owner_files: 0
+        }
+    );
 
     let failed = combine_outcomes(
         BrowserOutcome::Failed {
@@ -235,7 +285,7 @@ fn incomplete_capture_gaps_are_distinct_from_browser_import_failure() {
 fn stale_canvas_helpers_keep_a_content_free_failure_code() {
     let frame = serde_json::json!({
         "type": "result", "status": "incomplete", "resourceCount": 0, "itemCount": 0,
-        "gapCount": 0, "omissionCount": 0, "rubricCount": 0, "linkedFileCount": 0,
+        "gapCount": 0, "omissionCount": 0, "bodyCount": 0, "emptyBodyCount": 0, "bodyFailureReason": "none", "rubricCount": 0, "linkedFileCount": 0, "exportStatus": "disabled", "exportWritten": 0, "exportUnchanged": 0, "exportSkippedOwnerFiles": 0,
         "importedCourses": 0, "archivedCourses": 0,
         "promotedBlobs": 0, "reusedBlobs": 0, "bytesVerified": 0, "alreadyCurrent": false,
         "errorCode": "HELPER_STALE",
@@ -248,14 +298,33 @@ fn stale_canvas_helpers_keep_a_content_free_failure_code() {
     let (_app_root, app) = app_with_store("full-refresh-stale-helpers");
     let outcome = run_browser_client(&app.shared, &runtime, &mut |_| true)
         .expect("stale helper result is a valid bounded failure");
-    assert_eq!(outcome, BrowserOutcome::Failed { code: "helper-stale" });
+    assert_eq!(
+        outcome,
+        BrowserOutcome::Failed {
+            code: "helper-stale"
+        }
+    );
 }
 
 #[test]
 fn browser_partial_or_failed_outcomes_still_attempt_calendar_and_keep_calendar_counts() {
     let mut calendar_called = false;
     let result = run_full_sequence(
-        || Ok(BrowserOutcome::Incomplete { gaps: 3, omissions: 2, rubrics: 0, linked_files: 0 }),
+        || {
+            Ok(BrowserOutcome::Incomplete {
+                gaps: 3,
+                omissions: 2,
+                bodies: 5,
+                empty_bodies: 1,
+                body_failure_reason: None,
+                rubrics: 0,
+                linked_files: 0,
+                export_status: "disabled",
+                export_written: 0,
+                export_unchanged: 0,
+                export_skipped_owner_files: 0,
+            })
+        },
         || {
             calendar_called = true;
             Ok(CalendarOutcome::Complete(IcalRefreshResult {
@@ -310,8 +379,15 @@ fn calendar_holds_are_not_counted_as_canvas_capture_gaps() {
         BrowserOutcome::Incomplete {
             gaps: 125,
             omissions: 9,
+            bodies: 5,
+            empty_bodies: 1,
+            body_failure_reason: None,
             rubrics: 0,
             linked_files: 0,
+            export_status: "disabled",
+            export_written: 0,
+            export_unchanged: 0,
+            export_skipped_owner_files: 0,
         },
         CalendarOutcome::Incomplete(IcalRefreshResult {
             status: "incomplete",
@@ -337,8 +413,15 @@ fn held_calendar_item_makes_refresh_partial_when_canvas_is_complete() {
         BrowserOutcome::Complete {
             gaps: 0,
             omissions: 0,
+            bodies: 0,
+            empty_bodies: 0,
+            body_failure_reason: None,
             rubrics: 0,
             linked_files: 0,
+            export_status: "disabled",
+            export_written: 0,
+            export_unchanged: 0,
+            export_skipped_owner_files: 0,
         },
         CalendarOutcome::Incomplete(IcalRefreshResult {
             status: "incomplete",

@@ -243,10 +243,11 @@ test("reads assignment rubrics and sanitizes rich criterion descriptions in the 
     if (url.pathname !== "/api/v1/courses/88/assignments") return route.abort();
     seen.push(...url.searchParams.getAll("include[]"));
     return route.fulfill({ json: [
-      { id: 10, course_id: 88, rubric: [{ id: "criterion", description: "<b>Reasoning</b>",
+      { id: 10, course_id: 88, description: "<h2>Prompt</h2><p>First paragraph</p><ol><li>First step</li><li>Second step</li></ol><script>synthetic-script</script><iframe src=\"https://outside.example/embed\"></iframe>",
+        rubric: [{ id: "criterion", description: "<b>Reasoning</b>",
         long_description: "<p>Support the claim.</p>", points: 3, internal_comment: "discard",
         ratings: [{ description: "Complete", points: 3, hidden: "discard" }] }] },
-      { id: 11, course_id: 88 },
+      { id: 11, course_id: 88, description: null },
     ] });
   });
   await page.goto(ORIGIN);
@@ -260,6 +261,12 @@ test("reads assignment rubrics and sanitizes rich criterion descriptions in the 
       evaluatePage: page.evaluate.bind(page), htmlReader: extractCanvasHtmlInPage })));
   expect(sanitized[0]).toMatchObject({ rubric: [{ id: "criterion", description: "Reasoning",
     long_description: "Support the claim.", points: 3, ratings: [{ description: "Complete", points: 3 }] }] });
+  expect((sanitized[0] as Record<string, unknown>)._canvasBody).toEqual({
+    html: "<h2>Prompt</h2><p>First paragraph</p><ol><li>First step</li><li>Second step</li></ol>",
+    text: "## Prompt\n\nFirst paragraph\n\n1. First step\n2. Second step",
+    empty: false,
+  });
+  expect((sanitized[1] as Record<string, unknown>)._canvasBody).toEqual({ html: "", text: "", empty: true });
   expect(JSON.stringify(sanitized)).not.toContain("discard");
   expect(sanitized[1]).toMatchObject({ rubric: null });
 });

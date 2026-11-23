@@ -51,8 +51,11 @@ const DIAGNOSTIC_ENDPOINTS: &[&str] = &[
     "groupDiscussionReplies",
     "calendar",
     "calendarEvents",
+    "body",
 ];
 const DIAGNOSTIC_REASONS: &[&str] = &[
+    "BODY_MISSING",
+    "BODY_SANITIZE_FAILED",
     "capture-budget",
     "detail-budget",
     "empty",
@@ -131,7 +134,7 @@ pub(super) fn import_diagnostics(
     bundle: &ValidatedCaptureBundle,
     required_gap_count: usize,
     optional_omission_count: usize,
-) -> Value {
+) -> Result<Value, super::BrowserImportError> {
     let mut grouped = BTreeMap::<(&'static str, &'static str, &'static str), usize>::new();
     let mut grouped_total = 0usize;
     let mut grouped_truncated = false;
@@ -154,6 +157,22 @@ pub(super) fn import_diagnostics(
         let count = grouped.entry((endpoint, reason, status)).or_default();
         *count = count.saturating_add(1).min(MAX_DIAGNOSTIC_COUNT);
     }
+    let active_course_ids = bundle
+        .active_courses
+        .iter()
+        .map(|course| course.course_id)
+        .collect::<BTreeSet<_>>();
+    let body_counts =
+        super::daily_scope::summarize_body_coverage(&bundle.snapshot, &active_course_ids)?;
+    for (reason, count) in [
+        ("BODY_MISSING", body_counts.missing_count),
+        ("BODY_SANITIZE_FAILED", body_counts.sanitize_failed_count),
+    ] {
+        if count == 0 {
+            continue;
+        }
+        grouped.insert(("body", reason, "gap"), count.min(MAX_DIAGNOSTIC_COUNT));
+    }
     let coverage_reasons = grouped
         .into_iter()
         .map(|((endpoint, reason, status), count)| {
@@ -161,13 +180,16 @@ pub(super) fn import_diagnostics(
         })
         .collect::<Vec<_>>();
 
-    json!({
+    Ok(json!({
         "requiredGapCount": required_gap_count.min(MAX_DIAGNOSTIC_COUNT),
         "optionalOmissionCount": optional_omission_count.min(MAX_DIAGNOSTIC_COUNT),
+        "bodyCount": body_counts.body_count.min(MAX_DIAGNOSTIC_COUNT),
+        "emptyBodyCount": body_counts.empty_body_count.min(MAX_DIAGNOSTIC_COUNT),
+        "bodyFailureReason": body_counts.body_failure_reason,
         "coverageReasonCounts": coverage_reasons,
         "coverageReasonCountsTruncated": grouped_truncated,
         "fileReceipts": file_receipt_diagnostics(bundle),
-    })
+    }))
 }
 
 /// Adds bounded plain-language reasons to the same Activity entry as the imported data.
@@ -225,6 +247,8 @@ fn diagnostic_endpoint(value: &str) -> &'static str {
 
 fn diagnostic_reason(value: Option<&str>) -> &'static str {
     match value {
+        Some("BODY_MISSING") => "BODY_MISSING",
+        Some("BODY_SANITIZE_FAILED") => "BODY_SANITIZE_FAILED",
         Some(reason) => DIAGNOSTIC_REASONS
             .iter()
             .copied()
@@ -350,7 +374,9 @@ fn file_receipt_diagnostics(bundle: &ValidatedCaptureBundle) -> Value {
             }
             let kind = match status {
                 "archived" | "staged" => ReceiptKind::Archived,
-                "gap" if reason.is_some_and(|value| OPTIONAL_FILE_BODY_REASONS.contains(&value)) => {
+                "gap"
+                    if reason.is_some_and(|value| OPTIONAL_FILE_BODY_REASONS.contains(&value)) =>
+                {
                     ReceiptKind::OptionalOmission
                 }
                 "gap" => ReceiptKind::Failed,

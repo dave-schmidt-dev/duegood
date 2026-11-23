@@ -73,6 +73,84 @@ fn complete_daily_fixture() -> (Value, Vec<ActiveCourseCoverage>, Vec<CaptureCov
 }
 
 #[test]
+fn body_coverage_counts_empty_bodies_and_matches_page_details_by_identity() {
+    let (mut snapshot, active, mut rows) = complete_daily_fixture();
+    let active_ids = active
+        .iter()
+        .map(|course| course.course_id)
+        .collect::<BTreeSet<_>>();
+    let resources = snapshot["resources"].as_array_mut().unwrap();
+    resources
+        .iter_mut()
+        .find(|resource| resource["endpoint"] == "assignments")
+        .unwrap()["items"] = json!([
+        {"id":31,"_canvasBody":{"html":"<p>Work</p>","text":"Work","empty":false}},
+        {"id":32,"_canvasBody":{"html":"","text":"","empty":true}},
+        {"id":33,"_canvasBodyReason":"BODY_MISSING"},
+        {"id":34,"_canvasBodyReason":"BODY_SANITIZE_FAILED"},
+        {"id":35,"_canvasBodyReason":"unexpected","_canvasBody":{"html":"<p>Work</p>","text":"Work","empty":false}},
+        {"id":36,"_canvasBody":{"html":format!("{}", "é".repeat(262_145)),"text":"","empty":false}},
+        {"id":37,"_canvasBody":{"html":format!("{}", "é".repeat(250_000)),"text":format!("{}", "é".repeat(30_000)),"empty":false}}
+    ]);
+    resources
+        .iter_mut()
+        .find(|resource| resource["endpoint"] == "pages")
+        .unwrap()["items"] = json!([
+        {"page_id":51,"_canvasBodyReason":"BODY_MISSING"},
+        {"page_id":52,"published":false,"_canvasBodyReason":"BODY_MISSING"}
+    ]);
+    resources.push(json!({
+        "endpoint":"page", "courseId":1,
+        "items":[{"page_id":51,"_canvasBody":{"html":"<h2>Guide</h2>","text":"Guide","empty":false}}]
+    }));
+    resources.push(json!({
+        "endpoint":"quizzes", "courseId":1,
+        "items":[{"id":61,"locked":true,"_canvasBodyReason":"BODY_MISSING"}]
+    }));
+    snapshot["coverage"] = json!([
+        {"endpoint":"page","courseId":1,"status":"gap","reason":"unpublished"},
+        {"endpoint":"quiz","courseId":1,"status":"gap","reason":"locked"}
+    ]);
+    rows.push(coverage("page", Some(1), "gap", Some("unpublished")));
+    rows.push(coverage("quiz", Some(1), "gap", Some("locked")));
+
+    let counts = daily_scope::summarize_body_coverage(&snapshot, &active_ids).unwrap();
+    assert_eq!(counts.body_count, 4);
+    assert_eq!(counts.empty_body_count, 1);
+    assert_eq!(counts.missing_count, 1);
+    assert_eq!(counts.sanitize_failed_count, 3);
+    assert_eq!(counts.active_failure_count, 4);
+    assert_eq!(counts.body_failure_reason, Some("BODY_SANITIZE_FAILED"));
+    assert_eq!(
+        daily_scope::summarize_daily_scope(&snapshot, &active, &rows)
+            .unwrap()
+            .0,
+        4
+    );
+    assert!(daily_scope::has_capture_failures(&snapshot, &rows).unwrap());
+}
+
+#[test]
+fn group_page_list_omission_matches_the_group_detail_coverage_row() {
+    let snapshot = json!({
+        "resources":[
+            {"endpoint":"groups","courseId":null,"items":[{"id":88,"course_id":1}]},
+            {"endpoint":"pages","courseId":null,"groupId":88,
+                "items":[{"page_id":89,"published":false,"_canvasBodyReason":"BODY_MISSING"}]}
+        ],
+        "coverage":[
+            {"endpoint":"page","courseId":null,"groupId":88,"status":"gap","reason":"unpublished"}
+        ]
+    });
+    let active_ids = BTreeSet::from([1]);
+    let counts = crate::browser_body_coverage::summarize(&snapshot, &active_ids).unwrap();
+    assert_eq!(counts.body_count, 0);
+    assert_eq!(counts.missing_count, 0);
+    assert_eq!(counts.sanitize_failed_count, 0);
+    assert_eq!(counts.body_failure_reason, None);
+}
+
+#[test]
 fn daily_scope_distinguishes_archive_omissions_from_required_failures() {
     let (snapshot, active, mut rows) = complete_daily_fixture();
     assert_eq!(

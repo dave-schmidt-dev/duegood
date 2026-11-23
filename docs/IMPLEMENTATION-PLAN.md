@@ -1,5 +1,15 @@
 # Due Good local Marymount replacement plan
 
+## Canvas body retention and readable course exports
+
+Confirmed in source: capture substitutes parsed text for rich fields, reconciliation initializes detail to an empty string, and the Timeline displays detail as a text node. The reported private item counts and timestamps are outside this synthetic inspection. The missing legacy server and cloud onboarding are not applicable.
+
+1. Preserve bounded, allowlisted HTML, structured text and timestamps at capture; retain safe link extraction. Use `_canvasBody` with `html`, `text` and `empty` for known bodies, or `_canvasBodyReason` for BODY_MISSING / BODY_SANITIZE_FAILED.
+2. Derive completeness from accessible body evidence in both scope implementations. Carry counts through all strict transports.
+3. Reconcile bodies into native coursework and render structured text in the Timeline. Preserve prior known bodies on incomplete refreshes.
+4. Export current assignments and discussions after native import using configured course paths, ownership markers, atomic replacement and content-free diagnostics.
+5. Verify using synthetic local suites, the contract gates and checksums. No live qualification or commit.
+
 ## 2026-10-31 refresh correctness and explanations
 
 Scope: bounded local repair of the owner's refresh, with existing validation, source ownership, and retention contracts preserved. Captain-direct depth; no architecture, authentication, cloud, public API, or data migration changes. Preserve unrelated README/CHANGELOG edits.

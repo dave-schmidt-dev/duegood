@@ -50,7 +50,13 @@ function fakeHtmlReader({ html, options }: { html: string; options: { source: st
     .replace(/[\s\u00a0]+/gu, " ")
     .replace(/\s+([.,!?;:])/gu, "$1")
     .trim();
-  return { text, links, textTruncated: false, linksTruncated: false };
+  const safeHtml = html
+    .replace(/<(script|style|iframe|object|embed|form)\b[^>]*>[\s\S]*?<\/\1\s*>/giu, "")
+    .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/giu, "")
+    .replace(/\s+(?:href|src)\s*=\s*(["'])\s*(?:javascript|data):[\s\S]*?\1/giu, "")
+    .replace(/<a\b[^>]*href=(["'])\/(?:api\/v1\/)?(?:courses\/\d+\/)?files\/\d+(?:\/(?:download|preview))?(?:\?[^"']*)?\1[^>]*>([\s\S]*?)<\/a>/giu, "$2")
+    .replace(/\s+(?:href|src)\s*=\s*(["'])[^"']*(?:verifier|token|signature|x-amz-)[^"']*\1/giu, "");
+  return { text, html: safeHtml, links, textTruncated: false, linksTruncated: false };
 }
 
 export function successfulResult(request: ReaderRequest) {
@@ -92,13 +98,13 @@ export function successfulResult(request: ReaderRequest) {
     case "modules": return list(request.courseId === COURSE_ID ? [{ id: 2, name: "Week One", state: "unlocked" }] : []);
     case "moduleItems": return list([{ id: 21, module_id: request.moduleId, title: "Page item" }]);
     case "discussions": return list(request.courseId === COURSE_ID ? [{
-      id: 6, title: "Welcome", published: true, assignment_id: 501, assignment: { id: 501, name: "Synthetic assignment" },
+      id: 6, title: "Welcome", message: "<p>Synthetic discussion prompt</p>", published: true, assignment_id: 501, assignment: { id: 501, name: "Synthetic assignment" },
     }] : []);
     case "discussionEntries": return list([{ id: 61, message: "<p>Synthetic post</p>" }]);
     case "discussionReplies": return list([{ id: 62, parent_id: request.entryId, message: "<p>Synthetic reply</p>" }]);
     case "announcements": return list(request.courseId === COURSE_ID ? [{ id: 31, message: "<p>Synthetic announcement</p>" }] : []);
-    case "quizzes": return list(request.courseId === COURSE_ID ? [{ id: 101, title: "Review quiz", published: true }] : []);
-    case "quiz": return one({ id: request.quizId, title: "Review quiz detail", published: true });
+    case "quizzes": return list(request.courseId === COURSE_ID ? [{ id: 101, title: "Review quiz", description: "<p>Review instructions</p>", published: true }] : []);
+    case "quiz": return one({ id: request.quizId, title: "Review quiz detail", description: "<p>Review instructions</p>", published: true });
     case "courseFiles": return list([{ id: 900, display_name: "Guide", url: `${ORIGIN}/files/900/download?verifier=synthetic-file-secret` }]);
     case "folders": return list([{ id: 1, name: "Course Files" }]);
     case "groups": return list([{ id: 7, name: "Synthetic Group" }]);
@@ -113,7 +119,7 @@ export function successfulResult(request: ReaderRequest) {
     }]);
     case "groupPages": return list([{ page_id: 7, url: "group-overview", title: "Group overview", published: true }]);
     case "groupPage": return one({ page_id: 7, url: request.pageSlug, title: "Group page", published: true, body: "<p>Group page body</p>" });
-    case "groupDiscussions": return list([{ id: 71, title: "Group discussion", published: true }]);
+    case "groupDiscussions": return list([{ id: 71, title: "Group discussion", message: "<p>Group prompt</p>", published: true }]);
     case "groupDiscussionEntries": return list([{ id: 711, message: "<p>Group post</p>" }]);
     case "groupDiscussionReplies": return list([{ id: 712, parent_id: request.entryId, message: "<p>Group reply</p>" }]);
     case "personalFiles": return list([{ id: 900, display_name: "Personal Guide", url: `${ORIGIN}/files/900/download?verifier=synthetic-personal-file-secret` }]);

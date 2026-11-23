@@ -81,7 +81,7 @@ describe("linked Canvas file capture", () => {
       }
       if (request.endpoint === "groupDiscussions") {
         return { status: "ok", identity: { userId: USER_ID }, pages: 1,
-          items: [{ id: 71, title: "Group topic", published: true, attachments: [{ id: 1209 }] }] };
+          items: [{ id: 71, title: "Group topic", message: "<p>Group prompt</p>", published: true, attachments: [{ id: 1209 }] }] };
       }
       if (request.endpoint === "groupDiscussionEntries") {
         return { status: "ok", identity: { userId: USER_ID }, pages: 1,
@@ -93,7 +93,7 @@ describe("linked Canvas file capture", () => {
       }
       if (request.endpoint === "discussions") {
         return { status: "ok", identity: { userId: USER_ID }, pages: 1,
-          items: [{ id: 6, title: "Topic", published: true, attachments: [{ id: 1201 }] }] };
+          items: [{ id: 6, title: "Topic", message: "<p>Synthetic prompt</p>", published: true, attachments: [{ id: 1201 }] }] };
       }
       if (request.endpoint === "discussionEntries") {
         return { status: "ok", identity: { userId: USER_ID }, pages: 1,
@@ -135,12 +135,14 @@ describe("linked Canvas file capture", () => {
       }
       if (request.endpoint === "discussions") {
         return { status: "ok", identity: { userId: USER_ID }, pages: 1,
-          items: [{ id: 6, title: "Topic", published: true, attachments: [{ id: 1301 }] }] };
+          items: [{ id: 6, title: "Topic", message: "<p>Synthetic prompt</p>", published: true, attachments: [{ id: 1301 }] }] };
       }
       return baseResult(request);
     };
     const { capture, deps, downloadFile } = await captureWith(resultFor);
     const requests = deps.reader.mock.calls.map(([input]) => input as ReaderRequest);
+    const assignment = capture.resources.find((resource) => resource.endpoint === "assignments"
+      && resource.courseId === COURSE_ID)?.items[0] as Record<string, unknown>;
     expect(requests.filter((request) => request.endpoint === "file" && request.fileId === 1301)).toHaveLength(1);
     expect(requests.some((request) => request.endpoint === "file" && request.fileId === 1302)).toBe(false);
     expect(requests.some((request) => request.endpoint === "file" && request.fileId === 1303)).toBe(false);
@@ -148,6 +150,8 @@ describe("linked Canvas file capture", () => {
     expect(capture.resources)
       .toContainEqual(expect.objectContaining({ endpoint: "file", courseId: COURSE_ID,
         items: [expect.objectContaining({ id: 1304 })] }));
+    expect(assignment.attachments).toEqual([{ id: 1301 }, { id: 1301 }]);
+    expect(assignment._canvasLinkedFiles).toEqual([{ courseId: COURSE_ID, fileId: 1304 }]);
     expect(downloadFile.mock.calls.filter(([request]) => request.fileId === 1301)).toHaveLength(1);
   });
 

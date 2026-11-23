@@ -25,9 +25,10 @@ function installLibraryActionMock(): void {
         courseExports: {
           "syn-101": {
             files: JSON.stringify([{ id: 1, display_name: "Synthetic syllabus", updated_at: "2026-10-01T00:00:00Z" }, { id: 2, display_name: "Synthetic handout", updated_at: "2026-10-02T00:00:00Z" }]),
-            pages: null,
+            pages: JSON.stringify([{ page_id: 3, title: "Synthetic course page", updated_at: "2026-10-03T00:00:00Z", detail: "## Page overview\n\nPage paragraph.\n\n1. Numbered step\n- Bullet step", bodyHtml: "<h2>Page overview</h2>", bodyEmpty: false }]),
             modules: null,
-            announcements: null,
+            announcements: JSON.stringify([{ id: 4, title: "Synthetic announcement", posted_at: "2026-10-04T00:00:00Z", detail: "Announcement body text.", bodyHtml: "<p>Announcement body text.</p>", bodyEmpty: false }]),
+            quizzes: JSON.stringify([{ id: 5, title: "Synthetic quiz", updated_at: "2026-10-05T00:00:00Z", detail: "Quiz body text.", bodyHtml: "<p>Quiz body text.</p>", bodyEmpty: false }]),
             downloadManifest: JSON.stringify([{ id: 1, status: "downloaded", filename: "syllabus.pdf" }, { id: 2, status: "downloaded", filename: "handout.pdf" }]),
           },
         },
@@ -66,4 +67,23 @@ test("Library actions latch a pending resource and keep feedback beside each row
   await page.evaluate(() => (window as unknown as { __releaseLibraryActions: () => void }).__releaseLibraryActions());
   await expect(syllabus.locator("[data-resource-action='syn-101:file:1']")).toHaveText("File opened.");
   await expect(handout.locator("[data-resource-action='syn-101:file:2']")).toHaveText("File saved.");
+});
+
+test("Library discloses structured bodies for pages, quizzes, and announcements", async ({ page }) => {
+  await page.addInitScript(installLibraryActionMock);
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Library", exact: true }).click();
+
+  const pageRow = page.locator(".resource-row").filter({ hasText: "Synthetic course page" });
+  const quizRow = page.locator(".resource-row").filter({ hasText: "Synthetic quiz" });
+  const announcementRow = page.locator(".resource-row").filter({ hasText: "Synthetic announcement" });
+  await pageRow.getByText("Read body").click();
+  await expect(pageRow.locator("h4")).toHaveText("Page overview");
+  await expect(pageRow.locator("ol")).toContainText("Numbered step");
+  await expect(pageRow.locator("ul")).toContainText("Bullet step");
+  await quizRow.getByText("Read body").click();
+  await expect(quizRow.locator(".event-body")).toContainText("Quiz body text.");
+  await announcementRow.getByText("Read body").click();
+  await expect(announcementRow.locator(".event-body")).toContainText("Announcement body text.");
+  await expect(page.locator(".resource-row script, .resource-row iframe")).toHaveCount(0);
 });

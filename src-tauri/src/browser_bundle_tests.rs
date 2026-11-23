@@ -229,6 +229,26 @@ fn validates_v2_generation_coverage_and_streamed_blob_progress() {
 }
 
 #[test]
+fn rejects_a_forged_complete_claim_with_a_missing_assignment_body() {
+    let mut fixture = ArchiveFixture::new();
+    fixture.snapshot["complete"] = json!(true);
+    fixture.manifest["complete"] = json!(true);
+    fixture.manifest["itemCount"] = json!(4);
+    fixture.snapshot["resources"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|resource| resource["endpoint"] == "assignments")
+        .unwrap()["items"] = json!([{"id":88}]);
+    fixture.rewrite_snapshot();
+
+    assert_eq!(
+        validate_current_bundle(&fixture.app_root, &fixture.expected()).unwrap_err(),
+        BundleError::IncompleteCoverage
+    );
+}
+
+#[test]
 fn retains_repeated_child_detail_coverage_and_each_optional_gap() {
     let mut fixture = ArchiveFixture::new();
     let endpoints = [

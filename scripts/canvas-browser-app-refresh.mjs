@@ -30,6 +30,14 @@ function countOrZero(value, maximum) {
   return validCount(value, maximum) ? value : 0;
 }
 
+function exportStatusOrDisabled(value) {
+  return ["complete", "disabled", "failed"].includes(value) ? value : "disabled";
+}
+
+function bodyFailureReason(value) {
+  return value === "BODY_MISSING" || value === "BODY_SANITIZE_FAILED" ? value : "none";
+}
+
 function frameWriter(writeLine) {
   return (frame) => writeLine(`${JSON.stringify(frame)}\n`);
 }
@@ -55,6 +63,12 @@ function sanitizedResult(result) {
     && validCount(result.gapCount, MAX_CAPTURE_COUNT)
     && validCount(result.dailyGapCount, MAX_CAPTURE_COUNT)
     && validCount(result.omissionCount, MAX_CAPTURE_COUNT)
+    && validCount(result.bodyCount, MAX_CAPTURE_COUNT)
+    && validCount(result.emptyBodyCount, MAX_CAPTURE_COUNT)
+    && result.emptyBodyCount <= result.bodyCount
+    && (result.bodyFailureReason === null
+      || result.bodyFailureReason === "BODY_MISSING" || result.bodyFailureReason === "BODY_SANITIZE_FAILED")
+    && (result.status !== "COMPLETE" || result.bodyFailureReason === null)
     && validCount(result.rubricCount, MAX_CAPTURE_COUNT)
     && validCount(result.linkedFileCount, MAX_CAPTURE_COUNT)
     && (result.status !== "COMPLETE"
@@ -65,6 +79,10 @@ function sanitizedResult(result) {
     && validCount(native.promotedBlobs, MAX_IMPORT_COUNT)
     && validCount(native.reusedBlobs, MAX_IMPORT_COUNT)
     && validCount(native.bytesVerified, MAX_VERIFIED_BYTES)
+    && ["complete", "disabled", "failed"].includes(native.exportStatus)
+    && validCount(native.exportWritten, MAX_IMPORT_COUNT)
+    && validCount(native.exportUnchanged, MAX_IMPORT_COUNT)
+    && validCount(native.exportSkippedOwnerFiles, MAX_IMPORT_COUNT)
     && typeof native.alreadyCurrent === "boolean";
   const completeRefresh = captureValid && importValid && result.status === "COMPLETE"
     && result.gapCount === 0 && result.dailyGapCount === 0 && result.fileBodiesIncomplete === false;
@@ -79,6 +97,9 @@ function sanitizedResult(result) {
     itemCount: countOrZero(result?.itemCount, MAX_CAPTURE_COUNT),
     gapCount: countOrZero(result?.gapCount, MAX_CAPTURE_COUNT),
     omissionCount: countOrZero(result?.omissionCount, MAX_CAPTURE_COUNT),
+    bodyCount: countOrZero(result?.bodyCount, MAX_CAPTURE_COUNT),
+    emptyBodyCount: countOrZero(result?.emptyBodyCount, MAX_CAPTURE_COUNT),
+    bodyFailureReason: bodyFailureReason(result?.bodyFailureReason),
     rubricCount: countOrZero(result?.rubricCount, MAX_CAPTURE_COUNT),
     linkedFileCount: countOrZero(result?.linkedFileCount, MAX_CAPTURE_COUNT),
     importedCourses: countOrZero(native?.importedCourses, MAX_IMPORT_COUNT),
@@ -87,6 +108,10 @@ function sanitizedResult(result) {
     reusedBlobs: countOrZero(native?.reusedBlobs, MAX_IMPORT_COUNT),
     bytesVerified: countOrZero(native?.bytesVerified, MAX_VERIFIED_BYTES),
     alreadyCurrent: native?.alreadyCurrent === true,
+    exportStatus: exportStatusOrDisabled(native?.exportStatus),
+    exportWritten: countOrZero(native?.exportWritten, MAX_IMPORT_COUNT),
+    exportUnchanged: countOrZero(native?.exportUnchanged, MAX_IMPORT_COUNT),
+    exportSkippedOwnerFiles: countOrZero(native?.exportSkippedOwnerFiles, MAX_IMPORT_COUNT),
     ...(errorCode === undefined ? {} : { errorCode }),
   };
 }
@@ -161,7 +186,7 @@ export async function main(args = process.argv.slice(2)) {
     const writeFrame = frameWriter((line) => process.stdout.write(line));
     writeFrame({
       type: "result", status: "incomplete", resourceCount: 0, itemCount: 0, gapCount: 0,
-      omissionCount: 0, rubricCount: 0, linkedFileCount: 0,
+      omissionCount: 0, bodyCount: 0, emptyBodyCount: 0, bodyFailureReason: "none", rubricCount: 0, linkedFileCount: 0,
       importedCourses: 0, archivedCourses: 0, promotedBlobs: 0, reusedBlobs: 0,
       bytesVerified: 0, alreadyCurrent: false, errorCode: "BROWSER_REFRESH_FAILED",
     });
@@ -177,7 +202,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const writeFrame = frameWriter((line) => process.stdout.write(line));
     writeFrame({
       type: "result", status: "incomplete", resourceCount: 0, itemCount: 0, gapCount: 0,
-      omissionCount: 0, rubricCount: 0, linkedFileCount: 0,
+      omissionCount: 0, bodyCount: 0, emptyBodyCount: 0, bodyFailureReason: "none", rubricCount: 0, linkedFileCount: 0,
       importedCourses: 0, archivedCourses: 0, promotedBlobs: 0, reusedBlobs: 0,
       bytesVerified: 0, alreadyCurrent: false, errorCode: "BROWSER_REFRESH_FAILED",
     });

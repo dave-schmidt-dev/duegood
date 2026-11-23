@@ -42,7 +42,7 @@ function installMock(setup: MockSetup): void {
         storeState: "authoritative",
         coursework: { text: JSON.stringify({ generated: new Date().toISOString(), courses: [{ key: "syn-101", canvasCourseId: 101, code: "SYN 101", title: "Synthetic Studies", color: "#3a6ea5", active: true, folder: "syn-101", gradeGroups: [] }], items: [] }), version: "c".repeat(64) },
         refreshHistory: null, conversations: null, profile: JSON.stringify({ name: "Synthetic Learner" }), avatar: null,
-        courseExports: { "syn-101": { files: JSON.stringify([]), pages: null, modules: null, announcements: null, downloadManifest: JSON.stringify([]) } },
+        courseExports: { "syn-101": { files: JSON.stringify([]), pages: null, modules: null, announcements: null, quizzes: null, downloadManifest: JSON.stringify([]) } },
       };
       if (command === "read_avatar_bytes") return null;
       throw { code: "unexpected", message: command };

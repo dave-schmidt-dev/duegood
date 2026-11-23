@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { summarizeCanvasCaptureOutcome, summarizeCanvasRefreshScope } from "../../scripts/canvas-browser-refresh-scope.mjs";
+import {
+  summarizeCanvasCaptureOutcome,
+  summarizeCanvasRefreshScope,
+  validCanvasRefreshScopeSummary,
+} from "../../scripts/canvas-browser-refresh-scope.mjs";
 
 const COURSE_ID = 17;
 const ACCOUNT_LISTS = ["inbox", "inboxAll", "conversationsSent", "conversationsArchived"];
@@ -59,42 +63,188 @@ function completeSnapshot(): SyntheticSnapshot {
 }
 
 describe("Canvas daily refresh scope", () => {
+  it("strictly validates body count fields and bounds", () => {
+    expect(validCanvasRefreshScopeSummary({
+      requiredGapCount: 0, omissionCount: 1, bodyCount: 4, emptyBodyCount: 1,
+    })).toBe(true);
+    expect(validCanvasRefreshScopeSummary({
+      requiredGapCount: 0, omissionCount: 1, bodyCount: 1, emptyBodyCount: 2,
+    })).toBe(false);
+    expect(validCanvasRefreshScopeSummary({
+      requiredGapCount: 0, omissionCount: 1, bodyCount: 4, emptyBodyCount: 1, privateText: "x",
+    })).toBe(false);
+  });
+
+  it("counts known body envelopes once and treats missing or failed bodies as coverage gaps", () => {
+    const snapshot = completeCaptureSnapshot();
+    snapshot.resources.find((row) => row.endpoint === "assignments")!.items = [
+      { id: 31, _canvasBody: { html: "<p>Work</p>", text: "Work", empty: false } },
+      { id: 32, _canvasBody: { html: "", text: "", empty: true } },
+      { id: 33, _canvasBodyReason: "BODY_MISSING" },
+      { id: 34, _canvasBodyReason: "BODY_SANITIZE_FAILED" },
+    ];
+    snapshot.resources.find((row) => row.endpoint === "pages")!.items = [
+      { page_id: 51, _canvasBodyReason: "BODY_MISSING" },
+    ];
+    snapshot.resources.find((row) => row.endpoint === "quizzes")!.items = [{ id: 61, locked: true }];
+    snapshot.coverage.push({ endpoint: "quiz", courseId: COURSE_ID, status: "gap", reason: "locked" });
+    snapshot.resources.push(
+      { endpoint: "page", courseId: COURSE_ID, items: [
+        { page_id: 51, _canvasBody: { html: "<h2>Guide</h2>", text: "Guide", empty: false } },
+        { page_id: 52, _canvasBodyReason: "BODY_MISSING" },
+      ] },
+      { endpoint: "quiz", courseId: COURSE_ID, items: [{ id: 62, _canvasBodyReason: "BODY_MISSING" }] },
+    );
+
+    const scope = summarizeCanvasRefreshScope(snapshot);
+    expect(scope).toMatchObject({ requiredGapCount: 4, bodyCount: 3, emptyBodyCount: 1 });
+    const outcome = summarizeCanvasCaptureOutcome(snapshot);
+    expect(outcome).toMatchObject({
+      failureGapCount: 4,
+      bodyCount: 3,
+      emptyBodyCount: 1,
+      bodyFailureReason: "BODY_SANITIZE_FAILED",
+    });
+  });
+
+  it("reports absent and malformed envelopes with content-free body reasons", () => {
+    const missing = completeSnapshot();
+    missing.resources.find((row) => row.endpoint === "assignments")!.items = [{ id: 71 }];
+    expect(summarizeCanvasCaptureOutcome(missing)).toMatchObject({
+      requiredGapCount: 1,
+      bodyCount: 0,
+      emptyBodyCount: 0,
+      bodyFailureReason: "BODY_MISSING",
+    });
+
+    const failed = completeSnapshot();
+    failed.resources.find((row) => row.endpoint === "assignments")!.items = [
+      { id: 71, _canvasBody: { html: null, text: "", empty: true } },
+    ];
+    expect(summarizeCanvasCaptureOutcome(failed)).toMatchObject({
+      requiredGapCount: 1,
+      bodyCount: 0,
+      emptyBodyCount: 0,
+      bodyFailureReason: "BODY_SANITIZE_FAILED",
+    });
+
+    const unknownReason = completeCaptureSnapshot();
+    unknownReason.resources.find((row) => row.endpoint === "assignments")!.items = [{
+      id: 72,
+      _canvasBodyReason: "unexpected",
+      _canvasBody: { html: "<p>Work</p>", text: "Work", empty: false },
+    }];
+    expect(summarizeCanvasCaptureOutcome(unknownReason)).toMatchObject({
+      requiredGapCount: 1, bodyCount: 0, bodyFailureReason: "BODY_SANITIZE_FAILED",
+    });
+
+    const oversized = completeCaptureSnapshot();
+    oversized.resources.find((row) => row.endpoint === "assignments")!.items = [{
+      id: 73,
+      _canvasBody: { html: "é".repeat(262_145), text: "", empty: false },
+    }];
+    expect(summarizeCanvasCaptureOutcome(oversized)).toMatchObject({
+      requiredGapCount: 1, bodyCount: 0, bodyFailureReason: "BODY_SANITIZE_FAILED",
+    });
+
+    const individuallyBounded = completeCaptureSnapshot();
+    individuallyBounded.resources.find((row) => row.endpoint === "assignments")!.items = [{
+      id: 74,
+      _canvasBody: { html: "é".repeat(250_000), text: "é".repeat(30_000), empty: false },
+    }];
+    expect(summarizeCanvasCaptureOutcome(individuallyBounded)).toMatchObject({
+      requiredGapCount: 0, bodyCount: 1, bodyFailureReason: null,
+    });
+  });
+
+  it("counts listing bodies, honors only coverage-bound omissions, and keeps locked summaries out", () => {
+    const availableListing = completeCaptureSnapshot();
+    availableListing.resources.find((row) => row.endpoint === "pages")!.items = [
+      { page_id: 73, _canvasBody: { html: "<p>Visible</p>", text: "Visible", empty: false } },
+    ];
+    availableListing.coverage.push({ endpoint: "page", courseId: COURSE_ID, status: "gap", reason: "locked" });
+    expect(summarizeCanvasRefreshScope(availableListing)).toMatchObject({
+      requiredGapCount: 0, bodyCount: 1, emptyBodyCount: 0,
+    });
+
+    const confirmedOmission = completeCaptureSnapshot();
+    confirmedOmission.resources.find((row) => row.endpoint === "pages")!.items = [
+      { page_id: 74, _canvasBodyReason: "BODY_MISSING", _canvasBodyOmissionReason: "unpublished" },
+    ];
+    confirmedOmission.coverage.push({ endpoint: "page", courseId: COURSE_ID, status: "gap", reason: "unpublished" });
+    expect(summarizeCanvasCaptureOutcome(confirmedOmission)).toMatchObject({
+      requiredGapCount: 0, failureGapCount: 0, bodyCount: 0, bodyFailureReason: null,
+    });
+
+    const unboundMarker = completeCaptureSnapshot();
+    unboundMarker.resources.find((row) => row.endpoint === "pages")!.items = [
+      { page_id: 75, _canvasBodyReason: "BODY_MISSING", _canvasBodyOmissionReason: "locked" },
+    ];
+    expect(summarizeCanvasCaptureOutcome(unboundMarker)).toMatchObject({
+      requiredGapCount: 1, bodyFailureReason: "BODY_MISSING",
+    });
+
+    const lockedListing = completeCaptureSnapshot();
+    lockedListing.resources.find((row) => row.endpoint === "pages")!.items = [
+      { page_id: 76, published: false, _canvasBody: { html: "<p>Hidden</p>", text: "Hidden", empty: false } },
+    ];
+    lockedListing.coverage.push({ endpoint: "page", courseId: COURSE_ID, status: "gap", reason: "unpublished" });
+    expect(summarizeCanvasRefreshScope(lockedListing)).toMatchObject({
+      requiredGapCount: 0, bodyCount: 0, emptyBodyCount: 0,
+    });
+
+    const lockedGroupPage = completeCaptureSnapshot();
+    lockedGroupPage.resources.find((row) => row.endpoint === "groups")!.items = [
+      { id: 88, course_id: COURSE_ID },
+    ];
+    lockedGroupPage.resources.push({
+      endpoint: "pages", courseId: null, groupId: 88,
+      items: [{ page_id: 89, published: false, _canvasBodyReason: "BODY_MISSING" }],
+    });
+    lockedGroupPage.coverage.push({
+      endpoint: "page", courseId: null, groupId: 88, status: "gap", reason: "unpublished",
+    });
+    expect(summarizeCanvasCaptureOutcome(lockedGroupPage)).toMatchObject({
+      bodyCount: 0, bodyFailureReason: null,
+    });
+  });
+
   it("accepts structurally valid archived file receipts and rejects missing, damaged, or failed receipts", () => {
-    expect(summarizeCanvasRefreshScope(completeSnapshot())).toEqual({ requiredGapCount: 0, omissionCount: 0 });
+    expect(summarizeCanvasRefreshScope(completeSnapshot())).toEqual({ requiredGapCount: 0, omissionCount: 0, bodyCount: 0, emptyBodyCount: 0 });
 
     const missing = completeSnapshot();
     missing.resources.find((row) => row.endpoint === "fileBodies")!.items = [];
-    expect(summarizeCanvasRefreshScope(missing)).toEqual({ requiredGapCount: 1, omissionCount: 0 });
+    expect(summarizeCanvasRefreshScope(missing)).toEqual({ requiredGapCount: 1, omissionCount: 0, bodyCount: 0, emptyBodyCount: 0 });
 
     const damaged = completeSnapshot();
     damaged.resources.find((row) => row.endpoint === "fileBodies")!.items[0]!.sha256 = "damaged";
-    expect(summarizeCanvasRefreshScope(damaged)).toEqual({ requiredGapCount: 1, omissionCount: 0 });
+    expect(summarizeCanvasRefreshScope(damaged)).toEqual({ requiredGapCount: 1, omissionCount: 0, bodyCount: 0, emptyBodyCount: 0 });
 
     const failed = completeSnapshot();
     failed.resources.find((row) => row.endpoint === "fileBodies")!.items[0] = {
       fileId: 61, status: "gap", reason: "HELPER_DOWNLOAD_REQUEST_FAILED",
     };
-    expect(summarizeCanvasRefreshScope(failed)).toEqual({ requiredGapCount: 1, omissionCount: 0 });
+    expect(summarizeCanvasRefreshScope(failed)).toEqual({ requiredGapCount: 1, omissionCount: 0, bodyCount: 0, emptyBodyCount: 0 });
   });
 
   it("separates the immutable partial archive marker from complete daily coverage", () => {
     const snapshot = completeSnapshot();
     snapshot.coverage.push({ endpoint: "calendar", courseId: COURSE_ID, status: "gap", reason: "unsupported" });
     snapshot.coverage.push({ endpoint: "calendarEvents", courseId: null, status: "incomplete", reason: "pagination-budget" });
-    expect(summarizeCanvasRefreshScope(snapshot)).toEqual({ requiredGapCount: 0, omissionCount: 0 });
+    expect(summarizeCanvasRefreshScope(snapshot)).toEqual({ requiredGapCount: 0, omissionCount: 0, bodyCount: 0, emptyBodyCount: 0 });
   });
 
   it("treats explicit locked child content as omitted, while list access failure blocks readiness", () => {
     const locked = completeSnapshot();
     locked.coverage.push({ endpoint: "page", courseId: COURSE_ID, status: "gap", reason: "locked" });
-    expect(summarizeCanvasRefreshScope(locked)).toEqual({ requiredGapCount: 0, omissionCount: 1 });
+    expect(summarizeCanvasRefreshScope(locked)).toEqual({ requiredGapCount: 0, omissionCount: 1, bodyCount: 0, emptyBodyCount: 0 });
 
     const optionalDetail = completeSnapshot();
     optionalDetail.coverage.push(
       { endpoint: "page", courseId: COURSE_ID, status: "gap", reason: "not-found" },
       { endpoint: "moduleItems", courseId: COURSE_ID, status: "gap", reason: "forbidden-optional" },
     );
-    expect(summarizeCanvasRefreshScope(optionalDetail)).toEqual({ requiredGapCount: 0, omissionCount: 2 });
+    expect(summarizeCanvasRefreshScope(optionalDetail)).toEqual({ requiredGapCount: 0, omissionCount: 2, bodyCount: 0, emptyBodyCount: 0 });
 
     const expectedInboxDetail = completeSnapshot();
     expectedInboxDetail.coverage.push({ endpoint: "conversation", courseId: null, status: "gap", reason: "not-found" });
@@ -104,7 +254,7 @@ describe("Canvas daily refresh scope", () => {
     unavailableList.coverage.find((row) => row.endpoint === "pages")!.status = "gap";
     unavailableList.coverage.find((row) => row.endpoint === "pages")!.reason = "forbidden-optional";
     unavailableList.resources = unavailableList.resources.filter((row) => row.endpoint !== "pages");
-    expect(summarizeCanvasRefreshScope(unavailableList)).toEqual({ requiredGapCount: 0, omissionCount: 1 });
+    expect(summarizeCanvasRefreshScope(unavailableList)).toEqual({ requiredGapCount: 0, omissionCount: 1, bodyCount: 0, emptyBodyCount: 0 });
   });
 
   it("classifies locked, unpublished, and not-applicable records as visible omissions", () => {
@@ -114,7 +264,7 @@ describe("Canvas daily refresh scope", () => {
       { endpoint: "quiz", courseId: COURSE_ID, status: "gap", reason: "unpublished" },
       { endpoint: "submission", courseId: COURSE_ID, status: "gap", reason: "not-applicable" },
     );
-    expect(summarizeCanvasRefreshScope(snapshot)).toEqual({ requiredGapCount: 0, omissionCount: 3 });
+    expect(summarizeCanvasRefreshScope(snapshot)).toEqual({ requiredGapCount: 0, omissionCount: 3, bodyCount: 0, emptyBodyCount: 0 });
   });
 
   it("treats not-found pages and their children as omissions, while failed parents keep children as gaps", () => {
@@ -125,7 +275,7 @@ describe("Canvas daily refresh scope", () => {
     unavailablePages.coverage.push({
       endpoint: "page", courseId: COURSE_ID, status: "gap", reason: "parent-unavailable",
     });
-    expect(summarizeCanvasRefreshScope(unavailablePages)).toEqual({ requiredGapCount: 0, omissionCount: 2 });
+    expect(summarizeCanvasRefreshScope(unavailablePages)).toEqual({ requiredGapCount: 0, omissionCount: 2, bodyCount: 0, emptyBodyCount: 0 });
 
     const failedPages = completeSnapshot();
     failedPages.coverage.find((row) => row.endpoint === "pages")!.status = "gap";
@@ -134,7 +284,7 @@ describe("Canvas daily refresh scope", () => {
     failedPages.coverage.push({
       endpoint: "page", courseId: COURSE_ID, status: "gap", reason: "parent-unavailable",
     });
-    expect(summarizeCanvasRefreshScope(failedPages)).toEqual({ requiredGapCount: 2, omissionCount: 0 });
+    expect(summarizeCanvasRefreshScope(failedPages)).toEqual({ requiredGapCount: 2, omissionCount: 0, bodyCount: 0, emptyBodyCount: 0 });
 
     const ambiguousParent = completeSnapshot();
     ambiguousParent.coverage.find((row) => row.endpoint === "pages")!.status = "gap";
@@ -145,12 +295,12 @@ describe("Canvas daily refresh scope", () => {
       endpoint: "page", courseId: COURSE_ID, status: "gap", reason: "parent-unavailable",
     });
     ambiguousParent.resources = ambiguousParent.resources.filter((row) => row.endpoint !== "pages");
-    expect(summarizeCanvasRefreshScope(ambiguousParent)).toEqual({ requiredGapCount: 2, omissionCount: 1 });
+    expect(summarizeCanvasRefreshScope(ambiguousParent)).toEqual({ requiredGapCount: 2, omissionCount: 1, bodyCount: 0, emptyBodyCount: 0 });
 
     const contradictoryList = completeSnapshot();
     contradictoryList.coverage.find((row) => row.endpoint === "pages")!.status = "gap";
     contradictoryList.coverage.find((row) => row.endpoint === "pages")!.reason = "not-found";
-    expect(summarizeCanvasRefreshScope(contradictoryList)).toEqual({ requiredGapCount: 1, omissionCount: 0 });
+    expect(summarizeCanvasRefreshScope(contradictoryList)).toEqual({ requiredGapCount: 1, omissionCount: 0, bodyCount: 0, emptyBodyCount: 0 });
   });
 
   it("counts locked file receipts only when they belong to an active course file", () => {
@@ -158,14 +308,14 @@ describe("Canvas daily refresh scope", () => {
     activeLocked.resources.find((row) => row.endpoint === "fileBodies")!.items[0] = {
       fileId: 61, status: "gap", reason: "locked",
     };
-    expect(summarizeCanvasRefreshScope(activeLocked)).toEqual({ requiredGapCount: 0, omissionCount: 1 });
+    expect(summarizeCanvasRefreshScope(activeLocked)).toEqual({ requiredGapCount: 0, omissionCount: 1, bodyCount: 0, emptyBodyCount: 0 });
 
     const archivedLocked = completeSnapshot();
     archivedLocked.resources.push({ endpoint: "courseFiles", courseId: 18, items: [{ id: 62 }] });
     archivedLocked.resources.find((row) => row.endpoint === "fileBodies")!.items.push({
       fileId: 62, status: "gap", reason: "locked",
     });
-    expect(summarizeCanvasRefreshScope(archivedLocked)).toEqual({ requiredGapCount: 0, omissionCount: 0 });
+    expect(summarizeCanvasRefreshScope(archivedLocked)).toEqual({ requiredGapCount: 0, omissionCount: 0, bodyCount: 0, emptyBodyCount: 0 });
   });
 
   it("requires active linked file bodies and ignores group or completed-course failures", () => {
@@ -181,7 +331,7 @@ describe("Canvas daily refresh scope", () => {
       }] },
     );
     linked.coverage.push({ endpoint: "file", courseId: COURSE_ID, status: "complete" });
-    expect(summarizeCanvasRefreshScope(linked)).toEqual({ requiredGapCount: 0, omissionCount: 1 });
+    expect(summarizeCanvasRefreshScope(linked)).toEqual({ requiredGapCount: 0, omissionCount: 1, bodyCount: 0, emptyBodyCount: 0 });
 
     const missingBody = structuredClone(linked);
     for (const resource of missingBody.resources.filter((row) => row.endpoint === "fileBodies")) {
@@ -194,7 +344,7 @@ describe("Canvas daily refresh scope", () => {
       { endpoint: "file", courseId: COURSE_ID, status: "gap", reason: "forbidden-optional" },
       { endpoint: "file", courseId: COURSE_ID, status: "gap", reason: "not-found" },
     );
-    expect(summarizeCanvasRefreshScope(inaccessible)).toEqual({ requiredGapCount: 0, omissionCount: 2 });
+    expect(summarizeCanvasRefreshScope(inaccessible)).toEqual({ requiredGapCount: 0, omissionCount: 2, bodyCount: 0, emptyBodyCount: 0 });
 
     const failed = completeSnapshot();
     failed.coverage.push({ endpoint: "file", courseId: COURSE_ID, status: "incomplete", reason: "request-failed" });
@@ -217,7 +367,7 @@ describe("Canvas daily refresh scope", () => {
       { endpoint: "file", courseId: null, groupId: 91, status: "incomplete", reason: "request-failed" },
       { endpoint: "personalFile", courseId: null, status: "incomplete", reason: "request-failed" },
     );
-    expect(summarizeCanvasRefreshScope(outsideDaily)).toEqual({ requiredGapCount: 0, omissionCount: 0 });
+    expect(summarizeCanvasRefreshScope(outsideDaily)).toEqual({ requiredGapCount: 0, omissionCount: 0, bodyCount: 0, emptyBodyCount: 0 });
   });
 
   it("flags duplicate linked metadata and receipt IDs instead of counting one successful detail", () => {
@@ -251,7 +401,7 @@ describe("Canvas daily refresh scope", () => {
       { endpoint: "discussionEntries", courseId: COURSE_ID, status: "gap", reason: "forbidden-optional" },
       { endpoint: "quiz", courseId: COURSE_ID, status: "gap", reason: "not-found" },
     );
-    expect(summarizeCanvasRefreshScope(snapshot)).toEqual({ requiredGapCount: 0, omissionCount: 2 });
+    expect(summarizeCanvasRefreshScope(snapshot)).toEqual({ requiredGapCount: 0, omissionCount: 2, bodyCount: 0, emptyBodyCount: 0 });
   });
 
   it("requires Inbox detail identifiers to match the listed conversations", () => {
@@ -320,7 +470,9 @@ describe("Canvas capture completion outcome", () => {
 
   it("keeps one locked detail as an omission beside another captured page", () => {
     const snapshot = completeCaptureSnapshot();
-    snapshot.resources.push({ endpoint: "page", courseId: COURSE_ID, items: [{ page_id: 1 }] });
+    snapshot.resources.push({ endpoint: "page", courseId: COURSE_ID, items: [{
+      page_id: 1, _canvasBody: { html: "<p>Available</p>", text: "Available", empty: false },
+    }] });
     snapshot.coverage.push(
       { endpoint: "page", courseId: COURSE_ID, status: "complete" },
       { endpoint: "page", courseId: COURSE_ID, status: "gap", reason: "locked" },
@@ -348,7 +500,7 @@ describe("Canvas capture completion outcome", () => {
     omittedConversation.resources = omittedConversation.resources.filter((row) => row.endpoint !== "conversation");
     omittedConversation.coverage.find((row) => row.endpoint === "conversation")!.status = "gap";
     omittedConversation.coverage.find((row) => row.endpoint === "conversation")!.reason = "not-found";
-    expect(summarizeCanvasRefreshScope(omittedConversation)).toEqual({ requiredGapCount: 0, omissionCount: 1 });
+    expect(summarizeCanvasRefreshScope(omittedConversation)).toEqual({ requiredGapCount: 0, omissionCount: 1, bodyCount: 0, emptyBodyCount: 0 });
     expect(summarizeCanvasCaptureOutcome(omittedConversation)).toMatchObject({
       requiredGapCount: 0, failureGapCount: 0, omissionCount: 1, fileBodiesIncomplete: false,
     });

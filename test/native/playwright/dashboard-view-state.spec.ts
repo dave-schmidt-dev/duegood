@@ -15,19 +15,26 @@ function installDashboardMock(): void {
       { key: "101", code: "SYN101", title: "Synthetic One", folder: "course-101" },
       { key: "102", code: "SYN102", title: "Synthetic Two", folder: "course-102" },
     ],
-    items: Array.from({ length: 120 }, (_, index) => ({
-      id: `assignment-${String(index)}`, course: index % 2 === 0 ? "101" : "102", kind: "assignment",
-      title: `Synthetic assignment ${String(index)}`, at: new Date(now + (index + 1) * 86_400_000).toISOString(),
-      submissionStatus: "unsubmitted", points: 10, score: 8, grade: "80%", done: false,
-      ...(index === 0 ? { rubric: {
-        criteria: [{
-          id: "criterion-1", description: "Evidence", long_description: "Use two sources.", points: 5,
-          ratings: [{ description: "Strong", long_description: "Clear and relevant", points: 5 }],
-        }],
-        settings: { title: "Synthetic rubric", pointsPossible: 5, freeFormCriterionComments: true },
-        useForGrading: true,
-      } } : {}),
-    })),
+    items: [
+      ...Array.from({ length: 120 }, (_, index) => ({
+        id: `assignment-${String(index)}`, course: index % 2 === 0 ? "101" : "102", kind: "assignment",
+        title: `Synthetic assignment ${String(index)}`, at: new Date(now + (index + 1) * 86_400_000).toISOString(),
+        submissionStatus: "unsubmitted", points: 10, score: 8, grade: "80%", done: false,
+        ...(index === 0 ? { detail: "# Main idea\n\nA paragraph with preserved spacing.\n\n1. First step\n2. Second step\n\n- Evidence\n- Reflection\n\n<img src=x onerror=alert(1)>" } : {}),
+        ...(index === 0 ? { rubric: {
+          criteria: [{
+            id: "criterion-1", description: "Evidence", long_description: "Use two sources.", points: 5,
+            ratings: [{ description: "Strong", long_description: "Clear and relevant", points: 5 }],
+          }],
+          settings: { title: "Synthetic rubric", pointsPossible: 5, freeFormCriterionComments: true },
+          useForGrading: true,
+        } } : {}),
+      })),
+      { id: "undated-assignment", course: "101", kind: "assignment", title: "Undated synthetic assignment", at: null, detail: "# Assignment prompt\n\nReview the rubric." },
+      { id: "standalone-discussion", course: "101", kind: "discussion", title: "Standalone synthetic discussion", detail: "# Discussion prompt\n\nPost your response." },
+      { id: "completed-undated", course: "101", kind: "assignment", title: "Completed synthetic assignment", at: null, detail: "# Completed prompt\n\nKeep this body available.", done: true, doneAt: new Date(now).toISOString() },
+      { id: "completed-dated", course: "101", kind: "assignment", title: "Completed dated synthetic assignment", at: new Date(now + 86_400_000).toISOString(), detail: "# Dated completed prompt\n\nKeep the dated body available.", done: true, doneAt: new Date(now).toISOString() },
+    ],
   });
   const conversations = JSON.stringify({ complete: true, conversations: [
     { canvasConversationId: "thread-default", subject: "Default synthetic thread", unread: true, starred: false, messageCount: 1, participants: [{ canvasUserId: "instructor-1", name: "First instructor" }], messages: [{ canvasMessageId: "message-default", author: "First instructor", body: "First message" }] },
@@ -51,7 +58,7 @@ function installDashboardMock(): void {
       if (command === "read_avatar_bytes") return null;
       if (command === "read_dashboard_documents") return {
         storeState: "authoritative", coursework: { text: coursework, version: "a".repeat(64) }, refreshHistory, conversations,
-        profile: null, avatar: null, courseExports: { "course-101": { files: "[]", pages: "[]", modules: "[]", announcements: "[]", downloadManifest: "[]" }, "course-102": { files: "[]", pages: "[]", modules: "[]", announcements: "[]", downloadManifest: "[]" } },
+        profile: null, avatar: null, courseExports: { "course-101": { files: "[]", pages: "[]", modules: "[]", announcements: "[]", quizzes: "[]", downloadManifest: "[]" }, "course-102": { files: "[]", pages: "[]", modules: "[]", announcements: "[]", quizzes: "[]", downloadManifest: "[]" } },
       };
       if (command === "start_canvas_refresh") return new Promise((resolve) => {
         completeRefresh = () => resolve({ status: "complete", updatedAt: "2026-10-03T12:00:00Z" });
@@ -78,6 +85,43 @@ test("shows captured rubric details for an assignment", async ({ page }) => {
   await expect(rubric).toContainText("Evidence");
   await expect(rubric).toContainText("Strong");
   await expect(rubric).toContainText("Clear and relevant");
+});
+
+test("shows formatted Canvas body text without interpreting markup", async ({ page }) => {
+  await openDashboard(page);
+  const firstCard = page.locator(".timeline .event-card").first();
+  await firstCard.getByRole("button", { name: "Details", exact: true }).click();
+  const body = firstCard.locator(".event-body");
+  await expect(body.locator("h3")).toHaveText("Main idea");
+  await expect(body.locator("p")).toHaveText(["A paragraph with preserved spacing.", "<img src=x onerror=alert(1)>"]);
+  await expect(body.locator("ol li")).toHaveText(["First step", "Second step"]);
+  await expect(body.locator("ul li")).toHaveText(["Evidence", "Reflection"]);
+  await expect(body).toContainText("<img src=x onerror=alert(1)>");
+  await expect(body.locator("img, script, iframe")).toHaveCount(0);
+});
+
+test("keeps undated Canvas assignments and standalone discussions reachable", async ({ page }) => {
+  await openDashboard(page);
+  const undated = page.locator(".undated-events");
+  await expect(undated.getByRole("heading", { name: "No due date", exact: true })).toBeVisible();
+  const assignment = undated.locator(".event-card").filter({ hasText: "Undated synthetic assignment" });
+  await expect(assignment.locator(".event-time--undated")).toHaveText("No due date");
+  await expect(assignment.locator("time")).toHaveCount(0);
+  await assignment.getByRole("button", { name: "Details", exact: true }).click();
+  await expect(assignment.locator(".event-body h3")).toHaveText("Assignment prompt");
+
+  const discussion = undated.locator(".event-card").filter({ hasText: "Standalone synthetic discussion" });
+  await expect(discussion.locator(".event-time--undated")).toHaveText("No due date");
+  await discussion.getByRole("button", { name: "Details", exact: true }).click();
+  await expect(discussion.locator(".event-body h3")).toHaveText("Discussion prompt");
+
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Done", exact: true }).click();
+  const completed = page.locator(".completed-row").filter({ hasText: "Completed synthetic assignment" });
+  await completed.locator(".completed-body-details summary").click();
+  await expect(completed.locator(".event-body h3")).toHaveText("Completed prompt");
+  const completedDated = page.locator(".completed-row").filter({ hasText: "Completed dated synthetic assignment" });
+  await completedDated.locator(".completed-body-details summary").click();
+  await expect(completedDated.locator(".event-body h3")).toHaveText("Dated completed prompt");
 });
 
 test("retains per-page scroll, filters, draft, and non-default selections across navigation, refresh, and reload", async ({ page }) => {

@@ -13,8 +13,15 @@ export interface FullRefreshResult {
   readonly calendarStatus: "complete" | "incomplete" | "failed" | "unavailable";
   readonly gapCount: number;
   readonly omissionCount: number;
+  readonly bodyCount: number;
+  readonly emptyBodyCount: number;
+  readonly bodyFailureReason: "BODY_MISSING" | "BODY_SANITIZE_FAILED" | null;
   readonly rubricCount: number;
   readonly linkedFileCount: number;
+  readonly exportStatus: "complete" | "disabled" | "failed";
+  readonly exportWritten: number;
+  readonly exportUnchanged: number;
+  readonly exportSkippedOwnerFiles: number;
   readonly calendarAdded: number;
   readonly calendarUpdated: number;
   readonly calendarHeld: number;
@@ -42,17 +49,25 @@ export function parseFullRefreshResult(value: unknown): FullRefreshResult | null
   const browserStatus = row.browserStatus;
   const calendarStatus = row.calendarStatus;
   const allowedKeys = new Set([
-    "status", "browserStatus", "calendarStatus", "gapCount", "omissionCount", "rubricCount", "linkedFileCount",
+    "status", "browserStatus", "calendarStatus", "gapCount", "omissionCount", "bodyCount", "emptyBodyCount", "rubricCount", "linkedFileCount",
+    "bodyFailureReason", "exportStatus", "exportWritten", "exportUnchanged", "exportSkippedOwnerFiles",
     "calendarAdded", "calendarUpdated", "calendarHeld", "updatedAt", "errorCode",
   ]);
-  const counts = [row.gapCount, row.omissionCount, row.rubricCount, row.linkedFileCount,
+  const counts = [row.gapCount, row.omissionCount, row.bodyCount, row.emptyBodyCount, row.rubricCount, row.linkedFileCount,
+    row.exportWritten, row.exportUnchanged, row.exportSkippedOwnerFiles,
     row.calendarAdded, row.calendarUpdated, row.calendarHeld];
   if ((status !== "complete" && status !== "incomplete") ||
       (browserStatus !== "complete" && browserStatus !== "incomplete" && browserStatus !== "failed") ||
       (calendarStatus !== "complete" && calendarStatus !== "incomplete" && calendarStatus !== "failed" && calendarStatus !== "unavailable") ||
+      (row.exportStatus !== "complete" && row.exportStatus !== "disabled" && row.exportStatus !== "failed") ||
+      (row.bodyFailureReason !== "none" && row.bodyFailureReason !== null
+        && row.bodyFailureReason !== "BODY_MISSING" && row.bodyFailureReason !== "BODY_SANITIZE_FAILED") ||
+      (status === "complete" && row.bodyFailureReason !== null && row.bodyFailureReason !== "none") ||
       Object.keys(row).some((key) => !allowedKeys.has(key)) ||
       !counts.every((count) => typeof count === "number" && Number.isSafeInteger(count) && count >= 0) ||
-      [row.omissionCount, row.rubricCount, row.linkedFileCount].some((count) => (count as number) > 100_000) ||
+      [row.omissionCount, row.bodyCount, row.emptyBodyCount, row.rubricCount, row.linkedFileCount,
+        row.exportWritten, row.exportUnchanged, row.exportSkippedOwnerFiles].some((count) => (count as number) > 100_000) ||
+      (row.emptyBodyCount as number) > (row.bodyCount as number) ||
       (row.updatedAt !== null && typeof row.updatedAt !== "string") ||
       (row.errorCode !== undefined && row.errorCode !== null && (typeof row.errorCode !== "string" || !/^[a-z0-9][a-z0-9_-]{0,79}$/.test(row.errorCode)))) return null;
   return {
@@ -61,8 +76,15 @@ export function parseFullRefreshResult(value: unknown): FullRefreshResult | null
     calendarStatus,
     gapCount: row.gapCount as number,
     omissionCount: row.omissionCount as number,
+    bodyCount: row.bodyCount as number,
+    emptyBodyCount: row.emptyBodyCount as number,
+    bodyFailureReason: row.bodyFailureReason === "none" ? null : row.bodyFailureReason as FullRefreshResult["bodyFailureReason"],
     rubricCount: row.rubricCount as number,
     linkedFileCount: row.linkedFileCount as number,
+    exportStatus: row.exportStatus,
+    exportWritten: row.exportWritten as number,
+    exportUnchanged: row.exportUnchanged as number,
+    exportSkippedOwnerFiles: row.exportSkippedOwnerFiles as number,
     calendarAdded: row.calendarAdded as number,
     calendarUpdated: row.calendarUpdated as number,
     calendarHeld: row.calendarHeld as number,

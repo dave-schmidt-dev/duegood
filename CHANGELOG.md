@@ -4,6 +4,9 @@
 
 ### Added
 
+- Keep Canvas assignment, discussion, announcement, quiz and page bodies with their formatting and timestamps. Timeline, Done and Library details show the instructions. Missing or unreadable bodies mark the refresh partial.
+- Export readable assignment and discussion copies to configured local class folders after a native import. Refresh preserves owner-written files and reports export outcomes without revealing their contents.
+
 - Capture assignment and graded-discussion rubrics and retrieve files referenced in coursework, including individually accessible files omitted from the course Files list.
 
 - Dismiss the Canvas course-evaluation reminder before capture and report a blocking reminder when dismissal fails.

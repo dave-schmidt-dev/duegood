@@ -9,9 +9,14 @@ import {
   extractCanvasHtmlInPage,
   sanitizeCanvasLink,
 } from "../../scripts/canvas-browser-links.mjs";
+import { sanitizeCanvasCaptureItem } from "../../scripts/canvas-browser-capture-sanitize.mjs";
 
 let browser: Browser;
-type ParsedHtml = { text: string; links: Array<Record<string, unknown>>; textTruncated: boolean; linksTruncated: boolean };
+type ParsedHtml = { text: string; html: string; links: Array<Record<string, unknown>>; textTruncated: boolean; linksTruncated: boolean };
+type CapturedItem = Record<string, unknown> & {
+  _canvasBody?: { html: string; text: string; empty: boolean };
+  _canvasBodyReason?: string;
+};
 type LinkLedgerEntry = { source: string; title: string; asciiHostname: string | null; safeTarget: string | null; clickable: boolean; reason?: string };
 const sanitize = (href: string): LinkLedgerEntry => sanitizeCanvasLink(href) as LinkLedgerEntry;
 
@@ -133,6 +138,57 @@ describe("Canvas rich-text link sanitation", () => {
     );
     expect(fewLinks.links).toHaveLength(2);
     expect(fewLinks.linksTruncated).toBe(true);
+  });
+
+  it("keeps an allowlisted HTML body and a structured text rendering", async () => {
+    const result = await parseSynthetic(
+      `<h2>Prompt heading</h2><p>First <strong>paragraph</strong>.</p>
+       <ol><li>First step</li><li>Second step</li></ol><ul><li>One bullet</li></ul>
+       <script>synthetic-script</script><iframe src="https://example.test/frame"></iframe>
+       <img src="data:text/html,synthetic-image" onerror="synthetic-handler">
+       <a href="javascript:alert(1)" onclick="synthetic-click">unsafe link</a>
+       <a href="https://example.test/safe" onerror="synthetic-error">safe link</a>`,
+    );
+
+    expect(result.text).toContain("## Prompt heading\n\nFirst paragraph.\n\n1. First step\n2. Second step\n\n- One bullet");
+    expect(result.html).toContain("<h2>Prompt heading</h2>");
+    expect(result.html).toContain("<a href=\"https://example.test/safe\">safe link</a>");
+    for (const forbidden of ["<script", "<iframe", "<img", "onerror", "onclick", "javascript:", "data:", "synthetic-"]) {
+      expect(result.html).not.toContain(forbidden);
+    }
+  });
+
+  it("records known-empty, missing, and failed assignment bodies distinctly", async () => {
+    const page = await browser.newPage();
+    try {
+      const evaluatePage = (fn: unknown, input: unknown) => page.evaluate(fn as never, input);
+      const empty = await sanitizeCanvasCaptureItem({ id: 2, description: null }, {
+        endpoint: "assignments", courseId: 4, itemIndex: 0, evaluatePage, htmlReader: extractCanvasHtmlInPage,
+      }) as CapturedItem;
+      expect(empty._canvasBody).toEqual({ html: "", text: "", empty: true });
+      expect(empty._canvasBodyReason).toBeUndefined();
+
+      const largeText = "Synthetic paragraph. ".repeat(4_000).trimEnd();
+      const large = await sanitizeCanvasCaptureItem({ description: `<p>${largeText}</p>` }, {
+        endpoint: "assignments", courseId: 4, itemIndex: 0, evaluatePage, htmlReader: extractCanvasHtmlInPage,
+      }) as CapturedItem;
+      expect(large._canvasBody).toEqual({ html: `<p>${largeText}</p>`, text: largeText, empty: false });
+
+      const missing = await sanitizeCanvasCaptureItem({ id: 3 }, {
+        endpoint: "assignments", courseId: 4, itemIndex: 1, evaluatePage, htmlReader: extractCanvasHtmlInPage,
+      }) as CapturedItem;
+      expect(missing._canvasBodyReason).toBe("BODY_MISSING");
+
+      const failed = await sanitizeCanvasCaptureItem({ id: 4, description: "<p>Body</p>" }, {
+        endpoint: "assignments", courseId: 4, itemIndex: 2,
+        evaluatePage: async () => { throw new Error("synthetic parser failure"); },
+        htmlReader: extractCanvasHtmlInPage,
+      }) as CapturedItem;
+      expect(failed._canvasBodyReason).toBe("BODY_SANITIZE_FAILED");
+      expect(failed).not.toHaveProperty("description");
+    } finally {
+      await page.close();
+    }
   });
 });
 

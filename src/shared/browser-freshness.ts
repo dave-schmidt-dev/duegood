@@ -267,7 +267,8 @@ export function isBrowserLibraryFactCurrent(
   if (freshness.current && resource.type === "File" && resource.linkedCaptureRunId === freshness.runId) return true;
   const endpoint: BrowserEndpoint = resource.type === "File" ? "courseFiles"
     : resource.type === "Page" ? "pages"
-      : resource.type === "Announcement" ? "announcements" : "modules";
+      : resource.type === "Announcement" ? "announcements"
+        : resource.type === "Quiz" ? "quizzes" : "modules";
   return isBrowserSectionCurrent(freshness, course.canvasCourseId, endpoint);
 }
 

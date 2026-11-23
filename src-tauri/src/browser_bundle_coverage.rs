@@ -229,6 +229,24 @@ pub(super) fn validate_active_coverage(
             })
         })
         .collect::<Result<Vec<_>, BundleError>>()?;
+    if snapshot.get("complete").and_then(Value::as_bool) == Some(true) {
+        let active_ids = result
+            .iter()
+            .map(|course| course.course_id)
+            .collect::<BTreeSet<_>>();
+        let body_coverage = crate::browser_body_coverage::summarize(snapshot, &active_ids)
+            .map_err(|error| match error {
+                crate::browser_body_coverage::BodyCoverageError::BudgetExceeded => {
+                    BundleError::BudgetExceeded
+                }
+                crate::browser_body_coverage::BodyCoverageError::InvalidResources => {
+                    BundleError::InvalidSnapshot
+                }
+            })?;
+        if body_coverage.has_failures() {
+            return Err(BundleError::IncompleteCoverage);
+        }
+    }
     Ok((result, all_coverage))
 }
 

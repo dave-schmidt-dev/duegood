@@ -151,6 +151,7 @@ describe("CourseworkStore", () => {
       title: "Synthetic Discussion",
       at: "2030-01-12T23:59",
       detail: "Post and reply.",
+      assignmentDetail: "Write the main post before replying.",
       submissionStatus: "unsubmitted",
       done: false,
       doneAt: null,
@@ -159,7 +160,7 @@ describe("CourseworkStore", () => {
     const store = new CourseworkStore(file);
     const before = await store.read();
     const discussion = before.events.find((event) => event.kind === "discussion");
-    expect(discussion).toMatchObject({ discussionPostDone: false, discussionRepliesDone: false, completed: false });
+    expect(discussion).toMatchObject({ discussionPostDone: false, discussionRepliesDone: false, completed: false, assignmentDetail: "Write the main post before replying." });
     const result = await store.setDiscussionProgress(discussion?.sourceItemId ?? "", true, true, before.version);
     expect(result).toMatchObject({ discussionPostDone: true, discussionRepliesDone: true });
     const after = await store.read();

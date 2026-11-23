@@ -731,7 +731,7 @@ fn status_coverage_coalesces_duplicate_endpoint_rows_to_gap() {
             let receipts = resources.last_mut().unwrap()["items"].as_array_mut().unwrap();
             receipts[1]["reason"] = json!(reason);
         }
-        let receipt_report = diagnostics::import_diagnostics(&bundle, 0, 1);
+        let receipt_report = diagnostics::import_diagnostics(&bundle, 0, 1).unwrap();
         assert_eq!(receipt_report["fileReceipts"]["optionalOmissionReceipts"], 1);
         assert_eq!(receipt_report["fileReceipts"]["failedReceipts"], 1); // File 503 still failed.
         let notices = diagnostics::file_history_notices(&bundle);

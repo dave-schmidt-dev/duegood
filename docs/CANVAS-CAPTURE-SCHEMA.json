@@ -7,6 +7,48 @@
   "additionalProperties": false,
   "required": ["schemaVersion", "source", "runId", "generationId", "capturedAt", "identity", "complete", "activeCourses", "coverageRequirements", "resources", "coverage"],
   "$defs": {
+    "itemBody": {
+      "type": "object",
+      "description": "Safe renderings of the same source body. Only Canvas null and the empty string set empty to true. Each rendering is limited to 512 KiB of UTF-8. Refresh summaries count verified items in bodyCount and explicitly empty items in emptyBodyCount.",
+      "additionalProperties": false,
+      "required": ["html", "text", "empty"],
+      "properties": {
+        "html": { "type": "string", "description": "Allowlisted HTML. Only safe anchor href attributes survive." },
+        "text": { "type": "string", "description": "Structured plain text with paragraphs, headings, list markers and line breaks." },
+        "empty": { "type": "boolean" }
+      },
+      "if": { "properties": { "empty": { "const": true } } },
+      "then": { "properties": { "html": { "const": "" }, "text": { "const": "" } } }
+    },
+    "bodyEvidence": {
+      "type": "object",
+      "description": "Applicable to assignment descriptions, topic and announcement messages, quiz descriptions and page bodies. A list summary can obtain body evidence from its matching detail response. Accessible items without evidence make the refresh partial.",
+      "properties": {
+        "_canvasBody": { "$ref": "#/$defs/itemBody" },
+        "_canvasBodyReason": { "enum": ["BODY_MISSING", "BODY_SANITIZE_FAILED"] },
+        "_canvasBodyOmissionReason": { "enum": ["forbidden-optional", "locked", "not-applicable", "not-found", "unpublished"], "description": "Item-specific confirmed access restriction on a detail request." },
+        "_canvasLinkedFiles": {
+          "type": "array",
+          "description": "Safe Canvas file references extracted from item links. File names come from scoped metadata.",
+          "items": {
+            "type": "object", "required": ["fileId"],
+            "properties": {
+              "fileId": { "type": "integer", "minimum": 1 },
+              "courseId": { "type": "integer", "minimum": 1 },
+              "groupId": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "created_at": { "type": ["string", "null"] },
+        "updated_at": { "type": ["string", "null"] },
+        "posted_at": { "type": ["string", "null"] },
+        "delayed_post_at": { "type": ["string", "null"] },
+        "unlock_at": { "type": ["string", "null"] },
+        "lock_at": { "type": ["string", "null"] },
+        "due_at": { "type": ["string", "null"] }
+      },
+      "not": { "required": ["_canvasBody", "_canvasBodyReason"] }
+    },
     "rubricRating": {
       "type": "object",
       "additionalProperties": false,
@@ -100,6 +142,10 @@
         "additionalProperties": false,
         "required": ["endpoint", "courseId", "items", "pages"],
         "allOf": [
+          {
+            "if": { "properties": { "endpoint": { "enum": ["assignments", "discussions", "announcements", "quizzes", "quiz", "pages", "page"] } } },
+            "then": { "properties": { "items": { "items": { "$ref": "#/$defs/bodyEvidence" } } } }
+          },
           {
             "if": { "properties": { "endpoint": { "const": "assignments" } } },
             "then": { "properties": { "items": { "items": { "$ref": "#/$defs/assignmentRubricFields" } } } }

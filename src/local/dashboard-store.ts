@@ -75,6 +75,7 @@ export class DashboardStore {
         pages: await jsonFile(path.join(api, "pages.json")),
         modules: await jsonFile(path.join(api, "modules.json")),
         announcements: await jsonFile(path.join(api, "announcements.json")),
+        quizzes: await jsonFile(path.join(api, "quizzes.json")),
       }, LOCAL_RESOURCE_PREFIX);
       for (const resource of projected) resources.push(resource);
     }

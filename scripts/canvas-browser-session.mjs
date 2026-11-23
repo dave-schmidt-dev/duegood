@@ -164,6 +164,9 @@ function validateCapture(snapshot, expectedUserId) {
     throw new Error("CAPTURE_BUDGET_EXCEEDED");
   }
   const outcome = summarizeCanvasCaptureOutcome({ ...snapshot, coverage });
+  if (outcome.bodyCount > MAX_CAPTURE_COUNT || outcome.emptyBodyCount > outcome.bodyCount) {
+    throw new Error("CAPTURE_BUDGET_EXCEEDED");
+  }
   const complete = outcome.requiredGapCount === 0
     && outcome.failureGapCount === 0 && !outcome.fileBodiesIncomplete;
   if (snapshot.complete !== complete) throw new Error("CAPTURE_COMPLETION_MISMATCH");
@@ -178,6 +181,9 @@ function validateCapture(snapshot, expectedUserId) {
     gapCount: Math.max(outcome.failureGapCount, outcome.requiredGapCount),
     dailyGapCount: outcome.requiredGapCount,
     omissionCount: outcome.omissionCount,
+    bodyCount: outcome.bodyCount,
+    emptyBodyCount: outcome.emptyBodyCount,
+    bodyFailureReason: outcome.bodyFailureReason,
     ...detailCounts,
     fileBodiesIncomplete: outcome.fileBodiesIncomplete,
     status: complete ? "COMPLETE" : "PARTIAL",
@@ -470,6 +476,9 @@ export async function startSessionBroker({
               gapCount: validated.gapCount,
               dailyGapCount: validated.dailyGapCount,
               omissionCount: validated.omissionCount,
+              bodyCount: validated.bodyCount,
+              emptyBodyCount: validated.emptyBodyCount,
+              bodyFailureReason: validated.bodyFailureReason,
               rubricCount: validated.rubricCount,
               linkedFileCount: validated.linkedFileCount,
               fileBodiesIncomplete: validated.fileBodiesIncomplete,

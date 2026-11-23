@@ -107,6 +107,10 @@ pub struct BrowserImportResult {
     pub reused_blobs: u64,
     pub bytes_verified: u64,
     pub already_current: bool,
+    pub export_status: &'static str,
+    pub export_written: usize,
+    pub export_unchanged: usize,
+    pub export_skipped_owner_files: usize,
 }
 
 /// Fixed importer error codes. `Display` never includes source content, IDs, or local paths.
@@ -324,8 +328,17 @@ fn import_current_capture_inner(
             &receipt_projection.documents,
             scopes.len(),
         )? {
+            let export =
+                crate::canvas_item_export::export_coursework(store.data_root(), &latest.coursework);
             progress(progress_value(BrowserImportPhase::Complete, 0, 0));
-            return Ok(make_result(bundle.run_id, scopes.len(), 0, promoted, true));
+            return Ok(make_result(
+                bundle.run_id,
+                scopes.len(),
+                0,
+                promoted,
+                true,
+                export,
+            ));
         }
         repairing_same_capture = true;
     }
@@ -420,6 +433,7 @@ fn import_current_capture_inner(
         copied.bytes_done,
     ));
     store.publish_refresh_generation(&stage, &generation)?;
+    let export = crate::canvas_item_export::export_coursework(store.data_root(), &coursework);
     progress(progress_value(
         BrowserImportPhase::Complete,
         copied.files_done,
@@ -432,6 +446,7 @@ fn import_current_capture_inner(
         archived_courses,
         promoted,
         false,
+        export,
     ))
 }
 
@@ -630,6 +645,7 @@ fn make_result(
     archived_courses: usize,
     promoted: PromotionResult,
     already_current: bool,
+    export: crate::canvas_item_export::ExportSummary,
 ) -> BrowserImportResult {
     BrowserImportResult {
         run_id,
@@ -639,6 +655,10 @@ fn make_result(
         reused_blobs: promoted.reused_blobs,
         bytes_verified: promoted.bytes_verified,
         already_current,
+        export_status: export.status.as_str(),
+        export_written: export.written,
+        export_unchanged: export.unchanged,
+        export_skipped_owner_files: export.skipped_owner_files,
     }
 }
 
