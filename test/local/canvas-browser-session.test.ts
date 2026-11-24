@@ -262,7 +262,7 @@ async function syntheticRunLease({ run }: { run: (runId: number) => Promise<{
   return outcome.value;
 }
 
-function captureBrokerProgram() {
+function captureBrokerProgram(headless = true) {
   return `
     import path from "node:path";
     import { startSessionBroker } from ${JSON.stringify(brokerUrl)};
@@ -274,6 +274,7 @@ function captureBrokerProgram() {
       appDirectory: directory,
       profileDirectory: path.join(directory, "profile"),
       socketPath: path.join(directory, "session.sock"),
+      headless: ${headless},
       launchContext: async () => context,
       identity: async ({ context: activeContext }) => activeContext === context ? 41 : undefined,
       capture: async ({ context: activeContext, expectedUserId, protocolVersion, progress }) => {
@@ -567,6 +568,31 @@ describe("Canvas session broker process protocol", () => {
       await waitForReady(socketPath);
       expect((await sendCommand(socketPath, "stop")).final).toEqual({ status: "STOPPING" });
       await waitForLine(child, "CLOSED:7");
+      await waitForChildExit(child);
+    } finally {
+      await stopChild(child);
+    }
+  });
+
+  it("rejects refresh capture at dispatch when the broker is visible", async () => {
+    const directory = await tempDirectory();
+    const socketPath = path.join(directory, "session.sock");
+    const child = spawn(process.execPath, ["--input-type=module", "-e", captureBrokerProgram(false)], {
+      cwd: root,
+      env: childEnvironment(directory),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    try {
+      await waitForLine(child, "READY");
+      expect((await sendCommand(socketPath, "status")).final)
+        .toMatchObject({ status: "READY", headless: false });
+      expect((await sendCommand(socketPath, { command: "capture", expectedUserId: 41, requireHeadless: true })).final)
+        .toEqual({ status: "HEADLESS_SESSION_REQUIRED" });
+      await waitForReady(socketPath);
+      expect((await sendCommand(socketPath, "identity")).final)
+        .toEqual({ status: "IDENTITY_AVAILABLE", userId: 41 });
+      expect((await sendCommand(socketPath, "stop")).final).toEqual({ status: "STOPPING" });
+      await waitForLine(child, "CLOSED:0");
       await waitForChildExit(child);
     } finally {
       await stopChild(child);

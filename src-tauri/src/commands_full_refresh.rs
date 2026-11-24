@@ -15,16 +15,6 @@ const MAX_CHILD_RUNTIME: Duration = Duration::from_secs(45 * 60);
 const MAX_CHILD_LINE_BYTES: usize = 8192;
 const MAX_CHILD_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PROGRESS_FRAMES: usize = 256;
-const SIGN_IN_REASONS: &[&str] = &[
-    "CREDENTIALS_UNAVAILABLE",
-    "SIGN_IN_BLOCKED",
-    "VERIFICATION_REQUIRED",
-    "SURVEY_POPUP_BLOCKING",
-    "UNKNOWN_PAGE",
-    "SIGN_IN_TIMEOUT",
-    "SIGN_IN_REQUIRED",
-];
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct FullRefreshProgress {
@@ -595,11 +585,8 @@ fn run_browser_client_with_timeout(
                                     export_skipped_owner_files,
                                 }
                             }
-                            ("incomplete", Some("HELPER_STALE")) => BrowserOutcome::Failed {
-                                code: "helper-stale",
-                            },
-                            ("incomplete", Some(_)) => BrowserOutcome::Failed {
-                                code: "browser-failed",
+                            ("incomplete", Some(code)) => BrowserOutcome::Failed {
+                                code: browser_failure_code(code),
                             },
                             _ => unreachable!("status was validated"),
                         });
@@ -674,9 +661,32 @@ fn valid_runtime_error_code(value: Option<&str>) -> bool {
                 | "IDENTITY_MISMATCH"
                 | "NATIVE_IMPORT_FAILED"
                 | "SURVEY_POPUP_BLOCKING"
+                | "canvas-credentials-unavailable"
+                | "canvas-sign-in-blocked"
+                | "canvas-verification-required"
+                | "canvas-survey-blocking"
+                | "canvas-sign-in-page-unknown"
+                | "canvas-sign-in-timeout"
+                | "canvas-sign-in-required"
+                | "headless-session-required"
                 | "INVALID_REFRESH_RESULT"
         )
     })
+}
+
+fn browser_failure_code(value: &str) -> &'static str {
+    match value {
+        "HELPER_STALE" => "helper-stale",
+        "canvas-credentials-unavailable" => "canvas-credentials-unavailable",
+        "canvas-sign-in-blocked" => "canvas-sign-in-blocked",
+        "canvas-verification-required" => "canvas-verification-required",
+        "canvas-survey-blocking" => "canvas-survey-blocking",
+        "canvas-sign-in-page-unknown" => "canvas-sign-in-page-unknown",
+        "canvas-sign-in-timeout" => "canvas-sign-in-timeout",
+        "canvas-sign-in-required" => "canvas-sign-in-required",
+        "headless-session-required" => "headless-session-required",
+        _ => "browser-failed",
+    }
 }
 
 fn runtime_progress_phase(
@@ -684,20 +694,12 @@ fn runtime_progress_phase(
     reason: Option<&str>,
 ) -> Option<(&'static str, Option<&'static str>)> {
     match (phase, reason) {
-        ("sign-in-window", Some(reason)) => Some(("sign-in-window", Some(sign_in_reason(reason)?))),
         ("broker-starting" | "waiting-for-canvas" | "capturing", None) => {
             Some(("browser-capture", None))
         }
         ("importing" | "complete", None) => Some(("browser-import", None)),
         _ => None,
     }
-}
-
-fn sign_in_reason(value: &str) -> Option<&'static str> {
-    SIGN_IN_REASONS
-        .iter()
-        .copied()
-        .find(|reason| *reason == value)
 }
 
 #[tauri::command]

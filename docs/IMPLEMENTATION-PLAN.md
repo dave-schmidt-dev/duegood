@@ -553,3 +553,7 @@ Confirmed: the desktop dashboard is mounted by `mountDesktop`, initial data load
 Implementation: trigger one refresh after the first dashboard read attempt when source refresh is available, so an initial read failure can recover; do not compare changes until a valid dashboard baseline exists. Arm a six-hour timeout after each completed attempt and catch up on focus or wake when overdue; keep change feedback in dashboard state so it survives navigation. Count coursework and grades from source history, compare Inbox conversations and messages directly, compare course and profile metadata only when current, and include Library additions and updates for projected current resources. Report removals only when their source is complete. Add synthetic UI and desktop runner coverage for launch, six-hour scheduling, no-change results, found changes, deduplication, concurrent runs, and disposal. Update README and changelog.
 
 Validation: full UI and desktop UI suites, typecheck, lint. No live Canvas data.
+
+## Headless refresh for every trigger
+
+Confirmed that manual, launch, scheduled and CLI refresh share a client that can reuse a visible broker or open Chrome after a sign-in failure. Require headless capture for refresh, including at broker dispatch, and return sign-in failures immediately. Preserve explicit visible setup. Verify synthetic sign-in and session-mode regressions, then push and install the tested candidate.

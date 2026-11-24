@@ -168,26 +168,9 @@ fn complete_browser_capture_keeps_omission_count_in_full_refresh_result() {
 }
 
 #[test]
-fn browser_progress_requires_an_allowlisted_reason_for_the_sign_in_window() {
-    for reason in [
-        "CREDENTIALS_UNAVAILABLE",
-        "SIGN_IN_BLOCKED",
-        "VERIFICATION_REQUIRED",
-        "SURVEY_POPUP_BLOCKING",
-        "UNKNOWN_PAGE",
-        "SIGN_IN_TIMEOUT",
-        "SIGN_IN_REQUIRED",
-    ] {
-        assert_eq!(
-            runtime_progress_phase("sign-in-window", Some(reason)),
-            Some(("sign-in-window", Some(reason)))
-        );
-    }
+fn browser_progress_rejects_visible_sign_in_window_messages() {
+    assert_eq!(runtime_progress_phase("sign-in-window", Some("VERIFICATION_REQUIRED")), None);
     assert_eq!(runtime_progress_phase("sign-in-window", None), None);
-    assert_eq!(
-        runtime_progress_phase("sign-in-window", Some("PRIVATE_PAGE_CONTENT")),
-        None
-    );
     assert_eq!(
         runtime_progress_phase("capturing", Some("VERIFICATION_REQUIRED")),
         None
@@ -304,6 +287,42 @@ fn stale_canvas_helpers_keep_a_content_free_failure_code() {
             code: "helper-stale"
         }
     );
+}
+
+#[test]
+fn headless_sign_in_failures_survive_the_expected_incomplete_exit() {
+    for (index, code) in [
+        "canvas-credentials-unavailable",
+        "canvas-sign-in-blocked",
+        "canvas-verification-required",
+        "canvas-survey-blocking",
+        "canvas-sign-in-page-unknown",
+        "canvas-sign-in-timeout",
+        "canvas-sign-in-required",
+        "headless-session-required",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let frame = serde_json::json!({
+            "type": "result", "status": "incomplete", "resourceCount": 0, "itemCount": 0,
+            "gapCount": 0, "omissionCount": 0, "bodyCount": 0, "emptyBodyCount": 0,
+            "bodyFailureReason": "none", "rubricCount": 0, "linkedFileCount": 0,
+            "exportStatus": "disabled", "exportWritten": 0, "exportUnchanged": 0,
+            "exportSkippedOwnerFiles": 0, "importedCourses": 0, "archivedCourses": 0,
+            "promotedBlobs": 0, "reusedBlobs": 0, "bytesVerified": 0,
+            "alreadyCurrent": false, "errorCode": code,
+        });
+        let body = format!(
+            "printf '%s\\n' '{}'; exit 1",
+            serde_json::to_string(&frame).unwrap()
+        );
+        let (_temp, runtime) = runtime_fixture(&body);
+        let (_app_root, app) = app_with_store(&format!("headless-sign-in-{index}"));
+        let outcome = run_browser_client(&app.shared, &runtime, &mut |_| true)
+            .expect("sign-in failure with exit 1 is a valid incomplete result");
+        assert_eq!(outcome, BrowserOutcome::Failed { code });
+    }
 }
 
 #[test]

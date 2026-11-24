@@ -16,7 +16,6 @@ interface Setup {
   readonly fullCalendarHeld?: number;
   readonly fullOmissionCount?: number;
   readonly holdFullRefresh?: boolean;
-  readonly signInFallbackReason?: string;
   readonly failReload?: boolean;
   readonly noCalendarChange?: boolean;
   readonly staleCapture?: boolean;
@@ -228,13 +227,9 @@ function installNativeMock(options: { readonly setup: Setup; readonly now: strin
         if (channel === null) throw { code: "invalid-channel", message: "The synthetic full-refresh channel is invalid." };
         const callback = callbacks.get(Number(channel[1]));
         let index = 0;
-        const phase = (value: string, reason?: string): void => { callback?.({ index, message: { phase: value, ...(reason === undefined ? {} : { reason }) } }); index += 1; };
-        if (setup.signInFallbackReason !== undefined) {
-          phase("sign-in-window", setup.signInFallbackReason);
-          if (setup.holdFullRefresh === true) await new Promise<void>((resolve) => { scope.__releaseFullRefresh = resolve; });
-        }
+        const phase = (value: string): void => { callback?.({ index, message: { phase: value } }); index += 1; };
         phase("browser-capture");
-        if (setup.holdFullRefresh === true && setup.signInFallbackReason === undefined) await new Promise<void>((resolve) => { scope.__releaseFullRefresh = resolve; });
+        if (setup.holdFullRefresh === true) await new Promise<void>((resolve) => { scope.__releaseFullRefresh = resolve; });
         if (setup.fullErrorCode !== undefined) {
           phase("browser-import"); phase("calendar"); phase("complete"); callback?.({ index, end: true });
           return {
@@ -522,30 +517,20 @@ test("full refresh uses the bundled browser command and updates every page witho
   expect(commands).not.toContain("start_ical_refresh");
 });
 
-test("full refresh explains an attended sign-in fallback and hides unapproved reasons", async ({ page, context }) => {
-  await openDashboard(page, { mode: "full", holdFullRefresh: true, signInFallbackReason: "VERIFICATION_REQUIRED" });
+test("full refresh reports sign-in verification as a terminal headless failure", async ({ page }) => {
+  await openDashboard(page, { mode: "full", fullErrorCode: "canvas-verification-required" });
   await page.locator(".top-actions").getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(page.locator(".sync-note")).toHaveText(
-    "Automatic sign-in needs your help (Canvas needs an extra verification step). A Chrome window is opening. Sign in there and Due Good will continue.",
+  await expect(page.locator(".sync-note")).toContainText(
+    "Canvas requires an extra verification step. Complete it in the visible Canvas setup session, then retry refresh.",
   );
-  await page.evaluate(() => (window as unknown as { __releaseFullRefresh?: () => void }).__releaseFullRefresh?.());
-  await expect(page.locator(".sync-note")).toContainText("Canvas and calendar updated.");
-
-  const invalid = await context.newPage();
-  await openDashboard(invalid, { mode: "full", holdFullRefresh: true, signInFallbackReason: "PRIVATE_PAGE_CONTENT" });
-  await invalid.locator(".top-actions").getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(invalid.locator(".sync-note")).toHaveText("Canvas refresh is in progress");
-  await expect(invalid.locator(".sync-note")).not.toContainText("PRIVATE_PAGE_CONTENT");
-  await invalid.evaluate(() => (window as unknown as { __releaseFullRefresh?: () => void }).__releaseFullRefresh?.());
-  await expect(invalid.locator(".sync-note")).toContainText("Canvas and calendar updated.");
-  await invalid.close();
+  await expect(page.locator(".sync-note")).not.toContainText("Chrome window is opening");
 });
 
-test("survey recovery tells the owner how to resume capture", async ({ page }) => {
-  await openDashboard(page, { mode: "full", holdFullRefresh: true, signInFallbackReason: "SURVEY_POPUP_BLOCKING" });
+test("full refresh reports a blocking survey without opening Chrome", async ({ page }) => {
+  await openDashboard(page, { mode: "full", fullErrorCode: "canvas-survey-blocking" });
   await page.locator(".top-actions").getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(page.locator(".sync-note")).toHaveText(
-    "A Canvas survey is blocking refresh. A Chrome window is opening. Dismiss the survey there and Due Good will continue.",
+  await expect(page.locator(".sync-note")).toContainText(
+    "A Canvas survey is blocking refresh. Dismiss it in the visible Canvas session, then retry refresh.",
   );
 });
 

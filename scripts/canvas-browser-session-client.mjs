@@ -9,7 +9,6 @@ import { readRuntimeBuildIdentity } from "./canvas-runtime-build-identity.mjs";
 import { fixedSessionPaths } from "./canvas-browser-session.mjs";
 import { bindCanvasAccount, readCanvasAccountBinding } from "./canvas-browser-binding.mjs";
 import { runCanvasBrowserNativeImport } from "./canvas-browser-native-import.mjs";
-import { captureWithSignInWindow, captureFailureSummary } from "./canvas-refresh-retry.mjs";
 import { parseSessionMode } from "./canvas-sign-in-recovery.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -99,8 +98,8 @@ export function sanitizeFrame(frame, command) {
     return { status: frame.status, checks: frame.checks };
   }
   if (command === "status" && frame.status === "READY" && keys.length === 3
-      && typeof frame.headless === "boolean" && Number.isSafeInteger(frame.pid) && frame.pid > 0) {
-    return { status: "READY", headless: frame.headless, pid: frame.pid };
+      && keys.includes("headless") && Number.isSafeInteger(frame.pid) && frame.pid > 0) {
+    return { status: "READY", headless: frame.headless === true, pid: frame.pid };
   }
   if (command === "identity" && frame.userId !== undefined) {
     if (frame.status !== "IDENTITY_AVAILABLE" || keys.length !== 2
@@ -111,9 +110,11 @@ export function sanitizeFrame(frame, command) {
   return { status: frame.status };
 }
 
-async function sendCommand(command, timeoutMs, argument = undefined) {
+async function sendCommand(command, timeoutMs, argument = undefined, { requireHeadless = false } = {}) {
   if (!await verifySocketPath()) return undefined;
-  const request = command === "capture" ? { command, expectedUserId: argument }
+  const request = command === "capture" ? {
+    command, expectedUserId: argument, ...(requireHeadless ? { requireHeadless: true } : {}),
+  }
     : command === "stop" && argument !== undefined ? { command, expectedPid: argument } : { command };
   return new Promise((resolve, reject) => {
     let buffer = Buffer.alloc(0);
@@ -375,13 +376,24 @@ function captureSummary(frame, invalidResponse = "INVALID_CAPTURE_RESPONSE") {
   };
 }
 
+function captureFailureSummary(frame) {
+  if (frame?.status === "REQUEST_FAILED" && Object.keys(frame).length === 2
+      && Object.hasOwn(frame, "errorCode") && typeof frame.errorCode === "string"
+      && /^[A-Z_]{1,48}$/u.test(frame.errorCode)) {
+    return { status: "REQUEST_FAILED", errorCode: frame.errorCode };
+  }
+  if (frame && Object.keys(frame).length === 1
+      && typeof frame.status === "string" && /^[A-Z0-9_]{1,48}$/u.test(frame.status)) {
+    return { status: frame.status };
+  }
+  return { status: "REQUEST_FAILED", errorCode: "INVALID_RESPONSE" };
+}
+
 /**
  * @typedef {object} CanvasRefreshOptions
  * @property {(options: {headless: boolean}) => Promise<{status: string, headless?: boolean, pid?: number, reused?: boolean}>} [start]
- * @property {(expectedPid?: number) => Promise<{status: string}>} [stop]
- * @property {(reason: string) => void} [reportSignInWindow]
  * @property {() => Promise<number | undefined>} [readBinding]
- * @property {(userId: number) => Promise<{status: string, [key: string]: unknown} | undefined>} [capture]
+ * @property {(userId: number, options?: {requireHeadless: boolean}) => Promise<{status: string, [key: string]: unknown} | undefined>} [capture]
  * @property {(options: {confirmedFirstUserId: number, progress: (status: string) => void}) => Promise<{
  *   type: string, status: string, runId: number, importedCourses: number, archivedCourses: number,
  *   promotedBlobs: number, reusedBlobs: number, bytesVerified: number, alreadyCurrent: boolean
@@ -398,10 +410,8 @@ function captureSummary(frame, invalidResponse = "INVALID_CAPTURE_RESPONSE") {
  */
 export async function runCanvasBrowserRefresh({
   start = startAndWait,
-  stop = stopAndWait,
-  reportSignInWindow = (reason) => process.stderr.write(`OPENING_SIGN_IN_WINDOW=${reason}\n`),
   readBinding = () => readCanvasAccountBinding(appDirectory),
-  capture = (userId) => sendCommand("capture", CAPTURE_TIMEOUT_MS, userId),
+  capture = (userId, options) => sendCommand("capture", CAPTURE_TIMEOUT_MS, userId, options),
   nativeImport = runCanvasBrowserNativeImport,
   stateCommand = runCaptureStateCommand,
   reportImportProgress = (status) => process.stderr.write(`CANVAS_NATIVE_IMPORT_PROGRESS=${status}\n`),
@@ -435,6 +445,10 @@ export async function runCanvasBrowserRefresh({
     await invalidatePreCaptureAttempt();
     return { status: /^[A-Z0-9_]{1,48}$/u.test(ready?.status ?? "") ? ready.status : "START_FAILED" };
   }
+  if (ready.headless !== true) {
+    await invalidatePreCaptureAttempt();
+    return { status: "HEADLESS_SESSION_REQUIRED" };
+  }
 
   let boundId;
   try { boundId = await readBinding(); } catch { /* A rejected binding requires owner setup again. */ }
@@ -445,7 +459,7 @@ export async function runCanvasBrowserRefresh({
 
   let captured;
   try {
-    captured = await captureWithSignInWindow({ ready, capture: () => capture(boundId), start, stop, reportSignInWindow });
+    captured = await capture(boundId, { requireHeadless: true });
   } catch { captured = undefined; }
   if (!["COMPLETE", "PARTIAL"].includes(captured?.status)) {
     await invalidatePreCaptureAttempt();
@@ -509,7 +523,8 @@ async function main() {
   }
   output(result);
   if (["NOT_RUNNING", "START_FAILED", "STOP_FAILED", "REQUEST_FAILED", "INVALID_CONFIGURATION",
-    "SIGN_IN_REQUIRED", "BINDING_REQUIRED", "IDENTITY_MISMATCH", "CAPTURE_STATE_UNAVAILABLE"].includes(result.status)
+    "SIGN_IN_REQUIRED", "BINDING_REQUIRED", "IDENTITY_MISMATCH", "CAPTURE_STATE_UNAVAILABLE",
+    "HEADLESS_SESSION_REQUIRED"].includes(result.status)
       || result.nativeImport?.status === "FAILED") {
     process.exitCode = 1;
   }

@@ -357,7 +357,7 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
       if (fullRefresh) {
         const result = await transport.startFullRefresh((progress: FullRefreshProgress) => {
           if (state.refreshState !== "running") return;
-          state = { ...state, refreshProgress: { phase: progress.phase, completed: 0, total: null, bytesDone: null, ...(progress.reason === undefined ? {} : { reason: progress.reason }) } };
+          state = { ...state, refreshProgress: { phase: progress.phase, completed: 0, total: null, bytesDone: null } };
           drawPreservingScroll();
         });
         const reloaded = await reloadAuthoritativeDashboard();

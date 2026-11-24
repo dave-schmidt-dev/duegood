@@ -120,7 +120,6 @@ describe.sequential("packaged browser runtime", () => {
       heartbeatMs: 60_000,
       writeLine: (line) => { output.push(line); return true; },
       runClient: async (options = {}) => {
-        options.reportSignInWindow?.("PRIVATE_PAGE_CONTENT");
         process.stderr.write("CANVAS_CAPTURE_PROGRESS=CAPTURE_RUNNING\n");
         process.stderr.write(`CANVAS_CAPTURE_PROGRESS=PRIVATE_${privateSentinel}\n`);
         options.reportImportProgress?.("raw account or course data");
@@ -177,39 +176,24 @@ describe.sequential("packaged browser runtime", () => {
     expect(result).toStrictEqual(frames.at(-1));
   });
 
-  it("keeps the attended sign-in reason visible until capture resumes", async () => {
+  it.each([
+    ["CREDENTIALS_UNAVAILABLE", "canvas-credentials-unavailable"],
+    ["SIGN_IN_BLOCKED", "canvas-sign-in-blocked"],
+    ["VERIFICATION_REQUIRED", "canvas-verification-required"],
+    ["SURVEY_POPUP_BLOCKING", "canvas-survey-blocking"],
+    ["UNKNOWN_PAGE", "canvas-sign-in-page-unknown"],
+    ["SIGN_IN_TIMEOUT", "canvas-sign-in-timeout"],
+    ["SIGN_IN_REQUIRED", "canvas-sign-in-required"],
+    ["HEADLESS_SESSION_REQUIRED", "headless-session-required"],
+  ])("returns an actionable terminal error for %s", async (reason, errorCode) => {
     const output: string[] = [];
     const result = await runCanvasAppRefresh({
-      heartbeatMs: 10,
       writeLine: (line) => { output.push(line); return true; },
-      runClient: async (options = {}) => {
-        options.reportSignInWindow?.("VERIFICATION_REQUIRED");
-        process.stderr.write("CANVAS_CAPTURE_PROGRESS=WAITING_FOR_OWNER_SIGN_IN\n");
-        await new Promise((resolve) => setTimeout(resolve, 25));
-        process.stderr.write("CANVAS_CAPTURE_PROGRESS=SIGNING_IN_AUTOMATICALLY\n");
-        process.stderr.write("CANVAS_CAPTURE_PROGRESS=SURVEY_POPUP_BLOCKING\n");
-        await new Promise((resolve) => setTimeout(resolve, 25));
-        process.stderr.write("CANVAS_CAPTURE_PROGRESS=CAPTURE_RUNNING\n");
-        return {
-          status: "COMPLETE", resourceCount: 1, itemCount: 1, gapCount: 0, dailyGapCount: 0,
-          omissionCount: 0, bodyCount: 5, emptyBodyCount: 1, bodyFailureReason: null, rubricCount: 0, linkedFileCount: 0, fileBodiesIncomplete: false,
-          nativeImport: {
-            status: "IMPORTED", importedCourses: 1, archivedCourses: 0, promotedBlobs: 0,
-            reusedBlobs: 0, bytesVerified: 0, alreadyCurrent: false, ...exportResultCounts,
-          },
-        };
-      },
+      runClient: async () => ({ status: "REQUEST_FAILED", errorCode: reason }),
     });
     const frames = output.map((line) => JSON.parse(line) as Record<string, unknown>);
-    const progress = frames.filter((frame) => frame.type === "progress");
-    const fallbackIndex = progress.findIndex((frame) => frame.phase === "sign-in-window");
-    const captureIndex = progress.findIndex((frame) => frame.phase === "capturing");
-    expect(fallbackIndex).toBeGreaterThan(0);
-    expect(captureIndex).toBeGreaterThan(fallbackIndex);
-    expect(progress.slice(fallbackIndex, captureIndex).every((frame) =>
-      frame.phase === "sign-in-window" && frame.reason === "VERIFICATION_REQUIRED")).toBe(true);
-    expect(progress.filter((frame) => frame.phase === "sign-in-window").length).toBeGreaterThan(1);
-    expect(result.status).toBe("complete");
+    expect(result.errorCode).toBe(errorCode);
+    expect(frames.some((frame) => frame.phase === "sign-in-window")).toBe(false);
   });
 
   it("fails closed when capture data is incomplete", async () => {

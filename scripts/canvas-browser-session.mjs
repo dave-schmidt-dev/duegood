@@ -456,6 +456,9 @@ export async function startSessionBroker({
             return respond(result);
           }
           if (request.command === "capture") {
+            if (request.requireHeadless === true && !headless) {
+              return respond({ status: "HEADLESS_SESSION_REQUIRED" });
+            }
             const reportProgress = (status) => {
               if (CAPTURE_PROGRESS_STATES.has(status)) sendFrame(socket, { progress: status });
             };

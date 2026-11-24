@@ -1,6 +1,6 @@
 # Automated Okta sign-in for Canvas refresh
 
-Refresh starts headless and opens Chrome when sign-in needs your help. Verification used synthetic Okta pages. Live Marymount sign-in remains unverified.
+Refresh runs headless and reports when sign-in needs your help. Verification used synthetic Okta pages. Live Marymount sign-in remains unverified.
 
 ## What it does
 
@@ -84,21 +84,11 @@ After the branch is merged to `main`, add this entry to `CONSUMERS` in `~/Docume
 
 By code reading, the broker's `multi` mode `execve`s the helper without closing inherited descriptors, so the handoff pipe on fd 3 should reach it; this has not run against the real broker yet. The helper refuses arguments, refuses a terminal or regular file on fd 3, and writes only a content-free `DUEGOOD_SSO_HANDOFF=<code>` line to stderr on failure.
 
-## First live run (supervised)
+## Interactive sign-in and headless refresh
 
-1. Stop any running broker: `npm run canvas:session -- stop`.
-2. Sign out of Canvas in the capture profile, or wait until the session has expired.
-3. Start visible mode and watch the window: `npm run canvas:session -- start --headed`, then `npm run canvas:session -- refresh`.
-4. Confirm that progress shows `SIGNING_IN_AUTOMATICALLY` and then capture continues.
-5. Check `canvas-sso-auto-sign-in.json` for the outcome code.
-
-To exercise the default refresh path after the supervised run:
-
-```sh
-npm run canvas:session -- stop
-npm run canvas:session -- refresh
-```
-
-Headless mode uses the same profile and a desktop Chrome user agent (the installed Chrome major version without the `Headless` marker). Headless mode returns challenge and rejection reasons immediately. After silent SSO or an automatic sign-in, it waits briefly for Canvas to confirm the session. The app and CLI refresh start headless by default (`start --headless` explicitly selects the same mode). When the owner can finish sign-in or dismiss the survey, Refresh stops the headless session, reports the reason, and retries once in a visible window with the same profile. It closes that temporary session after the retry. An owner-started headed session stays open.
+1. Stop the capture broker with `npm run canvas:session -- stop`.
+2. Open the private Chrome profile with `npm run canvas:session -- start --headed` and finish any required sign-in or survey.
+3. Stop the visible session with `npm run canvas:session -- stop`.
+4. Run `npm run canvas:session -- refresh`. App and CLI refreshes use the same profile in headless mode. A sign-in failure ends the capture and reports its reason.
 
 After sign-in, capture waits briefly for the Canvas evaluation reminder. It uses the visible close link or “Do It Later”. If dismissal fails, visible sessions report `SURVEY_POPUP_BLOCKING` and wait for the owner until the sign-in deadline. Headless sessions fail immediately with the same code.

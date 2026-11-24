@@ -1,13 +1,12 @@
 #!/usr/bin/env node
-/** Fixed app entrypoint for a complete attended Canvas browser refresh. */
+/** Fixed app entrypoint for a complete headless Canvas browser refresh. */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCanvasBrowserRefresh } from "./canvas-browser-session-client.mjs";
-import { isSignInReason } from "./canvas-sign-in-recovery.mjs";
 
 const ALLOWED_ARGUMENTS = 0;
 const PROGRESS_PHASES = new Set([
-  "broker-starting", "waiting-for-canvas", "capturing", "importing", "complete", "sign-in-window",
+  "broker-starting", "waiting-for-canvas", "capturing", "importing", "complete",
 ]);
 const CAPTURE_PROGRESS = new Set([
   "SURVEY_POPUP_BLOCKING", "WAITING_FOR_OWNER_SIGN_IN", "SIGNING_IN_AUTOMATICALLY", "CANVAS_SESSION_AVAILABLE", "CHECKING_CANVAS_SESSION",
@@ -16,8 +15,20 @@ const CAPTURE_PROGRESS = new Set([
 ]);
 const ERROR_CODES = new Set([
   "BROWSER_REFRESH_FAILED", "CAPTURE_GAPS", "CAPTURE_STATE_UNAVAILABLE", "HELPER_STALE", "BINDING_REQUIRED",
-  "SURVEY_POPUP_BLOCKING", "SIGN_IN_REQUIRED", "IDENTITY_MISMATCH", "NATIVE_IMPORT_FAILED", "INVALID_REFRESH_RESULT",
+  "canvas-credentials-unavailable", "canvas-sign-in-blocked", "canvas-verification-required",
+  "canvas-survey-blocking", "canvas-sign-in-page-unknown", "canvas-sign-in-timeout",
+  "canvas-sign-in-required", "headless-session-required", "IDENTITY_MISMATCH", "NATIVE_IMPORT_FAILED", "INVALID_REFRESH_RESULT",
 ]);
+const SIGN_IN_ERROR_CODES = Object.freeze({
+  CREDENTIALS_UNAVAILABLE: "canvas-credentials-unavailable",
+  SIGN_IN_BLOCKED: "canvas-sign-in-blocked",
+  VERIFICATION_REQUIRED: "canvas-verification-required",
+  SURVEY_POPUP_BLOCKING: "canvas-survey-blocking",
+  UNKNOWN_PAGE: "canvas-sign-in-page-unknown",
+  SIGN_IN_TIMEOUT: "canvas-sign-in-timeout",
+  SIGN_IN_REQUIRED: "canvas-sign-in-required",
+  HEADLESS_SESSION_REQUIRED: "headless-session-required",
+});
 const MAX_CAPTURE_COUNT = 100_000;
 const MAX_IMPORT_COUNT = 100_000;
 const MAX_VERIFIED_BYTES = 4 * 1024 * 1024 * 1024;
@@ -45,9 +56,9 @@ function frameWriter(writeLine) {
 function errorCodeFor(result) {
   if (result?.nativeImport?.status === "FAILED") return "NATIVE_IMPORT_FAILED";
   if (result?.status === "BINDING_REQUIRED") return "BINDING_REQUIRED";
-  if (result?.status === "SIGN_IN_REQUIRED") return "SIGN_IN_REQUIRED";
   if (result?.status === "IDENTITY_MISMATCH") return "IDENTITY_MISMATCH";
-  if (result?.errorCode === "SURVEY_POPUP_BLOCKING") return "SURVEY_POPUP_BLOCKING";
+  const signInError = SIGN_IN_ERROR_CODES[result?.errorCode] ?? SIGN_IN_ERROR_CODES[result?.status];
+  if (signInError !== undefined) return signInError;
   if (result?.errorCode === "CAPTURE_STATE_UNAVAILABLE") return "CAPTURE_STATE_UNAVAILABLE";
   if (result?.errorCode === "HELPER_STALE") return "HELPER_STALE";
   if (result?.status === "PARTIAL") return "CAPTURE_GAPS";
@@ -150,25 +161,20 @@ export async function runCanvasAppRefresh({
   const writeFrame = frameWriter(writeLine);
   let lastPhase = "";
   let currentPhase = "broker-starting";
-  let currentReason;
-  const emitPhase = (phase, force = false, reason = undefined) => {
+  const emitPhase = (phase, force = false) => {
     if (!PROGRESS_PHASES.has(phase) || !force && phase === lastPhase) return;
-    if (currentPhase === "sign-in-window" && phase === "waiting-for-canvas") return;
-    if (phase === "sign-in-window" ? !isSignInReason(reason) : reason !== undefined) return;
     lastPhase = phase;
     currentPhase = phase;
-    currentReason = reason;
-    writeFrame({ type: "progress", phase, ...(reason === undefined ? {} : { reason }) });
+    writeFrame({ type: "progress", phase });
   };
   emitPhase(currentPhase);
-  const heartbeat = setInterval(() => emitPhase(currentPhase, true, currentReason), heartbeatMs);
+  const heartbeat = setInterval(() => emitPhase(currentPhase, true), heartbeatMs);
   heartbeat.unref?.();
   const restoreStderr = interceptCaptureProgress(emitPhase);
   let result;
   try {
     result = await runClient({
       reportImportProgress: () => emitPhase("importing"),
-      reportSignInWindow: (reason) => emitPhase("sign-in-window", true, reason),
     });
   } catch {
     result = { status: "REQUEST_FAILED" };

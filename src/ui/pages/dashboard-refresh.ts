@@ -26,21 +26,6 @@ export function refreshNote(state: DashboardState, latest: DashboardRefresh | un
     const progress = state.refreshProgress;
     const calendar = calendarOnlyRefresh(state);
     if (progress === undefined) return `${calendar ? "Calendar" : "Canvas"} refresh is in progress`;
-    if (progress.phase === "sign-in-window") {
-      if (progress.reason === "SURVEY_POPUP_BLOCKING") {
-        return "A Canvas survey is blocking refresh. A Chrome window is opening. Dismiss the survey there and Due Good will continue.";
-      }
-      const reason = ({
-        CREDENTIALS_UNAVAILABLE: "your saved sign-in details are unavailable",
-        SIGN_IN_BLOCKED: "a previous password was rejected",
-        VERIFICATION_REQUIRED: "Canvas needs an extra verification step",
-        UNKNOWN_PAGE: "the Canvas sign-in page is not recognized",
-        SIGN_IN_TIMEOUT: "automatic sign-in took too long",
-        SIGN_IN_REQUIRED: "Canvas needs you to sign in",
-      } as Readonly<Record<string, string>>)[progress.reason ?? ""];
-      return reason === undefined ? "Canvas refresh is in progress" :
-        `Automatic sign-in needs your help (${reason}). A Chrome window is opening. Sign in there and Due Good will continue.`;
-    }
     const phase = ({ starting: "Preparing", snapshot: "Saving safety copy", fetch: "Reading Canvas data", reconcile: "Reviewing changes", stage: "Preparing changes", publish: "Saving updates", "browser-capture": "Reading Canvas and checking files", "browser-import": "Importing Canvas coursework", calendar: "Refreshing calendar deadlines", "broker-starting": "Starting secure feed", "waiting-for-calendar": "Waiting for calendar", importing: "Importing calendar", complete: "Finishing" } as Readonly<Record<string, string>>)[progress.phase] ?? "Working";
     const count = progress.total === null ? `${String(progress.completed)} completed` : `${String(progress.completed)} of ${String(progress.total)} completed`;
     const full = state.desktop?.browserRefreshAvailable === true;

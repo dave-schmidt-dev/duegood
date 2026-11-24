@@ -37,10 +37,12 @@ export function readCommand(socket) {
         }
         return finish(undefined, request);
       }
-      if (request.command === "capture" && keys.length === 2
-          && keys.includes("expectedUserId") && Number.isSafeInteger(request.expectedUserId)
-          && request.expectedUserId > 0) {
-        if (rawRequest !== JSON.stringify({ command: "capture", expectedUserId: request.expectedUserId })) {
+      if (request.command === "capture" && keys.includes("expectedUserId")
+          && Number.isSafeInteger(request.expectedUserId) && request.expectedUserId > 0
+          && (keys.length === 2 || (keys.length === 3 && request.requireHeadless === true))) {
+        const expectedRequest = { command: "capture", expectedUserId: request.expectedUserId,
+          ...(request.requireHeadless === true ? { requireHeadless: true } : {}) };
+        if (rawRequest !== JSON.stringify(expectedRequest)) {
           return finish(new Error("INVALID_REQUEST"));
         }
         return finish(undefined, request);

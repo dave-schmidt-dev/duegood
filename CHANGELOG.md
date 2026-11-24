@@ -13,13 +13,13 @@
 
 - Dismiss the Canvas course-evaluation reminder before capture and report a blocking reminder when dismissal fails.
 
-- Sign in to Marymount Okta automatically when the Canvas capture session has expired, using a password and Google Authenticator code from a pinned broker consumer. Push, number match, FastPass, enrollment, CAPTCHA, unknown pages, and other hosts fail closed, and visible mode keeps the attended sign-in as the fallback.
+- Sign in to Marymount Okta automatically when the Canvas capture session has expired, using a password and Google Authenticator code from a pinned broker consumer. Push, number match, FastPass, enrollment, CAPTCHA, unknown pages, and other hosts fail closed, and interactive sign-in is available through explicit setup.
 
 ### Changed
 
 - Canvas refresh skips confirmed empty files and keeps supported raster images under their detected format when the label differs.
 
-- Start Canvas refresh headless. When sign-in needs help, explain why and open Chrome for one attended retry. Use `canvas:session -- start --headed` to keep a visible session open.
+- Keep every Canvas refresh headless, including scheduled runs and sign-in failures. Open visible Chrome explicitly for interactive setup.
 
 - Exclude disposable build caches and stages from package validation while continuing to check public source files.
 - Allow generated motif images under the exact `docs/motifs/` path in the public-tree check while still rejecting images outside the exact allowed roots and rejecting private content under any path. The guard's path rules allow that directory only; they do not establish provenance.

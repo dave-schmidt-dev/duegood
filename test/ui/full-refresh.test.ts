@@ -13,10 +13,8 @@ const defaultRefreshCounts = {
 };
 
 describe("full refresh result semantics", () => {
-  it("accepts sign-in help progress only with an allowlisted reason", () => {
-    expect(parseFullRefreshProgress({ phase: "sign-in-window", reason: "VERIFICATION_REQUIRED" }))
-      .toEqual({ phase: "sign-in-window", reason: "VERIFICATION_REQUIRED" });
-    expect(parseFullRefreshProgress({ phase: "sign-in-window", reason: "PRIVATE_PAGE_CONTENT" })).toBeNull();
+  it("rejects removed visible-window progress and unexpected refresh reasons", () => {
+    expect(parseFullRefreshProgress({ phase: "sign-in-window", reason: "VERIFICATION_REQUIRED" })).toBeNull();
     expect(parseFullRefreshProgress({ phase: "browser-capture", reason: "VERIFICATION_REQUIRED" })).toBeNull();
   });
 
@@ -199,5 +197,24 @@ describe("full refresh result semantics", () => {
     expect(feedback.state).toBe("partial");
     expect(feedback.detail).toContain("Canvas capture helpers are out of date.");
     expect(feedback.detail).toContain("npm run canvas:prepare-helper");
+  });
+
+  it.each([
+    ["canvas-credentials-unavailable", "Saved Canvas sign-in details are unavailable"],
+    ["canvas-sign-in-blocked", "Canvas rejected the saved sign-in details"],
+    ["canvas-verification-required", "Canvas requires an extra verification step"],
+    ["canvas-survey-blocking", "A Canvas survey is blocking refresh"],
+    ["canvas-sign-in-page-unknown", "could not recognize the Canvas sign-in page"],
+    ["canvas-sign-in-timeout", "Canvas sign-in did not finish automatically"],
+    ["canvas-sign-in-required", "Canvas needs you to sign in"],
+    ["headless-session-required", "A visible Canvas setup session is open"],
+  ])("explains how to recover from %s without opening a refresh window", (errorCode, detail) => {
+    const feedback = fullRefreshFeedback({
+      status: "incomplete", browserStatus: "failed", calendarStatus: "complete",
+      gapCount: 0, omissionCount: 0, ...defaultRefreshCounts, rubricCount: 0, linkedFileCount: 0,
+      calendarAdded: 0, calendarUpdated: 0, calendarHeld: 0, updatedAt: null, errorCode,
+    });
+    expect(feedback.detail).toContain(detail);
+    expect(feedback.detail).not.toContain("Chrome window is opening");
   });
 });

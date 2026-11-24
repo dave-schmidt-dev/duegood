@@ -47,6 +47,11 @@ describe("Canvas refresh client orchestration", () => {
       .toEqual({ status: "REQUEST_FAILED", errorCode: "HELPER_STALE" });
   });
 
+  it("treats an unknown broker mode as visible", () => {
+    expect(sanitizeFrame({ status: "READY", headless: "unknown", pid: 12 }, "status"))
+      .toEqual({ status: "READY", headless: false, pid: 12 });
+  });
+
   it.each([
     [completeCaptureFrame, "COMPLETE"],
     [captureFrame, "PARTIAL"],
@@ -74,7 +79,7 @@ describe("Canvas refresh client orchestration", () => {
     };
     const result = await runCanvasBrowserRefresh({
       stateCommand,
-      start: async () => { calls.push("start"); return { status: "READY" }; },
+      start: async () => { calls.push("start"); return { status: "READY", headless: true }; },
       readBinding: async () => { calls.push("binding"); return 41; },
       capture: async (userId) => {
         calls.push(`capture:${userId}`);
@@ -109,7 +114,7 @@ describe("Canvas refresh client orchestration", () => {
   it("accepts a complete capture while preserving its omission count", async () => {
     const result = await runCanvasBrowserRefresh({
       stateCommand: async (verb, runId) => ({ runId: runId ?? 52 }),
-      start: async () => ({ status: "READY" }),
+      start: async () => ({ status: "READY", headless: true }),
       readBinding: async () => 41,
       capture: async () => completeCaptureFrame,
       nativeImport: async () => importFrame,
@@ -124,7 +129,7 @@ describe("Canvas refresh client orchestration", () => {
   it("rejects a complete capture frame with failures or extra fields", async () => {
     const result = await runCanvasBrowserRefresh({
       stateCommand: async (verb, runId) => ({ runId: runId ?? 52 }),
-      start: async () => ({ status: "READY" }),
+      start: async () => ({ status: "READY", headless: true }),
       readBinding: async () => 41,
       capture: async () => ({ ...completeCaptureFrame, dailyGapCount: 1, privateData: "discard" }),
       nativeImport: async () => importFrame,
@@ -156,7 +161,7 @@ describe("Canvas refresh client orchestration", () => {
     const nativeImport = vi.fn(async () => importFrame);
     const result = await runCanvasBrowserRefresh({
       stateCommand: async (verb, runId) => ({ runId: runId ?? 9 }),
-      start: async () => ({ status: "READY" }),
+      start: async () => ({ status: "READY", headless: true }),
       readBinding: async () => 41,
       capture: async () => ({ status: "REQUEST_FAILED", errorCode: "CANVAS_SESSION_UNAVAILABLE" }),
       nativeImport,
@@ -169,7 +174,7 @@ describe("Canvas refresh client orchestration", () => {
   it("retains the successful partial capture when native import fails with a fixed code", async () => {
     const result = await runCanvasBrowserRefresh({
       stateCommand: async (verb, runId) => ({ runId: runId ?? 9 }),
-      start: async () => ({ status: "READY" }),
+      start: async () => ({ status: "READY", headless: true }),
       readBinding: async () => 41,
       capture: async () => captureFrame,
       nativeImport: async () => {
@@ -190,76 +195,62 @@ const signInReasons = [
   "UNKNOWN_PAGE", "SIGN_IN_TIMEOUT", "SIGN_IN_REQUIRED",
 ];
 
-function recoveryFixture(errorCode: string, headless = true) {
+function refreshFailureFixture(errorCode: string, headless = true) {
   const failure = { status: "REQUEST_FAILED", errorCode };
-  const start = vi.fn(async (options: { headless: boolean }) => ({
-    status: "READY", headless: options.headless && headless, pid: options.headless ? 101 : 102,
-  }));
-  const stop = vi.fn(async () => ({ status: "STOPPED" }));
-  const capture = vi.fn(async (): Promise<typeof failure | typeof captureFrame> => failure);
-  const reportSignInWindow = vi.fn();
+  const start = vi.fn(async () => ({ status: "READY", headless, pid: 101 }));
+  const capture = vi.fn(async (): Promise<typeof failure | typeof captureFrame | { status: "HEADLESS_SESSION_REQUIRED" }> => failure);
   const nativeImport = vi.fn(async () => importFrame);
   const stateCommand = vi.fn(async () => ({ runId: 9 }));
-  return { start, stop, capture, reportSignInWindow, nativeImport, stateCommand, readBinding: async () => 41 };
+  return { start, capture, nativeImport, stateCommand, readBinding: async () => 41 };
 }
 
-describe("attended capture recovery", () => {
-  it.each(signInReasons)("retries %s exactly once, then closes the temporary window", async (reason) => {
-    const fx = recoveryFixture(reason);
+describe("headless refresh failure handling", () => {
+  it.each(signInReasons)("returns %s without opening a visible session", async (reason) => {
+    const fx = refreshFailureFixture(reason);
     await expect(runCanvasBrowserRefresh(fx)).resolves.toEqual({ status: "REQUEST_FAILED", errorCode: reason });
-    expect(fx.start.mock.calls).toEqual([[{ headless: true }], [{ headless: false }]]);
-    expect(fx.reportSignInWindow.mock.calls).toEqual([[reason]]);
-    expect(fx.capture.mock.calls).toEqual([[41], [41]]);
-    expect(fx.stop.mock.calls).toEqual([[101], [102]]);
+    expect(fx.start.mock.calls).toEqual([[{ headless: true }]]);
+    expect(fx.capture.mock.calls).toEqual([[41, { requireHeadless: true }]]);
     expect(fx.nativeImport).not.toHaveBeenCalled();
   });
 
   it.each(["IDENTITY_MISMATCH", "BINDING_REQUIRED", "CAPTURE_STATE_UNAVAILABLE", "REQUEST_FAILED",
     "CAPTURE_COVERAGE_INCOMPLETE", "CAPTURE_BUDGET_EXCEEDED", "HELPER_UNAVAILABLE", "OKTA_HOST_REJECTED", "UNRECOGNIZED"])(
     "preserves %s without opening a window", async (reason) => {
-      const fx = recoveryFixture(reason);
+      const fx = refreshFailureFixture(reason);
       await expect(runCanvasBrowserRefresh(fx)).resolves.toEqual({ status: "REQUEST_FAILED", errorCode: reason });
-      expect(fx.stop).not.toHaveBeenCalled();
-      expect(fx.reportSignInWindow).not.toHaveBeenCalled();
+      expect(fx.capture).toHaveBeenCalledTimes(1);
     },
   );
 
-  it("leaves an owner-started visible session open", async () => {
-    const fx = recoveryFixture("SIGN_IN_TIMEOUT", false);
-    await runCanvasBrowserRefresh(fx);
-    expect(fx.capture).toHaveBeenCalledTimes(1);
-    expect(fx.stop).not.toHaveBeenCalled();
-    expect(fx.reportSignInWindow).not.toHaveBeenCalled();
+  it("refuses an already visible session without closing the owner's setup session", async () => {
+    const fx = refreshFailureFixture("SIGN_IN_REQUIRED", false);
+    const readBinding = vi.fn(async () => 41);
+    await expect(runCanvasBrowserRefresh({ ...fx, readBinding })).resolves.toEqual({
+      status: "HEADLESS_SESSION_REQUIRED",
+    });
+    expect(fx.start.mock.calls).toEqual([[{ headless: true }]]);
+    expect(readBinding).not.toHaveBeenCalled();
+    expect(fx.capture).not.toHaveBeenCalled();
+    expect(fx.nativeImport).not.toHaveBeenCalled();
   });
 
-  it("preserves a headed session the owner started during the switch", async () => {
-    const fx = recoveryFixture("SIGN_IN_REQUIRED");
-    fx.capture.mockResolvedValueOnce({ status: "REQUEST_FAILED", errorCode: "SIGN_IN_REQUIRED" })
-      .mockResolvedValueOnce(captureFrame);
-    const start = vi.fn(async ({ headless }: { headless: boolean }) => ({
-      status: "READY", headless, pid: headless ? 101 : 201, reused: true,
-    }));
-    await expect(runCanvasBrowserRefresh({ ...fx, start })).resolves.toMatchObject({ nativeImport: { status: "IMPORTED" } });
-    expect(fx.stop.mock.calls).toEqual([[101]]);
+  it("refuses an unknown session mode without trying capture", async () => {
+    const fx = refreshFailureFixture("SIGN_IN_REQUIRED");
+    const start = vi.fn(async () => ({ status: "READY" }));
+    await expect(runCanvasBrowserRefresh({ ...fx, start })).resolves.toEqual({
+      status: "HEADLESS_SESSION_REQUIRED",
+    });
+    expect(fx.capture).not.toHaveBeenCalled();
   });
 
-  it("imports after recovery and starts the next refresh headless", async () => {
-    const fx = recoveryFixture("SIGN_IN_REQUIRED");
-    fx.capture.mockResolvedValueOnce({ status: "REQUEST_FAILED", errorCode: "SIGN_IN_REQUIRED" })
-      .mockResolvedValue(captureFrame);
-    await expect(runCanvasBrowserRefresh(fx)).resolves.toMatchObject({ nativeImport: { status: "IMPORTED" } });
-    await runCanvasBrowserRefresh(fx);
-    expect(fx.start.mock.calls).toEqual([[{ headless: true }], [{ headless: false }], [{ headless: true }]]);
-    expect(fx.stop.mock.calls).toEqual([[101], [102]]);
-    expect(fx.reportSignInWindow).toHaveBeenCalledTimes(1);
+  it("honors a broker mode change after the initial status check", async () => {
+    const fx = refreshFailureFixture("SIGN_IN_REQUIRED");
+    fx.capture.mockResolvedValue({ status: "HEADLESS_SESSION_REQUIRED" });
+    await expect(runCanvasBrowserRefresh(fx)).resolves.toEqual({
+      status: "HEADLESS_SESSION_REQUIRED",
+    });
+    expect(fx.capture).toHaveBeenCalledWith(41, { requireHeadless: true });
+    expect(fx.nativeImport).not.toHaveBeenCalled();
   });
 
-  it("does not launch Chrome when the headless session cannot stop", async () => {
-    const fx = recoveryFixture("SIGN_IN_REQUIRED");
-    fx.stop.mockResolvedValue({ status: "STOP_FAILED" });
-    await expect(runCanvasBrowserRefresh(fx)).resolves.toEqual({ status: "STOP_FAILED" });
-    expect(fx.start).toHaveBeenCalledTimes(1);
-    expect(fx.capture).toHaveBeenCalledTimes(1);
-    expect(fx.reportSignInWindow).not.toHaveBeenCalled();
-  });
 });
