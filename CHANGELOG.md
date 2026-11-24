@@ -27,6 +27,8 @@
 
 ### Fixed
 
+- After an upgrade, the first Canvas refresh waits for the matching helpers to finish installing.
+
 - Keep grade drafts and expanded reading sections during dashboard updates. Distinguish unavailable Canvas data from an empty result and identify proposed source matches by coursework.
 - Show refresh outcomes and sign-in help in narrow windows, bring the selected Inbox thread into view, and identify the selected backup before restore.
 

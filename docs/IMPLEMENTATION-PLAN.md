@@ -561,3 +561,7 @@ Confirmed that manual, launch, scheduled and CLI refresh share a client that can
 ## November 24 whole-app CLEAR fixes
 
 Confirmed in the current UI that empty states ignore source freshness, grade editing uses one replaceable draft, snapshot confirmation omits the selected time, and the narrow top bar hides refresh feedback. Reading disclosures lose state on redraw, compact Inbox puts the thread below the full list, and source-match buttons expose raw identifiers. Implement the eight reviewed fixes together, preserving headless refresh and existing local data contracts. Verify with synthetic Playwright journeys and the staged project gates.
+
+## Installer readiness for the first refresh
+
+Both cold-launch proofs open the app while the installer still owns its install lock. Reuse that lock to defer the packaged refresh before helper verification and capture. Keep helper verification and installer rollback intact. Test a deliberately delayed install and a stale lock, then verify the installed app completes its first headless refresh without reopening it.

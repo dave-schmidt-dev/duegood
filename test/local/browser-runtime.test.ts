@@ -1,3 +1,5 @@
+import * as fs from "node:fs/promises";
+import { acquireCandidateInstallLock } from "../../scripts/install-canvas-helpers.mjs";
 import { spawnSync } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -36,6 +38,29 @@ describe.sequential("packaged browser runtime", () => {
         .resolves.toBeUndefined();
     } finally {
       await rm(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("waits for the installer's helper publication before the packaged refresh can read its identity", async () => {
+    const apps = await mkdtemp(path.join(tmpdir(), "duegood-install-wait-"));
+    try {
+      const runtimeRoot = path.join(apps, "Due Good.app", "Contents", "Resources", "browser-runtime");
+      await mkdir(runtimeRoot, { recursive: true });
+      const release = await acquireCandidateInstallLock(fs, apps);
+      const identity = { sourceCommit: "a".repeat(40), candidateTree: "b".repeat(40) };
+      let helpersReady = false;
+      const readIdentity = async () => {
+        expect(helpersReady).toBe(true);
+        return identity;
+      };
+      await expect(readRuntimeBuildIdentity({ runtimeRoot, readIdentity, waitForHelpers: true, waitMs: 5 }))
+        .rejects.toMatchObject({ code: "HELPER_STALE" });
+      const firstRefresh = readRuntimeBuildIdentity({ runtimeRoot, readIdentity, waitForHelpers: true });
+      helpersReady = true;
+      await release();
+      await expect(firstRefresh).resolves.toEqual(identity);
+    } finally {
+      await rm(apps, { recursive: true, force: true });
     }
   });
 

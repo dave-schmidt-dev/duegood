@@ -36,7 +36,7 @@ let lastProgressState = "";
 let lastProgressAt = 0;
 
 async function verifyRuntimeCanvasHelpers() {
-  const identity = await readRuntimeBuildIdentity({ runtimeRoot: ROOT });
+  const identity = await readRuntimeBuildIdentity({ runtimeRoot: ROOT, waitForHelpers: true });
   if (!identity) return;
   await verifyCanvasHelperProvenance({
     binDirectory: path.dirname(STATE_HELPER_PATH),

@@ -1,9 +1,10 @@
 import path from "node:path";
+import { DESKTOP_INSTALL_LOCK } from "./canvas-runtime-build-identity.mjs";
 import { prepareCanvasHelper } from "./prepare-canvas-helper.mjs";
 
 /** Serialize bundle swaps through helper publication, including installs from different stages. */
 export async function acquireCandidateInstallLock(files, applicationsDirectory) {
-  const lock = path.join(applicationsDirectory, ".Due Good.install.lock");
+  const lock = path.join(applicationsDirectory, DESKTOP_INSTALL_LOCK);
   try {
     await files.mkdir(lock, { mode: 0o700 });
   } catch (error) {
