@@ -11,6 +11,18 @@ export function refreshActionLabel(state: DashboardState, refreshing: boolean, s
   return surface === "activity" ? "Refresh now" : "Refresh";
 }
 
+export function refreshProgressNote(state: DashboardState, includeCounts: boolean): string {
+  const progress = state.refreshProgress;
+  const calendar = calendarOnlyRefresh(state);
+  const scope = state.desktop?.browserRefreshAvailable === true ? "Canvas and calendar" : calendar ? "Calendar" : "Canvas";
+  if (progress === undefined) return `${scope} refresh is in progress`;
+  const phase = ({ starting: "Preparing", snapshot: "Saving safety copy", fetch: "Reading Canvas data", reconcile: "Reviewing changes", stage: "Preparing changes", publish: "Saving updates", "browser-capture": "Reading Canvas and checking files", "browser-import": "Importing Canvas coursework", calendar: "Refreshing calendar deadlines", "broker-starting": "Starting secure feed", "waiting-for-calendar": "Waiting for calendar", importing: "Importing calendar", complete: "Finishing" } as Readonly<Record<string, string>>)[progress.phase] ?? "Working";
+  const count = progress.total === null ? `${String(progress.completed)} completed` : `${String(progress.completed)} of ${String(progress.total)} completed`;
+  const full = state.desktop?.browserRefreshAvailable === true;
+  const details = includeCounts && !calendar && !full ? ` · ${count}${progress.bytesDone === null ? "" : ` · ${String(progress.bytesDone)} bytes received`}` : "";
+  return `${scope} refresh · ${phase}${details}`;
+}
+
 function formatted(value: string | number | null | undefined, withTime = false): string {
   if (value === null || value === undefined || value === "") return "Unknown";
   const date = new Date(value);
@@ -22,15 +34,7 @@ function formatted(value: string | number | null | undefined, withTime = false):
 }
 
 export function refreshNote(state: DashboardState, latest: DashboardRefresh | undefined): string {
-  if (state.refreshState === "running") {
-    const progress = state.refreshProgress;
-    const calendar = calendarOnlyRefresh(state);
-    if (progress === undefined) return `${calendar ? "Calendar" : "Canvas"} refresh is in progress`;
-    const phase = ({ starting: "Preparing", snapshot: "Saving safety copy", fetch: "Reading Canvas data", reconcile: "Reviewing changes", stage: "Preparing changes", publish: "Saving updates", "browser-capture": "Reading Canvas and checking files", "browser-import": "Importing Canvas coursework", calendar: "Refreshing calendar deadlines", "broker-starting": "Starting secure feed", "waiting-for-calendar": "Waiting for calendar", importing: "Importing calendar", complete: "Finishing" } as Readonly<Record<string, string>>)[progress.phase] ?? "Working";
-    const count = progress.total === null ? `${String(progress.completed)} completed` : `${String(progress.completed)} of ${String(progress.total)} completed`;
-    const full = state.desktop?.browserRefreshAvailable === true;
-    return `${full ? "Canvas and calendar" : calendar ? "Calendar" : "Canvas"} refresh · ${phase}${calendar || full ? "" : ` · ${count}${progress.bytesDone === null ? "" : ` · ${String(progress.bytesDone)} bytes received`}`}`;
-  }
+  if (state.refreshState === "running") return refreshProgressNote(state, true);
   if (state.refreshDetail !== undefined) return state.refreshDetail;
   if (state.refreshState === "complete") return "Refresh complete.";
   if (state.refreshState === "partial") return latest?.source === "calendar" ? latest.summary : "Refresh incomplete. Existing data was kept.";

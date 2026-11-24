@@ -27,6 +27,9 @@
 
 ### Fixed
 
+- Keep grade drafts and expanded reading sections during dashboard updates. Distinguish unavailable Canvas data from an empty result and identify proposed source matches by coursework.
+- Show refresh outcomes and sign-in help in narrow windows, bring the selected Inbox thread into view, and identify the selected backup before restore.
+
 - The desktop installer retries unregistering its retained backup and continues to the cold-launch proof when LaunchServices still refuses, so a transient refusal no longer stops the install before the Canvas helpers are rebuilt.
 
 - Desktop installation now refreshes the three external Canvas helpers. Canvas refresh reports stale helpers before downloading files.

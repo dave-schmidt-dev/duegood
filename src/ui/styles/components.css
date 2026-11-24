@@ -343,7 +343,12 @@ button:disabled { opacity: .6; cursor: wait; }
 
 /* Kept for the disconnected token/OAuth recovery component. */
 
+.inbox-back-button { display: none; margin-bottom: 12px; }
+
 @media (max-width: 860px) {
+  .inbox-back-button { display: inline-flex; }
+  .inbox-layout[data-inbox-mode="thread"] .message-list { display: none; }
+  .inbox-layout[data-inbox-mode="list"] .message-detail { display: none; }
   .hero { display: block; }
   .controls, .subpage-heading, .resource-toolbar { align-items: stretch; flex-direction: column; }
   .timeline-shell { --timeline-date-width: 64px; --timeline-rail-width: 24px; }

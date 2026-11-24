@@ -177,11 +177,13 @@ export function renderTimelineEventCard(
   const hasRubric = event.rubric !== undefined && event.rubric !== null;
   const detailsId = `event-detail-${event.id.replace(/[^A-Za-z0-9_-]/g, "-")}`;
   const retained = event.calendarRetained === true && event.source !== "canvas";
+  const sourceLabel = event.source === "ical" || event.calendarRetained === true ? "Calendar feed" : "Canvas";
+  const locationLabel = event.kind === "class" ? event.location ?? "Location not supplied" : sourceLabel;
   return el("article", undefined, { class: `event-card ${event.kind === "class" ? "class-meeting" : ""} ${event.kind === "discussion" ? "discussion-card" : ""} ${event.completed ? "completed" : ""}`.trim(), style: `--course-color:${renderers.color(event.courseCode)}` }, [
     el("div", undefined, { class: "event-top" }, [el("div", undefined, undefined, [el("div", `${renderers.code(event.courseCode)} · ${event.kind === "class" ? "Class meeting" : event.kind === "discussion" ? "Discussion" : event.startsAt === null ? "Assignment" : "Assignment due"}`, { class: "event-kind" }), el("h2", event.title, { class: "event-title" })]), event.startsAt === null
       ? el("span", "No due date", { class: "event-time event-time--undated" })
       : el("time", renderers.eventTime(event), { class: "event-time", datetime: event.startsAt, ...(renderers.isDateOnly(event.startsAt) && event.kind !== "class" ? { title: "No time supplied; 11:59 PM assumed." } : {}) })]),
-    el("div", undefined, { class: "event-meta" }, [el("span", event.location ?? (event.kind === "class" ? "Location not supplied" : "Canvas")), el("span", event.kind === "class" ? "Scheduled meeting" : event.completed ? "Completed by you" : "Not completed by you")]),
+    el("div", undefined, { class: "event-meta" }, [el("span", locationLabel), ...(event.kind !== "class" && event.location ? [el("span", `Location: ${event.location}`)] : []), el("span", event.kind === "class" ? "Scheduled meeting" : event.completed ? "Completed by you" : "Not completed by you")]),
     ...(retained ? [el("p", "Previously imported, not in the latest verified feed. The rolling calendar window may omit older items.", { class: "calendar-retained-note", role: "note" })] : []),
     ...(event.kind === "class" ? [] : event.kind === "discussion" ? [
       el("div", undefined, { class: "discussion-progress", "aria-label": "Discussion requirements" }, [el("span", "Discussion requirements", { class: "discussion-progress__label" }), ...renderers.discussionCheckboxes(event)]),

@@ -198,3 +198,50 @@ for (const viewport of [{ width: 720, height: 560 }, { width: 1280, height: 840 
     expect(await page.evaluate(() => (window as unknown as { __calls: Calls }).__calls.restores)).toBe(0);
   });
 }
+
+test("CR3: distinguishes same-day same-kind snapshots and identifies selected snapshot before restoring", async ({ page }) => {
+  await open(page, "hold", "success");
+  await page.evaluate(() => (window as unknown as { __releaseStatus: (value: string) => void }).__releaseStatus("ready"));
+  await expect(page.getByRole("heading", { level: 1, name: "Timeline" })).toBeVisible();
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "More", exact: true }).click();
+  await page.getByRole("button", { name: "Recovery", exact: true }).click();
+  const recovery = page.getByRole("region", { name: "Recovery points" });
+
+  // Supply two before-refresh snapshots on the same day with different timestamps
+  await page.evaluate(() => (window as unknown as { __releaseSnapshots: (value: unknown) => void }).__releaseSnapshots([
+    { id: "before-refresh-morning", createdAt: "2026-10-01T09:00:00Z", kind: "pre-refresh" },
+    { id: "before-refresh-afternoon", createdAt: "2026-10-01T14:30:00Z", kind: "pre-refresh" },
+  ]));
+
+  const rows = recovery.locator(".recovery-snapshot");
+  await expect(rows).toHaveCount(2);
+
+  // Both snapshots are Before refresh on the same day, but distinguishable by time
+  await expect(rows.nth(0)).toContainText("Before refresh");
+  await expect(rows.nth(1)).toContainText("Before refresh");
+  const morningText = await rows.nth(0).innerText();
+  const afternoonText = await rows.nth(1).innerText();
+  expect(morningText).not.toEqual(afternoonText);
+
+  // Click restore on the second snapshot
+  const restoreSecond = rows.nth(1).getByRole("button", { name: "Restore snapshot" });
+  await restoreSecond.click();
+
+  const confirmation = page.getByRole("dialog", { name: "Confirm snapshot restore" });
+  await expect(confirmation).toBeVisible();
+
+  // Dialog identifies selected snapshot kind and time
+  const selectedInfo = confirmation.locator(".recovery-selected-snapshot");
+  await expect(selectedInfo).toBeVisible();
+  await expect(selectedInfo).toContainText("Selected: Before refresh ·");
+  const expectedAfternoon = await page.evaluate(() => new Intl.DateTimeFormat("en-US", {
+    year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit",
+  }).format(new Date("2026-10-01T14:30:00Z")));
+  await expect(selectedInfo).toContainText(expectedAfternoon);
+  expect(morningText).not.toContain(expectedAfternoon);
+
+  // Cancel returns focus to the originating restore button
+  await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(restoreSecond).toBeFocused();
+});

@@ -8,9 +8,9 @@ const MAX_DRAFT_LENGTH = 16_000;
 const MAX_SCROLL_Y = 10_000_000;
 
 export interface DashboardViewStateData {
-  readonly courses: readonly { readonly courseCode: string }[];
+  readonly courses: readonly { readonly id?: string; readonly courseCode: string }[];
   readonly events: readonly { readonly id: string; readonly kind: string }[];
-  readonly resources: readonly { readonly type: string }[];
+  readonly resources: readonly { readonly id?: string; readonly type: string }[];
   readonly conversations: readonly { readonly id: string }[];
   readonly refreshes: readonly { readonly id: string }[];
 }
@@ -25,12 +25,43 @@ export interface DashboardViewState {
   readonly selectedConversationId?: string;
   readonly selectedRefreshId?: string;
   readonly editingManualGrade?: { readonly id: string; readonly draft: string };
+  readonly gradeDrafts?: Readonly<Record<string, string>>;
+  readonly openCompletedItemIds?: readonly string[];
+  readonly openLibraryItemIds?: readonly string[];
+  readonly openGradeGroupCourseIds?: readonly string[];
   readonly scrollPositions: Readonly<Partial<Record<DashboardPage, number>>>;
 }
 
 export interface DashboardViewStateStore {
   load(): DashboardViewState;
   save(value: DashboardViewState): boolean;
+}
+
+/** Preserves the current editor while opening or updating another bounded local grade draft. */
+export function rememberGradeDraft(
+  drafts: Readonly<Record<string, string>> | undefined,
+  editing: { readonly id: string; readonly draft: string } | undefined,
+  id: string,
+  draft: string,
+): Readonly<Record<string, string>> | null {
+  const next = Object.create(null) as Record<string, string>;
+  for (const [key, value] of Object.entries(drafts ?? {})) {
+    if (Object.keys(next).length >= MAX_EXPANDED_IDS) break;
+    next[key] = value;
+  }
+  if (editing !== undefined && next[editing.id] === undefined) {
+    if (Object.keys(next).length >= MAX_EXPANDED_IDS) return null;
+    next[editing.id] = editing.draft;
+  }
+  if (next[id] === undefined && Object.keys(next).length >= MAX_EXPANDED_IDS) return null;
+  next[id] = draft;
+  return next;
+}
+
+export function forgetGradeDraft(drafts: Readonly<Record<string, string>> | undefined, id: string): Readonly<Record<string, string>> | undefined {
+  const next = Object.create(null) as Record<string, string>;
+  for (const [key, value] of Object.entries(drafts ?? {})) if (key !== id) next[key] = value;
+  return Object.keys(next).length === 0 ? undefined : next;
 }
 
 interface StorageLike {
@@ -92,6 +123,20 @@ export function parseDashboardViewState(value: unknown): DashboardViewState {
   }
   const draft = typeof editing?.draft === "string" && editing.draft.length <= MAX_DRAFT_LENGTH ? editing.draft : undefined;
   const editingId = id(editing?.id);
+  const openCompleted = Array.isArray(source.openCompletedItemIds) ? [...new Set(source.openCompletedItemIds.map(id).filter((v): v is string => v !== undefined))].slice(0, MAX_EXPANDED_IDS) : undefined;
+  const openLibrary = Array.isArray(source.openLibraryItemIds) ? [...new Set(source.openLibraryItemIds.map(id).filter((v): v is string => v !== undefined))].slice(0, MAX_EXPANDED_IDS) : undefined;
+  const openGradeGroups = Array.isArray(source.openGradeGroupCourseIds) ? [...new Set(source.openGradeGroupCourseIds.map(id).filter((v): v is string => v !== undefined))].slice(0, MAX_EXPANDED_IDS) : undefined;
+  const rawDrafts = record(source.gradeDrafts);
+  const gradeDrafts = Object.create(null) as Record<string, string>;
+  if (rawDrafts !== undefined) {
+    for (const [k, v] of Object.entries(rawDrafts)) {
+      if (Object.keys(gradeDrafts).length >= MAX_EXPANDED_IDS) break;
+      if (typeof v === "string" && v.length <= MAX_DRAFT_LENGTH && id(k) !== undefined) gradeDrafts[k] = v;
+    }
+  }
+  if (editingId !== undefined && draft !== undefined && gradeDrafts[editingId] === undefined && Object.keys(gradeDrafts).length < MAX_EXPANDED_IDS) {
+    gradeDrafts[editingId] = draft;
+  }
   return {
     eventMode: source.eventMode === "deadlines" ? "deadlines" : "all",
     courseFilter: preference(source.courseFilter, "all"),
@@ -99,6 +144,10 @@ export function parseDashboardViewState(value: unknown): DashboardViewState {
     gradeMode: source.gradeMode === "graded" ? "graded" : "all",
     resourceFilter: preference(source.resourceFilter, "all"),
     expandedEventIds: expanded,
+    ...(openCompleted === undefined ? {} : { openCompletedItemIds: openCompleted }),
+    ...(openLibrary === undefined ? {} : { openLibraryItemIds: openLibrary }),
+    ...(openGradeGroups === undefined ? {} : { openGradeGroupCourseIds: openGradeGroups }),
+    ...(Object.keys(gradeDrafts).length === 0 ? {} : { gradeDrafts }),
     ...(id(source.selectedConversationId) === undefined ? {} : { selectedConversationId: id(source.selectedConversationId)! }),
     ...(id(source.selectedRefreshId) === undefined ? {} : { selectedRefreshId: id(source.selectedRefreshId)! }),
     ...(editingId === undefined || draft === undefined ? {} : { editingManualGrade: { id: editingId, draft } }),
@@ -115,13 +164,29 @@ export function reconcileDashboardViewState(value: DashboardViewState, data: Das
   const editableEventIds = new Set(data.events.filter((event) => event.kind !== "class").map((event) => event.id));
   const conversationIds = new Set(data.conversations.map((conversation) => conversation.id));
   const refreshIds = new Set(data.refreshes.map((refresh) => refresh.id));
-  const { selectedConversationId, selectedRefreshId, editingManualGrade, ...preferences } = value;
+  const courseIds = new Set(data.courses.map((course) => course.id).filter((value): value is string => value !== undefined));
+  const resourceIds = new Set(data.resources.map((resource) => resource.id).filter((value): value is string => value !== undefined));
+  const { selectedConversationId, selectedRefreshId, editingManualGrade, gradeDrafts, openCompletedItemIds, openLibraryItemIds, openGradeGroupCourseIds, ...preferences } = value;
+  const reconciledDrafts = Object.create(null) as Record<string, string>;
+  if (gradeDrafts !== undefined) {
+    for (const [k, v] of Object.entries(gradeDrafts)) {
+      if (editableEventIds.has(k) && Object.keys(reconciledDrafts).length < MAX_EXPANDED_IDS) reconciledDrafts[k] = v;
+    }
+  }
+  if (editingManualGrade !== undefined && editableEventIds.has(editingManualGrade.id)
+      && reconciledDrafts[editingManualGrade.id] === undefined && Object.keys(reconciledDrafts).length < MAX_EXPANDED_IDS) {
+    reconciledDrafts[editingManualGrade.id] = editingManualGrade.draft;
+  }
   return {
     ...preferences,
     courseFilter: hasCourse(value.courseFilter) ? value.courseFilter : "all",
     gradeCourseFilter: hasCourse(value.gradeCourseFilter) ? value.gradeCourseFilter : "all",
     resourceFilter: hasResourceType(value.resourceFilter) ? value.resourceFilter : "all",
     expandedEventIds: value.expandedEventIds.filter((eventId) => eventIds.has(eventId)),
+    ...(openCompletedItemIds === undefined ? {} : { openCompletedItemIds: openCompletedItemIds.filter((id) => eventIds.has(id)) }),
+    ...(openLibraryItemIds === undefined ? {} : { openLibraryItemIds: openLibraryItemIds.filter((id) => resourceIds.has(id)) }),
+    ...(openGradeGroupCourseIds === undefined ? {} : { openGradeGroupCourseIds: openGradeGroupCourseIds.filter((id) => courseIds.has(id)) }),
+    ...(Object.keys(reconciledDrafts).length === 0 ? {} : { gradeDrafts: reconciledDrafts }),
     ...(selectedConversationId !== undefined && conversationIds.has(selectedConversationId) ? { selectedConversationId } : {}),
     ...(selectedRefreshId !== undefined && refreshIds.has(selectedRefreshId) ? { selectedRefreshId } : {}),
     ...(editingManualGrade !== undefined && editableEventIds.has(editingManualGrade.id) ? { editingManualGrade } : {}),

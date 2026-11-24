@@ -29,12 +29,51 @@ function age(value: string, now: number): string {
   return days === 0 ? "today" : days === 1 ? "1 day ago" : `${String(days)} days ago`;
 }
 
-/** Renders native recovery with snapshots before the age-labeled legacy import. */
+function snapshotKindLabel(kind: DesktopSnapshot["kind"]): string {
+  return kind === "daily" ? "Daily snapshot" : "Before refresh";
+}
+
+function snapshotTimeLabel(value: string): string {
+  const at = Date.parse(value);
+  if (!Number.isFinite(at)) return "time unknown";
+  return new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(at));
+}
+
+function snapshotDisambiguators(snapshots: readonly DesktopSnapshot[]): ReadonlyMap<string, number> {
+  const groups = new Map<string, DesktopSnapshot[]>();
+  for (const snapshot of snapshots) {
+    const key = `${snapshot.kind}\u0000${snapshotTimeLabel(snapshot.createdAt)}`;
+    groups.set(key, [...(groups.get(key) ?? []), snapshot]);
+  }
+  const ordinals = new Map<string, number>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    // IDs are stable across renders, so a reordering cannot change an item's displayed ordinal.
+    group.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+      .forEach((snapshot, index) => ordinals.set(snapshot.id, index + 1));
+  }
+  return ordinals;
+}
+
+function snapshotLabel(snapshot: DesktopSnapshot, ordinal: number | undefined): string {
+  const suffix = ordinal === undefined ? "" : ` · #${String(ordinal)}`;
+  return `${snapshotKindLabel(snapshot.kind)} · ${snapshotTimeLabel(snapshot.createdAt)}${suffix}`;
+}
+
+/** Renders native recovery with timestamped snapshots before the legacy import. */
 export function desktopRecoveryPanel(state: DesktopRecoveryState, handlers: DesktopRecoveryHandlers, now = Date.now()): ElementDescriptor {
   const pendingRestore = state.pendingRestoreId === undefined ? undefined : state.snapshots.find((snapshot) => snapshot.id === state.pendingRestoreId);
+  const disambiguators = snapshotDisambiguators(state.snapshots);
   const rows: ElementDescriptor[] = state.snapshots.map((snapshot, index) => ({
     tag: "li", attrs: { class: "recovery-snapshot" }, children: [
-      { tag: "span", text: `${snapshot.kind === "daily" ? "Daily snapshot" : "Before refresh"} · ${age(snapshot.createdAt, now)}` },
+      { tag: "span", text: `${snapshotLabel(snapshot, disambiguators.get(snapshot.id))} · ${age(snapshot.createdAt, now)}` },
       { tag: "button", attrs: { type: "button", class: "more-action", "data-recovery-restore-index": String(index), ...(state.busy ? { disabled: "" } : {}) }, text: "Restore snapshot", on: { click: () => handlers.onRestore(snapshot.id) } },
     ],
   }));
@@ -51,6 +90,7 @@ export function desktopRecoveryPanel(state: DesktopRecoveryState, handlers: Desk
     ...(handlers.onBack === undefined ? [] : [{ tag: "button", attrs: { type: "button", class: "setup-secondary", ...(state.busy ? { disabled: "" } : {}) }, text: "Back to dashboard", on: { click: handlers.onBack } }]),
     ...(pendingRestore === undefined ? [] : [{ tag: "section", attrs: { role: "dialog", "aria-label": "Confirm snapshot restore", class: "setup-report" }, children: [
       { tag: "h3", text: "Restore this snapshot?" },
+      { tag: "p", attrs: { class: "recovery-selected-snapshot" }, text: `Selected: ${snapshotLabel(pendingRestore, disambiguators.get(pendingRestore.id))}` },
       { tag: "p", text: "Due Good archives the current app store before restoring this recovery point. Existing backups are never deleted." },
       { tag: "p", text: "Cancel leaves the current app store unchanged." },
       { tag: "div", attrs: { class: "setup-actions" }, children: [

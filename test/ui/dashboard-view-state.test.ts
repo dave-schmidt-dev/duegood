@@ -30,6 +30,25 @@ describe("dashboard view state", () => {
     expect(restored.editingManualGrade).toBeUndefined();
   });
 
+  it("restores an older single grade draft and keeps disclosures only for surviving records", () => {
+    const saved = parseDashboardViewState({
+      editingManualGrade: { id: "assignment-1", draft: "89" },
+      openCompletedItemIds: ["assignment-1", "gone"],
+      openGradeGroupCourseIds: ["course-1", "gone"],
+      openLibraryItemIds: ["resource-1", "gone"],
+    });
+    const restored = reconcileDashboardViewState(saved, {
+      ...data,
+      courses: [{ id: "course-1", courseCode: "IT 530" }],
+      resources: [{ id: "resource-1", type: "file" }],
+    });
+    expect(restored.gradeDrafts).toEqual({ "assignment-1": "89" });
+    expect(restored.editingManualGrade).toEqual(saved.editingManualGrade);
+    expect(restored.openCompletedItemIds).toEqual(["assignment-1"]);
+    expect(restored.openGradeGroupCourseIds).toEqual(["course-1"]);
+    expect(restored.openLibraryItemIds).toEqual(["resource-1"]);
+  });
+
   it("uses distinct desktop-store namespaces and ignores corrupt or unavailable storage", () => {
     const values = new Map<string, string>();
     const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };

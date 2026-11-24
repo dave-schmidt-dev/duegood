@@ -557,3 +557,7 @@ Validation: full UI and desktop UI suites, typecheck, lint. No live Canvas data.
 ## Headless refresh for every trigger
 
 Confirmed that manual, launch, scheduled and CLI refresh share a client that can reuse a visible broker or open Chrome after a sign-in failure. Require headless capture for refresh, including at broker dispatch, and return sign-in failures immediately. Preserve explicit visible setup. Verify synthetic sign-in and session-mode regressions, then push and install the tested candidate.
+
+## November 24 whole-app CLEAR fixes
+
+Confirmed in the current UI that empty states ignore source freshness, grade editing uses one replaceable draft, snapshot confirmation omits the selected time, and the narrow top bar hides refresh feedback. Reading disclosures lose state on redraw, compact Inbox puts the thread below the full list, and source-match buttons expose raw identifiers. Implement the eight reviewed fixes together, preserving headless refresh and existing local data contracts. Verify with synthetic Playwright journeys and the staged project gates.

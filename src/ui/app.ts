@@ -28,7 +28,7 @@ import {
 import { fullRefreshFeedback } from "./full-refresh";
 import { refreshChangeAlert } from "./refresh-change-alert";
 import { createLibraryResourceActionRunner } from "./library-resource-action";
-import { boundedScrollPosition, createDashboardViewStateStore, reconcileDashboardViewState, type DashboardViewState } from "./dashboard-view-state";
+import { boundedScrollPosition, createDashboardViewStateStore, forgetGradeDraft, reconcileDashboardViewState, rememberGradeDraft, type DashboardViewState, type DashboardViewStateData } from "./dashboard-view-state";
 
 function element(tag: string, attrs: Record<string, string> = {}, text?: string): ElementDescriptor {
   return { tag, attrs, ...(text !== undefined ? { text } : {}) };
@@ -39,19 +39,36 @@ const AUTOMATIC_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1_000;
 
 function desktopRefreshAvailable(info: DesktopStoreInfo | undefined): boolean { return info?.browserRefreshAvailable === true || info?.refreshAvailable === true || info?.icalRefreshAvailable === true; }
 
-function courseKey(value: string): string { return value.toUpperCase().replace(/[^A-Z0-9]/g, ""); }
+function viewStateData(data: DashboardData): DashboardViewStateData {
+  return { courses: data.courses, events: data.events, resources: data.resources, conversations: data.conversations, refreshes: data.refreshes };
+}
 
 function reconciledDashboardState(state: DashboardState, data: DashboardData, refreshAvailable = desktopRefreshAvailable(state.desktop)): DashboardState {
-  const hasCourse = (filter: string): boolean => filter === "all" || data.courses.some((course) => courseKey(course.courseCode) === courseKey(filter));
-  const hasResourceType = state.resourceFilter === "all" || data.resources.some((resource) => resource.type.toLowerCase() === state.resourceFilter.toLowerCase());
+  const view = reconcileDashboardViewState({
+    eventMode: state.eventMode, courseFilter: state.courseFilter, gradeCourseFilter: state.gradeCourseFilter,
+    gradeMode: state.gradeMode, resourceFilter: state.resourceFilter, expandedEventIds: [...state.expandedEventIds],
+    ...(state.selectedConversationId === undefined ? {} : { selectedConversationId: state.selectedConversationId }),
+    ...(state.selectedRefreshId === undefined ? {} : { selectedRefreshId: state.selectedRefreshId }),
+    ...(state.editingManualGrade === undefined ? {} : { editingManualGrade: state.editingManualGrade }),
+    ...(state.gradeDrafts === undefined ? {} : { gradeDrafts: state.gradeDrafts }),
+    ...(state.openCompletedItemIds === undefined ? {} : { openCompletedItemIds: [...state.openCompletedItemIds] }),
+    ...(state.openLibraryItemIds === undefined ? {} : { openLibraryItemIds: [...state.openLibraryItemIds] }),
+    ...(state.openGradeGroupCourseIds === undefined ? {} : { openGradeGroupCourseIds: [...state.openGradeGroupCourseIds] }),
+    scrollPositions: {},
+  }, viewStateData(data));
   return {
     ...state,
     data: { ...data, refreshAvailable },
-    selectedConversationId: data.conversations.some((conversation) => conversation.id === state.selectedConversationId) ? state.selectedConversationId : data.conversations[0]?.id,
-    selectedRefreshId: data.refreshes.some((refresh) => refresh.id === state.selectedRefreshId) ? state.selectedRefreshId : data.refreshes[0]?.id,
-    courseFilter: hasCourse(state.courseFilter) ? state.courseFilter : "all",
-    gradeCourseFilter: hasCourse(state.gradeCourseFilter) ? state.gradeCourseFilter : "all",
-    resourceFilter: hasResourceType ? state.resourceFilter : "all",
+    selectedConversationId: view.selectedConversationId ?? data.conversations[0]?.id,
+    selectedRefreshId: view.selectedRefreshId ?? data.refreshes[0]?.id,
+    courseFilter: view.courseFilter,
+    gradeCourseFilter: view.gradeCourseFilter,
+    resourceFilter: view.resourceFilter,
+    editingManualGrade: view.editingManualGrade,
+    gradeDrafts: view.gradeDrafts,
+    openCompletedItemIds: new Set(view.openCompletedItemIds ?? []),
+    openLibraryItemIds: new Set(view.openLibraryItemIds ?? []),
+    openGradeGroupCourseIds: new Set(view.openGradeGroupCourseIds ?? []),
   };
 }
 
@@ -75,6 +92,7 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
   const viewStateStore = createDashboardViewStateStore(desktop.info.dataFolder);
   const storedViewState = viewStateStore.load();
   let scrollPositions: Partial<Record<DashboardPage, number>> = { ...storedViewState.scrollPositions };
+  let inboxListScrollPosition = 0;
   let restoredViewState = false;
   let viewStateTimer: ReturnType<typeof setTimeout> | undefined;
   let automaticRefreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -117,6 +135,10 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
       ...(state.selectedConversationId === undefined ? {} : { selectedConversationId: state.selectedConversationId }),
       ...(state.selectedRefreshId === undefined ? {} : { selectedRefreshId: state.selectedRefreshId }),
       ...(state.editingManualGrade === undefined ? {} : { editingManualGrade: state.editingManualGrade }),
+      ...(state.gradeDrafts === undefined || Object.keys(state.gradeDrafts).length === 0 ? {} : { gradeDrafts: state.gradeDrafts }),
+      ...(state.openCompletedItemIds === undefined || state.openCompletedItemIds.size === 0 ? {} : { openCompletedItemIds: [...state.openCompletedItemIds] }),
+      ...(state.openLibraryItemIds === undefined || state.openLibraryItemIds.size === 0 ? {} : { openLibraryItemIds: [...state.openLibraryItemIds] }),
+      ...(state.openGradeGroupCourseIds === undefined || state.openGradeGroupCourseIds.size === 0 ? {} : { openGradeGroupCourseIds: [...state.openGradeGroupCourseIds] }),
       scrollPositions,
     };
   }
@@ -141,6 +163,10 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
       ...(restored.selectedConversationId === undefined ? {} : { selectedConversationId: restored.selectedConversationId }),
       ...(restored.selectedRefreshId === undefined ? {} : { selectedRefreshId: restored.selectedRefreshId }),
       ...(restored.editingManualGrade === undefined ? {} : { editingManualGrade: restored.editingManualGrade }),
+      ...(restored.gradeDrafts === undefined ? {} : { gradeDrafts: restored.gradeDrafts }),
+      openCompletedItemIds: new Set(restored.openCompletedItemIds ?? []),
+      openLibraryItemIds: new Set(restored.openLibraryItemIds ?? []),
+      openGradeGroupCourseIds: new Set(restored.openGradeGroupCourseIds ?? []),
     };
     restoredViewState = true;
   }
@@ -305,9 +331,10 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
 
   async function saveManualGrade(id: string): Promise<void> {
     const item = state.data.events.find((event) => event.id === id);
-    const editing = state.editingManualGrade;
-    if (item === undefined || item.kind === "class" || editing?.id !== id || state.pendingManualGradeIds.has(id)) return;
-    const value = editing.draft.trim() || null;
+    const draftText = state.gradeDrafts?.[id] ?? (state.editingManualGrade?.id === id ? state.editingManualGrade.draft : undefined);
+    if (item === undefined || item.kind === "class" || draftText === undefined || state.pendingManualGradeIds.has(id)) return;
+    const startingVersion = state.data.version;
+    const value = draftText.trim() || null;
     const update = (manualGrade: string | null, manualGradeVersion: 1 | null, manualGradeSource: "manual" | "pdf" | null) => state.data.events.map((event) => event.id === id ? { ...event, manualGrade, manualGradeVersion, manualGradeSource } : event);
     state = {
       ...state,
@@ -318,19 +345,22 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
     };
     draw();
     try {
-      const result = await transport.setManualGrade(item.sourceItemId ?? item.id, value, state.data.version);
+      const result = await transport.setManualGrade(item.sourceItemId ?? item.id, value, startingVersion);
+      if (state.data.version !== startingVersion) await reloadAuthoritativeDashboard();
+      const nextDrafts = forgetGradeDraft(state.gradeDrafts, id);
       state = {
         ...state,
-        data: { ...state.data, version: result.version, events: update(result.manualGrade, result.manualGradeVersion, result.manualGrade === null ? null : "manual") },
+        data: state.data.version === startingVersion ? { ...state.data, version: result.version, events: update(result.manualGrade, result.manualGradeVersion, result.manualGrade === null ? null : "manual") } : state.data,
         pendingManualGradeIds: replaced(state.pendingManualGradeIds, id, false),
-        editingManualGrade: undefined,
+        editingManualGrade: state.editingManualGrade?.id === id ? undefined : state.editingManualGrade,
+        gradeDrafts: nextDrafts,
       };
       draw(); scheduleViewStateSave();
       return;
     } catch (error) {
       state = {
         ...state,
-        data: { ...state.data, events: update(item.manualGrade ?? null, item.manualGradeVersion ?? null, item.manualGradeSource ?? null) },
+        data: state.data.version === startingVersion ? { ...state.data, events: update(item.manualGrade ?? null, item.manualGradeVersion ?? null, item.manualGradeSource ?? null) } : state.data,
         pendingManualGradeIds: replaced(state.pendingManualGradeIds, id, false),
         failedManualGradeIds: replaced(state.failedManualGradeIds, id, true),
         mutationError: { id, message: error instanceof Error ? error.message : "Could not save local grade. The previous value was restored." },
@@ -348,11 +378,12 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
     const previousData = state.data;
     const canCompareChanges = refreshComparisonBaselineKnown;
     captureScroll();
-    state = { ...state, refreshState: "running", refreshProgress: undefined, refreshDetail: undefined, refreshSettingError: undefined }; drawPreservingScroll();
+    state = { ...state, refreshState: "running", refreshProgress: undefined, refreshDetail: undefined, refreshFeedback: undefined, refreshSettingError: undefined }; drawPreservingScroll();
     try {
       let data = state.data;
       let updatedAt: string | null = null;
       let refreshDetail: string | undefined;
+      let refreshFeedback: ReturnType<typeof fullRefreshFeedback> | undefined;
       let refreshState: DashboardState["refreshState"];
       if (fullRefresh) {
         const result = await transport.startFullRefresh((progress: FullRefreshProgress) => {
@@ -367,11 +398,15 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
           .filter((refresh) => refresh.source === "canvas" && !previousRefreshIds.has(refresh.id))
           .flatMap((refresh) => refresh.changes.filter((change) => change.kind === "notice"
             && (change.title === "Canvas file check" || change.title === "Personal Canvas file check")).map((change) => change.detail)) : [];
-        const feedback = fullRefreshFeedback(result, fileNotices);
-        refreshState = feedback.state;
-        refreshDetail = feedback.detail;
+        refreshFeedback = fullRefreshFeedback(result, fileNotices);
+        refreshState = refreshFeedback.state;
+        refreshDetail = refreshFeedback.detail;
         updatedAt = result.updatedAt;
-        if (!reloaded) refreshDetail += " Updated data could not be reloaded; the prior view is still shown.";
+        if (!reloaded) {
+          const reloadNotice = " Updated data could not be reloaded; the prior view is still shown.";
+          refreshDetail += reloadNotice;
+          refreshFeedback = { ...refreshFeedback, detail: `${refreshFeedback.detail}${reloadNotice}`, action: "Reload the saved data before relying on this view." };
+        }
       } else {
         const useCalendar = state.desktop?.refreshAvailable !== true && state.desktop?.icalRefreshAvailable === true;
         const result = useCalendar
@@ -394,7 +429,8 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
           refreshState = result.status === "incomplete" ? "partial" : "complete";
         } catch {
           refreshDetail = "Refresh finished, but updated data could not be reloaded. The prior view is still shown.";
-          refreshState = result.status === "incomplete" ? "partial" : "complete";
+          refreshState = "partial";
+          refreshFeedback = { state: refreshState, outcome: "Showing previously saved data.", action: "Retry refresh to load the update.", detail: refreshDetail, setupInstructionsAvailable: false };
         }
       }
       const currentStatus = await transport.storeStatus().catch(() => undefined);
@@ -406,7 +442,7 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
       const refreshAvailable = currentStatus === undefined ? desktopRefreshAvailable(desktopInfo) : currentStatus.availability === "ready" && (currentStatus.refreshAvailable || currentStatus.icalRefreshAvailable || currentStatus.browserRefreshAvailable === true);
       state = reconciledDashboardState({ ...state, desktop: desktopInfo }, data, refreshAvailable);
       const refreshAlert = canCompareChanges ? refreshChangeAlert(previousData, data) ?? state.refreshAlert : state.refreshAlert;
-      state = { ...state, desktop: desktopInfo, refreshState, refreshProgress: undefined, refreshDetail, refreshAlert };
+      state = { ...state, desktop: desktopInfo, refreshState, refreshProgress: undefined, refreshDetail, refreshFeedback, refreshAlert };
     } catch {
       if (fullRefresh) {
         const reloaded = await reloadAuthoritativeDashboard();
@@ -595,15 +631,82 @@ function mountDashboard(mount: HTMLElement, transport: NativeTransport, desktop:
       if (state.pendingManualGradeIds.has(id)) return;
       const item = state.data.events.find((event) => event.id === id);
       if (item === undefined || item.kind === "class") return;
-      state = { ...state, editingManualGrade: { id, draft: item.manualGrade ?? "" }, failedManualGradeIds: replaced(state.failedManualGradeIds, id, false), mutationError: undefined };
+      const existingDraft = state.gradeDrafts?.[id] ?? item.manualGrade ?? "";
+      const gradeDrafts = rememberGradeDraft(state.gradeDrafts, state.editingManualGrade, id, existingDraft);
+      if (gradeDrafts === null) { state = { ...state, mutationError: { id: state.editingManualGrade?.id ?? id, message: "Save or cancel one unsaved grade before opening another editor." } }; draw(); return; }
+      state = {
+        ...state,
+        editingManualGrade: { id, draft: existingDraft },
+        gradeDrafts,
+        failedManualGradeIds: replaced(state.failedManualGradeIds, id, false),
+        mutationError: undefined,
+      };
       draw(); scheduleViewStateSave();
     },
-    onManualGradeDraft(draft) {
-      if (state.editingManualGrade !== undefined) { state = { ...state, editingManualGrade: { ...state.editingManualGrade, draft } }; scheduleViewStateSave(); }
+    onManualGradeDraft(draft, id) {
+      const targetId = id ?? state.editingManualGrade?.id;
+      if (targetId !== undefined) {
+        const gradeDrafts = rememberGradeDraft(state.gradeDrafts, state.editingManualGrade, targetId, draft);
+        if (gradeDrafts === null) return;
+        state = {
+          ...state,
+          ...(state.editingManualGrade?.id === targetId ? { editingManualGrade: { ...state.editingManualGrade, draft } } : {}),
+          gradeDrafts,
+        };
+        scheduleViewStateSave();
+      }
     },
     onSaveManualGrade(id) { void saveManualGrade(id); },
-    onCancelManualGrade() { if (state.editingManualGrade !== undefined) { state = { ...state, editingManualGrade: undefined }; draw(); scheduleViewStateSave(); } },
-    onSelectConversation(selectedConversationId) { state = { ...state, selectedConversationId }; draw(); scheduleViewStateSave(); },
+    onCancelManualGrade(id) {
+      const targetId = id ?? state.editingManualGrade?.id;
+      if (targetId !== undefined) {
+        const nextDrafts = forgetGradeDraft(state.gradeDrafts, targetId);
+        state = {
+          ...state,
+          editingManualGrade: state.editingManualGrade?.id === targetId ? undefined : state.editingManualGrade,
+          gradeDrafts: nextDrafts,
+        };
+        draw(); scheduleViewStateSave();
+      }
+    },
+    onSelectConversation(selectedConversationId) {
+      if (state.page === "inbox" && !state.inboxThreadOpen) {
+        inboxListScrollPosition = boundedScrollPosition(window.scrollY);
+      }
+      state = { ...state, selectedConversationId, inboxThreadOpen: true };
+      draw();
+      if (window.innerWidth <= 860) {
+        window.scrollTo({ top: 0, behavior: "instant" });
+      }
+      scheduleViewStateSave();
+    },
+    onCloseInboxThread() {
+      state = { ...state, inboxThreadOpen: false };
+      draw();
+      if (inboxListScrollPosition > 0) {
+        window.scrollTo({ top: inboxListScrollPosition, behavior: "instant" });
+      }
+      scheduleViewStateSave();
+    },
+    onToggleCompletedDetails(id, open) {
+      state = { ...state, openCompletedItemIds: replaced(state.openCompletedItemIds ?? new Set(), id, open) };
+      scheduleViewStateSave();
+    },
+    onToggleLibraryBody(id, open) {
+      state = { ...state, openLibraryItemIds: replaced(state.openLibraryItemIds ?? new Set(), id, open) };
+      scheduleViewStateSave();
+    },
+    onToggleGradeGroups(courseId, open) {
+      state = { ...state, openGradeGroupCourseIds: replaced(state.openGradeGroupCourseIds ?? new Set(), courseId, open) };
+      scheduleViewStateSave();
+    },
+    onToggleSetupInstructions(show) {
+      state = { ...state, showSetupInstructions: show };
+      draw();
+    },
+    onFocusRefresh() {
+      mount.querySelector<HTMLElement>(".refresh-button")?.focus();
+    },
     onSelectRefresh(selectedRefreshId) { state = { ...state, selectedRefreshId }; draw(); scheduleViewStateSave(); },
     onRefresh() { void refresh(); },
     onDismissRefreshAlert() { state = { ...state, refreshAlert: undefined }; draw(); },

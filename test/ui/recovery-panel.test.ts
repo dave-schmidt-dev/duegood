@@ -66,6 +66,55 @@ describe("desktop recovery feedback", () => {
     expect(onRestore).not.toHaveBeenCalled();
   });
 
+  it("distinguishes same-kind snapshots by local timestamp and identifies the selected snapshot", () => {
+    const snapshots = [
+      { id: "pre-refresh-morning", createdAt: "2026-10-01T09:00:05Z", kind: "pre-refresh" as const },
+      { id: "pre-refresh-afternoon", createdAt: "2026-10-01T14:30:07Z", kind: "pre-refresh" as const },
+    ];
+    const panel = desktopRecoveryPanel({ snapshots, importedAt: null, busy: false, pendingRestoreId: snapshots[1]!.id }, { onRestore: vi.fn(), onConfirmRestore: vi.fn(), onCancelRestore: vi.fn(), onExport: vi.fn() }, Date.parse("2026-10-01T16:00:00Z"));
+    const snapshotRows = nodes(panel).filter((node) => node.attrs?.class === "recovery-snapshot");
+    const labels = snapshotRows.map((row) => row.children?.find((child) => child.tag === "span")?.text ?? "");
+    expect(labels).toHaveLength(2);
+    expect(labels[0]).toContain("Before refresh");
+    expect(labels[1]).toContain("Before refresh");
+    expect(labels[0]).not.toBe(labels[1]);
+    expect(labels[0]).toContain("2026");
+    expect(labels[1]).toContain("2026");
+    expect(labels[0]).toMatch(/\d{1,2}:\d{2}:\d{2} [AP]M/);
+    expect(labels[1]).toMatch(/\d{1,2}:\d{2}:\d{2} [AP]M/);
+    const selected = nodes(panel).find((node) => node.attrs?.class === "recovery-selected-snapshot");
+    expect(selected?.text).toContain("Selected: Before refresh ·");
+    expect(selected?.text).toContain(labels[1]!.split(" · ")[1]);
+    expect(selected?.text).not.toContain(labels[0]!.split(" · ")[1]);
+  });
+
+  it("adds stable ordinals only to snapshots with matching kind and displayed timestamp", () => {
+    const snapshots = [
+      { id: "pre-refresh-b", createdAt: "2026-10-01T09:00:05Z", kind: "pre-refresh" as const },
+      { id: "pre-refresh-a", createdAt: "2026-10-01T09:00:05Z", kind: "pre-refresh" as const },
+      { id: "pre-refresh-later", createdAt: "2026-10-01T14:30:07Z", kind: "pre-refresh" as const },
+      { id: "daily-same-time", createdAt: "2026-10-01T09:00:05Z", kind: "daily" as const },
+    ];
+    const renderPanel = (ordered: typeof snapshots) => desktopRecoveryPanel({ snapshots: ordered, importedAt: null, busy: false, pendingRestoreId: "pre-refresh-b" }, { onRestore: vi.fn(), onConfirmRestore: vi.fn(), onCancelRestore: vi.fn(), onExport: vi.fn() }, Date.parse("2026-10-01T16:00:00Z"));
+    const labelsById = (ordered: typeof snapshots) => {
+      const rows = nodes(renderPanel(ordered)).filter((node) => node.attrs?.class === "recovery-snapshot");
+      return new Map(ordered.map((snapshot, index) => [snapshot.id, rows[index]?.children?.find((child) => child.tag === "span")?.text ?? ""]));
+    };
+
+    const labels = labelsById(snapshots);
+    expect(labels.get("pre-refresh-a")).toContain(" · #1 ·");
+    expect(labels.get("pre-refresh-b")).toContain(" · #2 ·");
+    expect(labels.get("pre-refresh-later")).not.toContain(" · #");
+    expect(labels.get("daily-same-time")).not.toContain(" · #");
+    const selected = nodes(renderPanel(snapshots)).find((node) => node.attrs?.class === "recovery-selected-snapshot");
+    expect(selected?.text).toContain("Selected: Before refresh ·");
+    expect(selected?.text).toContain(" · #2");
+
+    const reorderedLabels = labelsById([...snapshots].reverse());
+    expect(reorderedLabels.get("pre-refresh-a")).toBe(labels.get("pre-refresh-a"));
+    expect(reorderedLabels.get("pre-refresh-b")).toBe(labels.get("pre-refresh-b"));
+  });
+
   it("keeps the selected restore intent visible while restore feedback is busy", () => {
     const snapshot = { id: "daily-20261001T120000Z-0123abcd", createdAt: "2026-10-01T12:00:00Z", kind: "daily" as const };
     const busy = desktopRecoveryPanel({ snapshots: [snapshot], importedAt: null, busy: true, pendingRestoreId: snapshot.id }, { onRestore: vi.fn(), onConfirmRestore: vi.fn(), onCancelRestore: vi.fn(), onExport: vi.fn() });

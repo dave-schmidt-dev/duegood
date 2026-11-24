@@ -10,10 +10,10 @@ function installDashboardMock(): void {
   let completeRefresh: (() => void) | undefined;
   const scope = window as unknown as Record<string, unknown>;
   const now = Date.now();
-  const coursework = JSON.stringify({
+  let coursework = JSON.stringify({
     generated: new Date(now).toISOString(),
     courses: [
-      { key: "101", code: "SYN101", title: "Synthetic One", folder: "course-101" },
+      { key: "101", code: "SYN101", title: "Synthetic One", folder: "course-101", gradeGroups: [{ id: "projects", name: "Projects", weight: 100 }] },
       { key: "102", code: "SYN102", title: "Synthetic Two", folder: "course-102" },
     ],
     items: [
@@ -49,7 +49,7 @@ function installDashboardMock(): void {
   scope.__TAURI_INTERNALS__ = {
     transformCallback(callback: Callback): number { const id = nextId; nextId += 1; callbacks.set(id, callback); return id; },
     unregisterCallback(id: number): void { callbacks.delete(id); },
-    async invoke(command: string): Promise<unknown> {
+    async invoke(command: string, args: Record<string, unknown> = {}): Promise<unknown> {
       if (command === "store_status") return {
         availability: "ready", state: "authoritative", dataFolder: "~/Library/Application Support/com.zerodelta.duegood",
         legacyRootSelected: true, importedAt: "2026-10-03T10:00:00Z", files: 5, bytes: 20_480,
@@ -59,8 +59,29 @@ function installDashboardMock(): void {
       if (command === "read_avatar_bytes") return null;
       if (command === "read_dashboard_documents") return {
         storeState: "authoritative", coursework: { text: coursework, version: "a".repeat(64) }, refreshHistory, conversations,
-        profile: null, avatar: null, courseExports: { "course-101": { files: "[]", pages: "[]", modules: "[]", announcements: "[]", quizzes: "[]", downloadManifest: "[]" }, "course-102": { files: "[]", pages: "[]", modules: "[]", announcements: "[]", quizzes: "[]", downloadManifest: "[]" } },
+        profile: null, avatar: null, courseExports: { "course-101": { files: JSON.stringify([{ id: 101, display_name: "Resource 101.pdf" }]), pages: JSON.stringify([{ page_id: 101, title: "Resource 101 page", detail: "Detailed library resource body text", bodyHtml: "<p>Detailed library resource body text</p>", bodyEmpty: false }]), modules: "[]", announcements: "[]", quizzes: "[]", downloadManifest: "[]" }, "course-102": { files: "[]", pages: "[]", modules: "[]", announcements: "[]", quizzes: "[]", downloadManifest: "[]" } },
       };
+      if (command === "open_library_resource") return null;
+      if (command === "set_manual_grade") {
+        const { itemId, value } = args as { itemId: string; value: string | null };
+        const execute = () => {
+          const doc = JSON.parse(coursework) as { items: Record<string, unknown>[] };
+          const item = doc.items.find((candidate) => candidate.id === itemId);
+          if (item !== undefined) {
+            item.manualGrade = value;
+            item.manualGradeVersion = value === null ? null : 1;
+            item.manualGradeSource = value === null ? null : "manual";
+          }
+          coursework = JSON.stringify(doc);
+          return { manualGrade: value, manualGradeVersion: value === null ? null : 1, manualGradeSource: value === null ? null : "manual", version: "b".repeat(64) };
+        };
+        if (scope.__holdGradeSave !== undefined) {
+          return new Promise((resolve) => {
+            scope.__releaseGradeSave = () => resolve(execute());
+          });
+        }
+        return execute();
+      }
       if (command === "start_canvas_refresh") {
         refreshCalls += 1;
         if (refreshCalls === 1) return { status: "complete", updatedAt: "2026-10-03T11:00:00Z" };
@@ -276,4 +297,88 @@ test("same-day clock checks leave the current DOM untouched", async ({ page }) =
   await page.clock.runFor(60_000);
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(page.locator(".day-slot.today")).toHaveAttribute("data-retained", "yes");
+});
+
+test("CR2: protects a grade draft when editing another row and completing delayed save", async ({ page }) => {
+  await openDashboard(page);
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Grades", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Grades" })).toBeVisible();
+
+  // Find edit buttons for first and second graded assignment
+  const rowA = page.locator(".grade-table tbody tr").nth(0);
+  const rowB = page.locator(".grade-table tbody tr").nth(1);
+  await rowA.getByRole("button", { name: /Edit local grade|Add local grade/ }).click();
+  const inputA = rowA.locator("input[type='text']");
+  await inputA.fill("95");
+
+  // Open second row while row A has unsaved draft "95"
+  await rowB.getByRole("button", { name: /Edit local grade|Add local grade/ }).click();
+  const inputB = rowB.locator("input[type='text']");
+  await inputB.fill("88");
+
+  // Both open editors retain their separate drafts.
+  await expect(inputA).toHaveValue("95");
+
+  // Hold set_manual_grade IPC to simulate delayed network save
+  await page.evaluate(() => {
+    (window as unknown as Record<string, unknown>).__holdGradeSave = true;
+  });
+
+  // Submit row A save
+  await rowA.locator("button[type='submit']").click();
+
+  // Row B remains open while row A save is in-flight.
+  await expect(inputB).toHaveValue("88");
+
+  // Complete row A save in background
+  await page.evaluate(() => {
+    const release = (window as unknown as Record<string, (() => void) | undefined>).__releaseGradeSave;
+    release?.();
+  });
+
+  // Row B editor must remain open and draft "88" preserved
+  await expect(inputB).toBeVisible();
+  await expect(inputB).toHaveValue("88");
+});
+
+test("CR6: keeps opened reading sections open during redraws and navigation", async ({ page }) => {
+  await openDashboard(page);
+
+  // 1. Done page completed details
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Done", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Completed" })).toBeVisible();
+  const completedDetails = page.locator(".completed-body-details").first();
+  await completedDetails.locator("summary").click();
+  await expect(completedDetails).toHaveAttribute("open", "");
+
+  // 2. Library page resource body
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Library", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Library" })).toBeVisible();
+  const libraryDetails = page.locator(".resource-row").filter({ hasText: "Resource 101 page" }).locator(".resource-body");
+  await libraryDetails.locator("summary").click();
+  await expect(libraryDetails).toHaveAttribute("open", "");
+
+  // 3. Grades page grade groups
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Grades", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Grades" })).toBeVisible();
+  const gradeGroups = page.locator(".grade-summary-groups").first();
+  await gradeGroups.locator("summary").click();
+  await expect(gradeGroups).toHaveAttribute("open", "");
+
+  // Trigger refresh progress (or complete refresh) to cause a redraw
+  await page.locator(".top-actions").getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.evaluate(() => (window as unknown as { completeSyntheticRefresh?: () => void }).completeSyntheticRefresh?.());
+  await expect(gradeGroups).toHaveAttribute("open", "");
+
+  // Navigate away to Timeline, then return to each page to verify persisted disclosure state
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Timeline", exact: true }).click();
+
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Done", exact: true }).click();
+  await expect(page.locator(".completed-body-details").first()).toHaveAttribute("open", "");
+
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Library", exact: true }).click();
+  await expect(page.locator(".resource-body").first()).toHaveAttribute("open", "");
+
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Grades", exact: true }).click();
+  await expect(page.locator(".grade-summary-groups").first()).toHaveAttribute("open", "");
 });

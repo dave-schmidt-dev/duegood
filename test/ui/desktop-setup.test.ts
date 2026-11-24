@@ -198,7 +198,8 @@ describe("desktop transport and first-run screen", () => {
       ...state("timeline"), desktop: { ...desktop, refreshAvailable: true }, data: { ...DATA, refreshAvailable: true }, refreshState: "running",
       refreshProgress: { phase: "fetch", completed: 2, total: 4, bytesDone: 4096 },
     }, handlers);
-    expect(findAll(running, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Canvas refresh · Reading Canvas data · 2 of 4 completed · 4096 bytes received");
+    expect(findAll(running, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Canvas refresh · Reading Canvas data");
+    expect(words(findAll(running, (item) => item.attrs?.class === "refresh-details")[0]!)).toContain("2 of 4 completed · 4096 bytes received");
     expect(findAll(running, (item) => item.tag === "button" && item.attrs?.class?.includes("refresh-button") === true)[0]?.attrs).toMatchObject({ disabled: "", "aria-busy": "true" });
     const calendar = renderDashboard({ ...state("timeline"), desktop: { ...desktop, icalRefreshAvailable: true }, data: { ...DATA, refreshAvailable: true }, refreshState: "running", refreshProgress: { phase: "waiting-for-calendar", completed: 0, total: null, bytesDone: null } }, handlers);
     expect(findAll(calendar, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Calendar refresh · Waiting for calendar");
@@ -263,8 +264,8 @@ describe("desktop transport and first-run screen", () => {
     const onRestore = vi.fn();
     const recovery = desktopRecoveryPanel({ snapshots: [{ id: "new", kind: "daily", createdAt: "2026-09-23T11:00:00Z" }, { id: "older", kind: "pre-refresh", createdAt: "2026-09-21T11:00:00Z" }], importedAt: "2026-09-20T11:00:00Z", busy: false }, { onRestore, onExport: vi.fn() }, now);
     const labels = findAll(recovery, (item) => item.tag === "li").map(words);
-    expect(labels[0]).toContain("Daily snapshot · today");
-    expect(labels[1]).toContain("Before refresh · 2 days ago");
+    expect(labels[0]).toMatch(/Daily snapshot · .+ · today/);
+    expect(labels[1]).toMatch(/Before refresh · .+ · 2 days ago/);
     expect(labels[2]).toContain("Legacy import · 3 days ago");
     button(recovery, "Restore snapshot")?.on?.click?.(new Event("click"));
     expect(onRestore).toHaveBeenCalledWith("new");

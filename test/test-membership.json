@@ -182,6 +182,8 @@
     "inclusiveRunner": "test:all",
     "tests": [
       "test/native/playwright/desktop-first-run.spec.ts",
+      "test/native/playwright/clear-inbox-links.spec.ts",
+      "test/native/playwright/clear-refresh-outcomes.spec.ts",
       "test/native/playwright/desktop-recovery-state.spec.ts",
       "test/native/playwright/canvas-browser-reader.spec.ts",
       "test/native/playwright/canvas-browser-auth-download.spec.ts",

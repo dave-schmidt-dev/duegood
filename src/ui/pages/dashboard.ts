@@ -2,9 +2,14 @@ import type { ElementDescriptor } from "../dom";
 import { dashboardNav, type DashboardPage } from "../routes";
 import type { BrowserFreshness } from "../../shared/browser-freshness";
 import type { CanvasRubric } from "../../shared/canvas-rubric";
-import { canvasRefreshSettingRow, refreshActionLabel, refreshNote } from "./dashboard-refresh";
+import type { FullRefreshFeedback } from "../full-refresh";
+import { canvasRefreshSettingRow, refreshActionLabel, refreshNote, refreshProgressNote } from "./dashboard-refresh";
 import { renderLibraryPage } from "./dashboard-library";
+import { renderGradebookPage } from "./dashboard-grades";
+import { renderInboxPage } from "./dashboard-inbox";
+export { gradeProgress } from "./dashboard-grades";
 import { formatAssignmentCopyText as formatAssignmentCopyTextWithFormatters } from "./assignment-copy-text";
+import { asDate, code, color, courseworkIsVerified, el, empty, formatted, heading, isDateOnly, key, orderedCourses } from "./dashboard-utils";
 import { renderCanvasBodyContent, renderStructuredBody, renderTimelineEventCard, type TimelineEventCardRenderers } from "./timeline-event-card";
 import type { LibraryResourceActionFeedback } from "../library-resource-action";
 
@@ -53,6 +58,12 @@ export interface DashboardState {
   readonly pendingManualGradeIds: ReadonlySet<string>;
   readonly failedManualGradeIds: ReadonlySet<string>;
   readonly editingManualGrade?: { readonly id: string; readonly draft: string };
+  readonly gradeDrafts?: Readonly<Record<string, string>>;
+  readonly openCompletedItemIds?: ReadonlySet<string>;
+  readonly openLibraryItemIds?: ReadonlySet<string>;
+  readonly openGradeGroupCourseIds?: ReadonlySet<string>;
+  readonly inboxThreadOpen?: boolean;
+  readonly showSetupInstructions?: boolean;
   readonly mutationError?: { readonly id: string; readonly message: string };
   readonly selectedConversationId?: string;
   readonly selectedRefreshId?: string;
@@ -61,6 +72,7 @@ export interface DashboardState {
   readonly refreshSettingPending?: boolean;
   readonly refreshSettingError?: string;
   readonly refreshDetail?: string;
+  readonly refreshFeedback?: FullRefreshFeedback;
   readonly refreshAlert?: string;
   readonly copyFeedback?: Readonly<Record<string, "pending" | "copied" | "failed">>;
   readonly selectedPendingLinkId?: string;
@@ -93,9 +105,15 @@ export interface DashboardHandlers {
   readonly onToggleCompletion: (id: string) => void;
   readonly onToggleDiscussion: (id: string, field: "post" | "replies") => void;
   readonly onEditManualGrade: (id: string) => void;
-  readonly onManualGradeDraft: (value: string) => void;
+  readonly onManualGradeDraft: (value: string, id?: string) => void;
   readonly onSaveManualGrade: (id: string) => void;
-  readonly onCancelManualGrade: () => void;
+  readonly onCancelManualGrade: (id?: string) => void;
+  readonly onToggleCompletedDetails?: (id: string, open: boolean) => void;
+  readonly onToggleLibraryBody?: (id: string, open: boolean) => void;
+  readonly onToggleGradeGroups?: (courseId: string, open: boolean) => void;
+  readonly onCloseInboxThread?: () => void;
+  readonly onToggleSetupInstructions?: (show: boolean) => void;
+  readonly onFocusRefresh?: () => void;
   readonly onSelectConversation: (id: string) => void;
   readonly onSelectRefresh: (id: string) => void;
   readonly onRefresh: () => void;
@@ -120,24 +138,6 @@ export interface DashboardHandlers {
   readonly onExportFrozenRollback?: () => void;
 }
 
-const COLORS = ["#365e8d", "#8b7840", "#4e785f", "#8a5d72", "#67717f"] as const;
-const KNOWN_ORDER: Readonly<Record<string, number>> = { IT530: 0, IT540: 1, IT570: 2 };
-
-function el(tag: string, text?: string, attrs?: Record<string, string>, children?: readonly ElementDescriptor[]): ElementDescriptor {
-  return { tag, ...(text === undefined ? {} : { text }), ...(attrs === undefined ? {} : { attrs }), ...(children === undefined ? {} : { children }) };
-}
-function key(value: string): string { return value.toUpperCase().replace(/[^A-Z0-9]/g, ""); }
-function code(value: string): string { const match = /^(IT)(\d+)$/.exec(key(value)); return match ? `${match[1]} ${match[2]}` : value; }
-function orderedCourses(courses: readonly DashboardCourse[]): readonly DashboardCourse[] {
-  return [...courses].sort((a, b) => (KNOWN_ORDER[key(a.courseCode)] ?? 100) - (KNOWN_ORDER[key(b.courseCode)] ?? 100) || key(a.courseCode).localeCompare(key(b.courseCode)) || a.id.localeCompare(b.id));
-}
-function color(courses: readonly DashboardCourse[], courseCode: string): string {
-  const index = Math.max(0, orderedCourses(courses).findIndex((course) => key(course.courseCode) === key(courseCode)));
-  return COLORS[index % COLORS.length] ?? COLORS[0];
-}
-function isDateOnly(value: string | number | null | undefined): value is string { return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value); }
-function asDate(value: string | number | null | undefined): Date | undefined { if (value === null || value === undefined || value === "") return undefined; const date = new Date(isDateOnly(value) ? `${value}T00:00:00` : value); return Number.isNaN(date.getTime()) || isDateOnly(value) && dayKey(date) !== value ? undefined : date; }
-function formatted(value: string | number | null | undefined, withTime = false): string { const date = asDate(value); return date === undefined ? "Unknown" : new Intl.DateTimeFormat("en-US", withTime && !isDateOnly(value) ? { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" } : { month: "short", day: "numeric" }).format(date); }
 export function formatAssignmentCopyText(event: DashboardEvent): string {
   return formatAssignmentCopyTextWithFormatters(event, { code, isDateOnly, formatted });
 }
@@ -155,9 +155,6 @@ function overdue(value: string | null, now: number): boolean { const date = asDa
 function eventTime(event: DashboardEvent): string { return event.startsAt === null ? "No due date" : isDateOnly(event.startsAt) ? (event.kind === "class" ? "Time not specified" : "11:59 PM") : `${time(event.startsAt)}${event.endsAt ? `–${time(event.endsAt)}` : ""}`; }
 export function countdownText(now: number, deadline: string | null): string { const due = asDate(deadline); if (due === undefined) return "Time unknown"; if (isDateOnly(deadline)) { const days = dayNumber(due) - dayNumber(new Date(now)); return days < 0 ? "Due date passed" : days === 0 ? "Due today" : days === 1 ? "Due tomorrow" : `Due in ${String(days)} days`; } const minutes = Math.max(0, Math.floor((due.getTime() - now) / 60_000)); const days = Math.floor(minutes / 1440); const hours = Math.floor((minutes % 1440) / 60); const remainder = minutes % 60; return days > 0 ? `${days}d ${hours}h` : hours > 0 ? `${hours}h ${remainder}m` : `${remainder}m`; }
 export function safeLocalHref(value: string | null | undefined): string | undefined { return value !== null && value !== undefined && /^\/(?!\/)[A-Za-z0-9._~!$&'()*+,;=:@%/?#-]*$/.test(value) ? value : undefined; }
-function empty(text: string): ElementDescriptor { return el("div", text, { class: "empty-state", role: "status" }); }
-function heading(eyebrow: string, title: string, copy: string, count?: string): ElementDescriptor { return el("header", undefined, { class: "subpage-heading" }, [el("div", undefined, undefined, [el("p", eyebrow, { class: "eyebrow" }), el("h1", title), el("p", copy)]), ...(count === undefined ? [] : [el("div", count, { class: "page-count" })])]); }
-
 function locked(id: string, pendingIds: ReadonlySet<string>): boolean {
   return pendingIds.has(id);
 }
@@ -276,15 +273,16 @@ function railMessage(message: DashboardConversation, state: DashboardState, hand
 }
 
 function timelineRail(state: DashboardState, handlers: DashboardHandlers, dueItems: readonly (DashboardEvent & { readonly startsAt: string })[], unreadMessages: readonly DashboardConversation[]): ElementDescriptor {
-  const courseworkVerified = state.data.sourceStatus.coursework === "synced" && state.data.sourceStatus.browserFreshness?.current !== false;
+  const courseworkVerified = courseworkIsVerified(state.data.sourceStatus, state.data.courses);
   const inboxVerified = state.data.sourceStatus.inbox === "synced" && state.data.sourceStatus.browserFreshness?.current !== false;
   const firstDue = dueItems.slice(0, 4);
   const remainingDue = dueItems.slice(4);
+  const retainedCalendarOnly = !courseworkVerified && dueItems.length > 0;
   return el("aside", undefined, { class: "timeline-rail", "aria-label": "Due soon and unread Canvas messages" }, [
     el("div", undefined, { class: "timeline-rail__head" }, [el("p", "Right now", { class: "eyebrow" }), el("h2", "At a glance"), el("p", "Upcoming work and messages needing attention")]),
     el("div", undefined, { class: "timeline-rail__scroll" }, [
-      el("div", undefined, { class: "rail-section-head" }, [el("strong", courseworkVerified ? `Due soon · ${String(dueItems.length)}` : "Due soon · Unverified"), ...(remainingDue.length > 0 ? [el("span", "4 shown", { class: "rail-section-note" })] : [])]),
-      ...(!courseworkVerified ? [empty("Coursework could not be verified. Refresh to check what is due.")] : []),
+      el("div", undefined, { class: "rail-section-head" }, [el("strong", courseworkVerified ? `Due soon · ${String(dueItems.length)}` : retainedCalendarOnly ? `Calendar deadlines · ${String(dueItems.length)}` : "Due soon · Unverified"), ...(remainingDue.length > 0 ? [el("span", "4 shown", { class: "rail-section-note" })] : [])]),
+      ...(!courseworkVerified ? [empty(retainedCalendarOnly ? "Canvas coursework is unverified. These are retained calendar deadlines." : "Coursework could not be verified. Refresh to check what is due.")] : []),
       firstDue.length === 0 ? (courseworkVerified ? empty("No unfinished assignments are due.") : el("div")) : el("div", undefined, { class: "rail-due-list" }, firstDue.map((event) => dueRailItem(event, state, handlers))),
       ...(remainingDue.length > 0 ? [el("details", undefined, { class: "rail-more" }, [el("summary", undefined, undefined, [el("span", "All assignments", { class: "rail-toggle-all" }), el("span", "Show less", { class: "rail-toggle-less" })]), el("div", undefined, { class: "rail-due-list rail-due-list--more" }, remainingDue.map((event) => dueRailItem(event, state, handlers)))])] : []),
       el("div", undefined, { class: "rail-section-head" }, [el("strong", "Hot inbox"), el("span", inboxVerified ? String(unreadMessages.length) : "?", { class: "hot-count", "aria-label": inboxVerified ? `${String(unreadMessages.length)} unread` : "Unread count unverified" })]),
@@ -294,19 +292,27 @@ function timelineRail(state: DashboardState, handlers: DashboardHandlers, dueIte
 }
 
 function laneHeading(course: DashboardCourse): string { const courseCode = course.courseCode.trim(); const title = course.title.trim(); const numericCode = /^\d+$/.test(courseCode); if (title !== "" && !(numericCode && title === courseCode)) return title; const fallback = code(courseCode).trim(); return fallback !== "" && !numericCode ? fallback : "Course name unknown"; }
+function canShowEventWithoutVerifiedCanvas(event: DashboardEvent, source: DashboardSourceStatus): boolean {
+  if (event.calendarRetained === true || event.source !== undefined && event.source !== null && event.source !== "canvas") return true;
+  return source.coursework === undefined && source.browserFreshness === undefined;
+}
 function timelinePage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
-  const courseworkVerified = state.data.sourceStatus.coursework === "synced" && state.data.sourceStatus.browserFreshness?.current !== false;
+  const courseworkVerified = courseworkIsVerified(state.data.sourceStatus, state.data.courses);
+  const canShowCoursework = courseworkVerified || (state.data.sourceStatus.coursework === undefined && state.data.sourceStatus.browserFreshness === undefined);
   const courses = orderedCourses(state.data.courses);
   const events = state.data.events.filter((event): event is DashboardEvent & { readonly startsAt: string } => !event.completed
+      && (canShowCoursework || canShowEventWithoutVerifiedCanvas(event, state.data.sourceStatus))
       && (state.eventMode === "all" || event.kind !== "class")
       && (state.courseFilter === "all" || key(event.courseCode) === key(state.courseFilter))
       && event.startsAt !== null && asDate(event.startsAt) !== undefined)
     .sort((a, b) => eventDate(a).getTime() - eventDate(b).getTime());
   const undatedEvents = state.data.events.filter((event) => !event.completed && event.kind !== "class" && event.startsAt === null
+      && (canShowCoursework || canShowEventWithoutVerifiedCanvas(event, state.data.sourceStatus))
       && (state.courseFilter === "all" || key(event.courseCode) === key(state.courseFilter)))
     .sort((left, right) => left.courseCode.localeCompare(right.courseCode) || left.title.localeCompare(right.title));
   const dueItems = state.data.events.filter((event): event is DashboardEvent & { readonly startsAt: string } => event.kind !== "class"
-      && !event.completed && event.startsAt !== null && asDate(event.startsAt) !== undefined)
+      && !event.completed && event.startsAt !== null && asDate(event.startsAt) !== undefined
+      && (canShowCoursework || canShowEventWithoutVerifiedCanvas(event, state.data.sourceStatus)))
     .sort((a, b) => eventDate(a).getTime() - eventDate(b).getTime());
   const unreadMessages = state.data.conversations.filter((message) => message.unread).sort((a, b) => new Date(b.receivedAt ?? 0).getTime() - new Date(a.receivedAt ?? 0).getTime());
   const start = startOfDay(state.now);
@@ -320,7 +326,16 @@ function timelinePage(state: DashboardState, handlers: DashboardHandlers): Eleme
   return el("section", undefined, { class: "page", "data-page-panel": "timeline" }, [
     el("section", undefined, { class: "hero" }, [el("div", undefined, undefined, [el("p", `${formatted(start.getTime())} – ${formatted(end.getTime())}`, { class: "eyebrow" }), el("h1", "Timeline"), el("p", courseworkVerified ? "Each row is one full day. Empty rows are time you can use." : "Each row is one full day. Empty rows may have unverified coursework.", { class: "hero-copy" })])]),
     el("section", undefined, { class: "controls", "aria-label": "Timeline controls" }, [el("div", undefined, { class: "segmented", "aria-label": "Event types" }, (["all", "deadlines"] as const).map((mode) => ({ tag: "button", attrs: { type: "button", class: state.eventMode === mode ? "active" : "" }, text: mode === "all" ? "All events" : "Deadlines only", on: { click: () => handlers.onEventMode(mode) } }))), el("div", undefined, { class: "filters", "aria-label": "Course filters" }, [{ tag: "button", attrs: { type: "button", class: `filter ${state.courseFilter === "all" ? "active" : ""}` }, text: "All courses", on: { click: () => handlers.onCourseFilter("all") } }, ...courses.map((course) => ({ tag: "button", attrs: { type: "button", class: `filter ${state.courseFilter === course.courseCode ? "active" : ""}`, style: `--course-color:${color(courses, course.courseCode)}` }, text: code(course.courseCode), on: { click: () => handlers.onCourseFilter(course.courseCode) } }))])]),
-    ...(courses.length === 0 ? [empty("No courses have been synced yet.")] : [el("div", undefined, { class: "timeline-layout" }, [el("section", undefined, { class: "timeline-shell" }, [
+    ...(courses.length === 0 ? (() => {
+      const calendarItems = events.filter((event) => event.source === "ical" || event.calendarRetained === true);
+      return calendarItems.length > 0
+        ? [el("section", undefined, { class: "calendar-only-timeline", "aria-label": "Calendar deadlines" }, [
+            el("h2", "Calendar deadlines"),
+            el("p", courseworkVerified ? "These deadlines come from your calendar feed." : "Retained calendar deadlines remain available; Canvas coursework is unverified."),
+            el("div", undefined, { class: "undated-events__items" }, calendarItems.map((event) => renderTimelineEventCard(event, state, handlers, cardRenderers))),
+          ])]
+        : [empty(courseworkVerified ? "No active Canvas courses were found." : "Canvas coursework could not be verified. Refresh to check courses.")];
+    })() : [el("div", undefined, { class: "timeline-layout" }, [el("section", undefined, { class: "timeline-shell" }, [
       el("header", undefined, { class: "lane-header", style: `--lane-count:${String(lanes)}` }, [el("div", undefined, { class: "lane-summary" }, [el("span", `${days.length} days`, { class: "range" }), el("span", `${events.length} dated events`, { class: "range-note" })]), el("div", undefined, { class: "lane-marker", "aria-hidden": "true" }), ...courses.map((course) => el("div", undefined, { class: "lane-label", style: `--lane-color:${color(courses, course.courseCode)}` }, [el("b", laneHeading(course))]))]),
       ...(undatedEvents.length === 0 ? [] : [el("section", undefined, { class: "undated-events", "aria-label": "No due date" }, [
         el("header", undefined, { class: "undated-events__head" }, [el("h2", "No due date"), el("span", `${String(undatedEvents.length)} items`)]),
@@ -332,20 +347,31 @@ function timelinePage(state: DashboardState, handlers: DashboardHandlers): Eleme
 }
 
 function completedPage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
+  const courseworkVerified = courseworkIsVerified(state.data.sourceStatus, state.data.courses);
   const events = state.data.events.filter((event) => event.kind !== "class" && event.completed).sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0));
+  const countLabel = courseworkVerified ? `${events.length} complete` : "Completion unverified";
+  const emptyMessage = courseworkVerified
+    ? "Nothing completed yet."
+    : "Coursework could not be verified. Refresh to check completed items.";
   return el("section", undefined, { class: "page" }, [
-    heading("Finished coursework", "Completed", "Completion is your state, independent from Canvas submission status.", `${events.length} complete`),
-    events.length === 0 ? empty("Nothing completed yet.") : el("div", undefined, { class: "completed-list" }, events.map((event) => {
+    heading("Finished coursework", "Completed", "Completion is your state, independent from Canvas submission status.", countLabel),
+    events.length === 0 ? empty(emptyMessage) : el("div", undefined, { class: "completed-list" }, events.map((event) => {
       const bodyContent = renderCanvasBodyContent(event, el);
+      const isDetailsOpen = state.openCompletedItemIds?.has(event.id) === true;
       return el("article", undefined, { class: "completed-row", style: `--course-color:${color(state.data.courses, event.courseCode)}` }, [
         el("span", undefined, { class: "completed-stripe", "aria-hidden": "true" }),
         el("div", undefined, undefined, [
           el("h2", event.title),
           el("p", `${code(event.courseCode)} · Completed ${formatted(event.completedAt, true)} · Canvas submission state is separate`),
-          el("details", undefined, { class: "completed-body-details" }, [
-            el("summary", "Details"),
-            ...(bodyContent.length === 0 ? [el("span", "No additional details were supplied.")] : bodyContent),
-          ]),
+          {
+            tag: "details",
+            attrs: { class: "completed-body-details", ...(isDetailsOpen ? { open: "" } : {}) },
+            on: { toggle: (e: Event) => handlers.onToggleCompletedDetails?.(event.id, (e.currentTarget as HTMLDetailsElement).open) },
+            children: [
+              el("summary", "Details"),
+              ...(bodyContent.length === 0 ? [el("span", "No additional details were supplied.")] : bodyContent),
+            ],
+          },
         ]),
         el("div", undefined, { class: "completed-actions" }, [completionButton(event, state, handlers), ...(state.failedCompletionIds.has(event.id) ? [el("span", failureMessage(state, event.id, "Could not save. Existing completion state was restored."), { class: "inline-error", role: "status", "aria-live": "polite" })] : [])]),
       ]);
@@ -353,215 +379,31 @@ function completedPage(state: DashboardState, handlers: DashboardHandlers): Elem
   ]);
 }
 
-function hasNumericGrade(event: DashboardEvent): boolean {
-  return typeof event.score === "number" && Number.isFinite(event.score) && typeof event.points === "number" && Number.isFinite(event.points);
-}
-
-function hasCanvasReportedGrade(event: DashboardEvent): boolean {
-  return (typeof event.score === "number" && Number.isFinite(event.score)) || (typeof event.grade === "string" && event.grade.length > 0) || asDate(event.gradedAt) !== undefined;
-}
-
-function hasReportedGrade(event: DashboardEvent): boolean {
-  return event.manualGrade !== null && event.manualGrade !== undefined || hasCanvasReportedGrade(event);
-}
-
-function pointsText(event: DashboardEvent): string {
-  if (hasNumericGrade(event)) return `${String(event.score)} / ${String(event.points)}`;
-  if (typeof event.points === "number" && Number.isFinite(event.points)) return `${String(event.points)} possible · awaiting score`;
-  if (typeof event.score === "number" && Number.isFinite(event.score)) return `${String(event.score)} earned · points unavailable`;
-  return "Awaiting / unavailable";
-}
-
-function percentage(value: number | null): string {
-  return value === null || !Number.isFinite(value) ? "Unknown" : `${value.toFixed(1).replace(/\.0$/, "")}%`;
-}
-
-function groupName(group: DashboardGradeGroup): string {
-  return group.name ?? "Unnamed Canvas group";
-}
-
-function groupWeight(value: number | null): string {
-  return value === null ? "Weight unknown" : `${percentage(value)}`;
-}
-
-function groupsSummary(groups: readonly DashboardGradeGroup[] | undefined): string {
-  if (groups === undefined || groups.length === 0) return "Grade groups · weights unavailable";
-  const knownWeight = groups.reduce((total, group) => total + (typeof group.weight === "number" && Number.isFinite(group.weight) ? group.weight : 0), 0);
-  return knownWeight > 0 ? `Grade groups · ${percentage(knownWeight)} of course weight` : "Grade groups · weights unavailable";
-}
-
-function recordGroup(event: DashboardEvent, group: DashboardGradeGroup): boolean {
-  if (group.id !== null && event.assignmentGroupId !== null && event.assignmentGroupId !== undefined) return event.assignmentGroupId === group.id;
-  return group.name !== null && event.assignmentGroupName === group.name;
-}
-
-interface GradeProgress {
-  readonly graded: number | null;
-  readonly gradedCoverage: number | null;
-  readonly wholeCourse: number | null;
-  readonly publishedCoverage: number | null;
-}
-
-export function gradeProgress(course: DashboardCourse, records: readonly DashboardEvent[]): GradeProgress {
-  const groups = course.gradeGroups ?? [];
-  const weightedGroups = groups.filter((group) => group.weight !== null && Number.isFinite(group.weight));
-  const totalWeight = weightedGroups.reduce((sum, group) => sum + (group.weight ?? 0), 0);
-  if (totalWeight <= 0) return { graded: null, gradedCoverage: null, wholeCourse: null, publishedCoverage: null };
-  let gradedWeight = 0;
-  let gradedContribution = 0;
-  let publishedWeight = 0;
-  let wholeContribution = 0;
-  for (const group of weightedGroups) {
-    const groupRecords = records.filter((event) => recordGroup(event, group) && typeof event.points === "number" && Number.isFinite(event.points) && event.points > 0);
-    if (groupRecords.length === 0) continue;
-    const possible = groupRecords.reduce((sum, event) => sum + (event.points ?? 0), 0);
-    const earned = groupRecords.reduce((sum, event) => sum + (typeof event.score === "number" && Number.isFinite(event.score) ? event.score : 0), 0);
-    const groupWeight = group.weight ?? 0;
-    publishedWeight += groupWeight;
-    wholeContribution += groupWeight * (earned / possible);
-    const gradedRecords = groupRecords.filter((event) => typeof event.score === "number" && Number.isFinite(event.score));
-    if (gradedRecords.length === 0) continue;
-    const gradedPossible = gradedRecords.reduce((sum, event) => sum + (event.points ?? 0), 0);
-    const gradedEarned = gradedRecords.reduce((sum, event) => sum + (event.score ?? 0), 0);
-    gradedWeight += groupWeight;
-    gradedContribution += groupWeight * (gradedEarned / gradedPossible);
-  }
-  return {
-    graded: gradedWeight > 0 ? (gradedContribution / gradedWeight) * 100 : null,
-    gradedCoverage: (gradedWeight / totalWeight) * 100,
-    wholeCourse: publishedWeight > 0 ? (wholeContribution / totalWeight) * 100 : null,
-    publishedCoverage: (publishedWeight / totalWeight) * 100,
-  };
-}
-
-function groupCell(event: DashboardEvent): string {
-  const name = event.assignmentGroupName ?? "Group unknown";
-  const weight = event.assignmentGroupWeight === null || event.assignmentGroupWeight === undefined ? "Weight unknown" : percentage(event.assignmentGroupWeight);
-  return `${name} · ${weight}`;
-}
-
-function selectedGrade(event: DashboardEvent): string {
-  if (event.manualGrade !== null && event.manualGrade !== undefined) return event.manualGrade;
-  if (event.grade !== null && event.grade !== undefined && event.grade.length > 0) return event.grade;
-  return hasNumericGrade(event) ? pointsText(event) : "Unavailable";
-}
-
-function gradeProvenance(event: DashboardEvent): string {
-  if (event.manualGrade !== null && event.manualGrade !== undefined) return `${event.manualGradeSource === "pdf" ? "User-confirmed PDF" : "Local observation"} · v${String(event.manualGradeVersion ?? 1)}`;
-  if (event.grade !== null && event.grade !== undefined && event.grade.length > 0) return "Canvas grade";
-  if (hasNumericGrade(event)) return "Canvas score";
-  return "No grade observation";
-}
-
-function gradeEditor(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
-  const editing = state.editingManualGrade?.id === event.id ? state.editingManualGrade : undefined;
-  const pending = state.pendingManualGradeIds.has(event.id);
-  if (editing === undefined) {
-    return { tag: "button", attrs: { type: "button", class: "more-action", "aria-label": `Edit local grade for ${event.title}`, ...(pending ? { disabled: "" } : {}) }, text: event.manualGrade === null || event.manualGrade === undefined ? "Add local grade" : "Edit local grade", on: { click: () => handlers.onEditManualGrade(event.id) } };
-  }
-  return { tag: "form", attrs: { class: "grade-editor", "aria-label": `Edit local grade for ${event.title}` }, on: { submit: (input) => { input.preventDefault(); handlers.onSaveManualGrade(event.id); } }, children: [
-    { tag: "input", attrs: { type: "text", value: editing.draft, maxlength: "80", autofocus: "", "aria-label": `Local grade for ${event.title}`, ...(pending ? { disabled: "" } : {}) }, on: {
-      input: (input) => handlers.onManualGradeDraft((input.currentTarget as HTMLInputElement).value),
-      keydown: (input) => { if ((input as KeyboardEvent).key === "Escape") { input.preventDefault(); handlers.onCancelManualGrade(); } },
-    } },
-    { tag: "button", attrs: { type: "submit", class: "more-action", ...(pending ? { disabled: "" } : {}) }, text: pending ? "Saving…" : "Save" },
-    { tag: "button", attrs: { type: "button", class: "more-action", ...(pending ? { disabled: "" } : {}) }, text: "Cancel", on: { click: () => handlers.onCancelManualGrade() } },
-  ] };
-}
-
-function gradeEditorCell(event: DashboardEvent, state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
-  if (!/^[a-f0-9]{64}$/.test(state.data.version)) return el("td", "Local editing unavailable");
-  const error = state.failedManualGradeIds.has(event.id) && state.mutationError?.id === event.id ? state.mutationError.message : undefined;
-  return el("td", undefined, undefined, [gradeEditor(event, state, handlers), ...(error === undefined ? [] : [el("span", error, { role: "status", "aria-live": "polite", class: "inline-error" })])]);
-}
-
-function gradebookPage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
-  const courses = orderedCourses(state.data.courses);
-  const records = state.data.events.filter((event) => event.kind !== "class");
-  const selectedRecords = records.filter((event) => state.gradeCourseFilter === "all" || key(event.courseCode) === key(state.gradeCourseFilter));
-  const visibleRecords = selectedRecords.filter((event) => state.gradeMode === "all" || hasReportedGrade(event)).sort((left, right) => {
-    const leftDate = asDate(left.gradedAt ?? left.startsAt)?.getTime() ?? 0;
-    const rightDate = asDate(right.gradedAt ?? right.startsAt)?.getTime() ?? 0;
-    return rightDate - leftDate || left.title.localeCompare(right.title);
-  });
-  const summary = courses.map((course) => {
-    const courseRecords = records.filter((event) => event.courseId === course.id || key(event.courseCode) === key(course.courseCode));
-    const numeric = courseRecords.filter(hasNumericGrade);
-    const reported = courseRecords.filter(hasCanvasReportedGrade);
-    const earned = numeric.reduce((total, event) => total + (event.score ?? 0), 0);
-    const possible = numeric.reduce((total, event) => total + (event.points ?? 0), 0);
-    const progress = gradeProgress(course, courseRecords);
-    const groupRows: readonly ElementDescriptor[] = course.gradeGroups === undefined || course.gradeGroups.length === 0
-      ? [el("p", "Canvas assignment groups were not supplied.", { class: "grade-groups-empty" })]
-      : [el("ul", undefined, { class: "grade-groups-list" }, course.gradeGroups.map((group) => el("li", undefined, undefined, [el("span", groupName(group)), el("strong", groupWeight(group.weight))])))];
-    return el("article", undefined, { class: "grade-summary-card", style: `--course-color:${color(courses, course.courseCode)}` }, [
-      { tag: "button", attrs: { type: "button", class: "grade-summary-card__select", "aria-label": `Filter grades to ${code(course.courseCode)}` }, on: { click: () => handlers.onGradeCourseFilter(course.courseCode) }, children: [
-        el("span", undefined, { class: "grade-summary-card__heading" }, [el("span", code(course.courseCode), { class: "course-card__code" }), el("h2", course.title)]),
-        el("span", undefined, { class: "grade-summary-card__grade" }, [el("strong", percentage(numeric.length > 0 ? progress.graded : null)), el("small", numeric.length > 0 ? "Graded work" : "No numeric score")]),
-      ] },
-      el("div", undefined, { class: "grade-summary-metrics" }, [
-        el("div", undefined, { class: "grade-summary-metric" }, [el("strong", numeric.length > 0 ? `${String(earned)} / ${String(possible)}` : "—"), el("span", numeric.length > 0 ? "Graded points" : "No graded points")]),
-        el("div", undefined, { class: "grade-summary-metric" }, [el("strong", numeric.length > 0 ? percentage(progress.wholeCourse) : "Unknown"), el("span", "Whole-course progress")]),
-      ]),
-      el("p", `${String(reported.length)} of ${String(courseRecords.length)} listed item${courseRecords.length === 1 ? "" : "s"} graded · ${String(courseRecords.length - reported.length)} awaiting`, { class: "grade-summary-awaiting" }),
-      el("p", `Coverage: ${percentage(progress.gradedCoverage)} graded · ${percentage(progress.publishedCoverage)} with current records`, { class: "grade-summary-coverage" }),
-      { tag: "details", attrs: { class: "grade-summary-groups" }, children: [
-        { tag: "summary", attrs: { class: "grade-summary-groups__summary" }, text: groupsSummary(course.gradeGroups) },
-        ...groupRows,
-      ] },
-    ]);
-  });
-  const table = visibleRecords.length === 0 ? empty(state.gradeMode === "graded" ? "No graded items match this filter." : "No grade records match this filter.") : el("div", undefined, { class: "grade-table-wrap" }, [
-    { tag: "table", attrs: { class: "grade-table" }, children: [
-      { tag: "caption", text: "Coursework grade records" },
-      { tag: "thead", children: [{ tag: "tr", children: [el("th", "Assignment", { scope: "col" }), el("th", "Course", { scope: "col" }), el("th", "Canvas group", { scope: "col" }), el("th", "Canvas score", { scope: "col" }), el("th", "Canvas grade", { scope: "col" }), el("th", "Selected value", { scope: "col" }), el("th", "Provenance", { scope: "col" }), el("th", "Edit", { scope: "col" })] }] },
-      { tag: "tbody", children: visibleRecords.map((event) => ({ tag: "tr", children: [
-        el("th", event.title, { scope: "row" }),
-        el("td", code(event.courseCode)),
-        el("td", groupCell(event)),
-        el("td", pointsText(event), { class: hasNumericGrade(event) ? "grade-score" : "grade-score grade-score--pending" }),
-        el("td", event.grade ?? (hasCanvasReportedGrade(event) ? "Reported" : "Not graded")),
-        el("td", selectedGrade(event), { class: event.manualGrade === null || event.manualGrade === undefined ? "grade-score grade-score--pending" : "grade-score" }),
-        el("td", gradeProvenance(event)),
-        gradeEditorCell(event, state, handlers),
-      ] })) },
-    ] },
-  ]);
-  return el("section", undefined, { class: "page", "data-page-panel": "grades" }, [
-    heading("Coursework grade records", "Grades", "Canvas facts stay visible beside local observations. No official weighted or final course grade is inferred."),
-    el("div", undefined, { class: "grade-honesty", role: "note" }, [
-      el("strong", "Graded points are not a final course grade."),
-      el("details", undefined, { class: "grade-honesty__details" }, [
-        el("summary", "About grade observations"),
-        el("p", "A local observation is the selected value until you change or remove it; Canvas score and grade remain visible alongside it. Progress indicators use Canvas points only, and coverage and unknown group data stay visible."),
-      ]),
-    ]),
-    el("section", undefined, { class: "grade-summary-grid", "aria-label": "Course grade summaries" }, summary.length === 0 ? [empty("No courses have been synced yet.")] : summary),
-    el("section", undefined, { class: "controls grade-controls", "aria-label": "Gradebook controls" }, [
-      el("div", undefined, { class: "segmented", "aria-label": "Grade filters" }, (["all", "graded"] as const).map((mode) => ({ tag: "button", attrs: { type: "button", class: state.gradeMode === mode ? "active" : "", "aria-pressed": String(state.gradeMode === mode) }, text: mode === "all" ? "All records" : "Graded only", on: { click: () => handlers.onGradeMode(mode) } }))),
-      el("div", undefined, { class: "filters", "aria-label": "Grade course filters" }, [{ tag: "button", attrs: { type: "button", class: `filter ${state.gradeCourseFilter === "all" ? "active" : ""}`, "aria-pressed": String(state.gradeCourseFilter === "all") }, text: "All courses", on: { click: () => handlers.onGradeCourseFilter("all") } }, ...courses.map((course) => ({ tag: "button", attrs: { type: "button", class: `filter ${key(state.gradeCourseFilter) === key(course.courseCode) ? "active" : ""}`, "aria-pressed": String(key(state.gradeCourseFilter) === key(course.courseCode)), style: `--course-color:${color(courses, course.courseCode)}` }, text: code(course.courseCode), on: { click: () => handlers.onGradeCourseFilter(course.courseCode) } }))]),
-    ]),
-    table,
-  ]);
-}
-
 function coursesPage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
+  const courseworkVerified = courseworkIsVerified(state.data.sourceStatus, state.data.courses);
   const courses = orderedCourses(state.data.courses);
-  return el("section", undefined, { class: "page" }, [heading("Course overview", "Courses", "Each course keeps the same lane and color everywhere."), courses.length === 0 ? empty("No courses have been synced yet.") : el("div", undefined, { class: "course-grid" }, courses.map((course, index) => { const events = state.data.events.filter((event) => event.courseId === course.id || key(event.courseCode) === key(course.courseCode)); const deadlines = events.filter((event) => event.kind !== "class" && !event.completed && upcoming(event.startsAt, state.now)).sort((a, b) => eventDate(a).getTime() - eventDate(b).getTime()); const classes = events.filter((event) => event.kind === "class" && upcoming(event.startsAt, state.now)).sort((a, b) => eventDate(a).getTime() - eventDate(b).getTime()); return el("article", undefined, { class: "course-card", style: `--course-color:${color(courses, course.courseCode)}` }, [el("div", undefined, { class: "course-card__head" }, [el("div", code(course.courseCode), { class: "course-card__code" }), el("h2", course.title), el("span", index === 0 ? "Left lane" : index === 1 ? "Center lane" : index === 2 ? "Right lane" : `Lane ${index + 1}`, { class: "lane-position" })]), el("dl", undefined, { class: "course-facts" }, [el("div", undefined, { class: "course-fact" }, [el("dt", "Next deadline"), el("dd", deadlines[0]?.title ?? "Nothing upcoming")]), el("div", undefined, { class: "course-fact" }, [el("dt", "Next class"), el("dd", classes[0] === undefined ? "Not scheduled" : formatted(classes[0].startsAt, true))]), el("div", undefined, { class: "course-fact" }, [el("dt", "Completed"), el("dd", `${events.filter((event) => event.completed).length} items`)])]), el("div", undefined, { class: "course-card__footer" }, [{ tag: "button", attrs: { type: "button", class: "course-action" }, text: "View timeline", on: { click: () => { handlers.onCourseFilter(course.courseCode); handlers.onNavigate("timeline"); } } }])]); }))]);
-}
-
-function inboxPage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
-  const messages = state.data.conversations; const selected = messages.find((message) => message.id === state.selectedConversationId) ?? messages[0];
-  const thread = selected?.messages ?? [];
-  const warning = selected !== undefined && (selected.historyComplete === false || selected.safetyTruncated === true || thread.some((message) => message.bodyTruncated === true));
-  const threadBody = selected === undefined ? empty("Select a conversation.") : el("article", undefined, { class: "message-detail" }, [
-    el("div", `${selected.contextLabel ?? (selected.courseCode ? code(selected.courseCode) : "Canvas conversation")} · ${formatted(selected.receivedAt, true)}`, { class: "message-detail__meta" }),
-    el("h2", selected.subject),
-    el("div", `Participants: ${selected.sender}${selected.messageCount === undefined ? "" : ` · ${selected.messageCount} message${selected.messageCount === 1 ? "" : "s"}`}${selected.attachmentCount ? ` · ${selected.attachmentCount} attachment${selected.attachmentCount === 1 ? "" : "s"}` : ""}`, { class: "message-detail__sender" }),
-    ...(warning ? [el("p", "This thread is incomplete or was safety-limited. Refresh Inbox to retrieve the available history; no content was silently hidden.", { class: "inbox-warning", role: "status" })] : []),
-    ...(thread.length > 0 ? [el("div", undefined, { class: "message-thread" }, thread.map((message) => el("article", undefined, { class: "thread-message" }, [el("header", undefined, { class: "thread-message__head" }, [el("strong", message.author), el("time", formatted(message.createdAt, true))]), el("div", message.body, { class: "message-detail__body" }), ...(message.attachments.length > 0 ? [el("div", undefined, { class: "thread-attachments" }, message.attachments.map((attachment) => el("span", `${attachment.name}${attachment.contentType ? ` · ${attachment.contentType}` : ""}`, { class: "thread-attachment" })))] : []), ...(message.bodyTruncated ? [el("small", "This message reached the safety display limit.", { class: "inbox-warning" })] : [])]))) ] : [el("div", selected.body ?? selected.preview ?? "No message body was supplied.", { class: "message-detail__body" })]),
+  return el("section", undefined, { class: "page" }, [
+    heading("Course overview", "Courses", "Each course keeps the same lane and color everywhere."),
+    courses.length === 0
+      ? empty(courseworkVerified ? "No active Canvas courses were found." : "Coursework could not be verified. Refresh to check courses.")
+      : el("div", undefined, { class: "course-grid" }, courses.map((course, index) => {
+          const events = state.data.events.filter((event) => event.courseId === course.id || key(event.courseCode) === key(course.courseCode));
+          const deadlines = events.filter((event) => event.kind !== "class" && !event.completed && upcoming(event.startsAt, state.now)).sort((a, b) => eventDate(a).getTime() - eventDate(b).getTime());
+          const classes = events.filter((event) => event.kind === "class" && upcoming(event.startsAt, state.now)).sort((a, b) => eventDate(a).getTime() - eventDate(b).getTime());
+          const nextDeadline = deadlines[0]?.title ?? (courseworkVerified ? "Nothing upcoming" : "Coursework unverified");
+          const nextClass = classes[0] === undefined ? (courseworkVerified ? "Not scheduled" : "Coursework unverified") : formatted(classes[0].startsAt, true);
+          const completedCount = courseworkVerified ? `${events.filter((event) => event.completed).length} items` : "Coursework unverified";
+          return el("article", undefined, { class: "course-card", style: `--course-color:${color(courses, course.courseCode)}` }, [
+            el("div", undefined, { class: "course-card__head" }, [el("div", code(course.courseCode), { class: "course-card__code" }), el("h2", course.title), el("span", index === 0 ? "Left lane" : index === 1 ? "Center lane" : index === 2 ? "Right lane" : `Lane ${index + 1}`, { class: "lane-position" })]),
+            el("dl", undefined, { class: "course-facts" }, [
+              el("div", undefined, { class: "course-fact" }, [el("dt", "Next deadline"), el("dd", nextDeadline)]),
+              el("div", undefined, { class: "course-fact" }, [el("dt", "Next class"), el("dd", nextClass)]),
+              el("div", undefined, { class: "course-fact" }, [el("dt", "Completed"), el("dd", completedCount)]),
+            ]),
+            el("div", undefined, { class: "course-card__footer" }, [{ tag: "button", attrs: { type: "button", class: "course-action" }, text: "View timeline", on: { click: () => { handlers.onCourseFilter(course.courseCode); handlers.onNavigate("timeline"); } } }]),
+          ]);
+        })),
   ]);
-  return el("section", undefined, { class: "page" }, [heading("Canvas communication", "Inbox", "Read-only Canvas conversations. Selecting one here never changes it in Canvas.", `${messages.filter((message) => message.unread).length} unread`), messages.length === 0 ? empty("Canvas conversations have not been synced yet.") : el("div", undefined, { class: "inbox-layout" }, [el("div", undefined, { class: "message-list" }, messages.map((message) => ({ tag: "button", attrs: { type: "button", class: `message-row ${message.id === selected?.id ? "active" : ""} ${message.unread ? "unread" : ""}`, style: `--course-color:${color(state.data.courses, message.courseCode ?? "")}` }, on: { click: () => handlers.onSelectConversation(message.id) }, children: [el("span", undefined, { class: "message-course", "aria-hidden": "true" }), el("span", undefined, undefined, [el("strong", message.subject), el("span", `${message.sender}${message.contextLabel ? ` · ${message.contextLabel}` : message.courseCode ? ` · ${code(message.courseCode)}` : ""}`), el("small", message.preview ?? "No preview supplied")])] }))), threadBody])]);
 }
 
 function activityPage(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
@@ -643,6 +485,35 @@ function sourceFactRows(fields: Readonly<Record<string, string>>): readonly Elem
     el("div", undefined, { class: "settings-row" }, [el("strong", name), el("span", value)]));
 }
 
+function pendingLinkLabel(candidate: DashboardPendingSourceLink, courses: readonly DashboardCourse[]): string {
+  const action = candidate.candidateIds.length === 1 ? "Review" : "Choose candidate";
+  const rawTitle = candidate.fields["title"] ?? candidate.fields["Title"];
+  const title = typeof rawTitle === "string" ? rawTitle.replace(/^"|"$/g, "").trim() || "Untitled coursework" : "Untitled coursework";
+  const course = courses.find((item) => item.id === candidate.courseId || key(item.courseCode) === key(candidate.reference.course));
+  const courseLabel = course === undefined
+    ? candidate.reference.course.trim() === "" ? "Course unknown" : code(candidate.reference.course)
+    : code(course.courseCode);
+  const rawDue = candidate.fields["at"] ?? candidate.fields["dueAt"] ?? candidate.fields["dueDate"];
+  const cleanDue = typeof rawDue === "string" ? rawDue.replace(/^"|"$/g, "").trim() : "";
+  const parsedDue = asDate(cleanDue);
+  const due = parsedDue === undefined ? cleanDue === "" ? "date unavailable" : "date unknown" : formatted(cleanDue, true);
+  return `${action}: ${title} · ${courseLabel} · Due ${due}`;
+}
+
+function queueLabels(links: readonly DashboardPendingSourceLink[], courses: readonly DashboardCourse[]): string[] {
+  const labels = links.map((link) => pendingLinkLabel(link, courses));
+  const totals = new Map<string, number>();
+  const positions = new Map<string, number>();
+  for (const label of labels) totals.set(label, (totals.get(label) ?? 0) + 1);
+  return labels.map((label) => {
+    const total = totals.get(label)!;
+    if (total === 1) return label;
+    const index = (positions.get(label) ?? 0) + 1;
+    positions.set(label, index);
+    return `${label} · ${index} of ${total}`;
+  });
+}
+
 /** A bounded review surface: the API item is not rendered as coursework until a decision is persisted. */
 function pendingLinkReview(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor | undefined {
   const links = state.data.pendingSourceLinks;
@@ -658,6 +529,7 @@ function pendingLinkReview(state: DashboardState, handlers: DashboardHandlers): 
     el("div", undefined, { class: "settings-row" }, [el("strong", "Done"), el("span", local.completed ? "Completed" : "Not completed")]),
     el("div", undefined, { class: "settings-row" }, [el("strong", "Notes"), el("span", local.notes?.trim() || "No local note")]),
   ];
+  const labels = queueLabels(links, state.data.courses);
   const canKeepDistinct = selected.needsRefresh !== true;
   const canConfirm = local !== undefined && selectedCandidateId !== undefined && canKeepDistinct;
   const decision = state.pendingLinkDecision;
@@ -665,9 +537,9 @@ function pendingLinkReview(state: DashboardState, handlers: DashboardHandlers): 
     el("h2", "Possible source link"),
     el("p", "Canvas and iCal records remain separate until you decide. Similar titles or dates are never proof of identity."),
     ...(selected.needsRefresh === true ? [el("p", "This earlier suggestion needs a fresh coursework import before it can be reviewed. It remains pending and no records will be linked automatically.", { class: "inline-error", role: "status" })] : []),
-    el("div", undefined, { class: "pending-link-queue", role: "list", style: "display:flex;flex-wrap:wrap;gap:8px" }, links.map((link) => ({
+    el("div", undefined, { class: "pending-link-queue", role: "list", style: "display:flex;flex-wrap:wrap;gap:8px" }, links.map((link, index) => ({
       tag: "button", attrs: { type: "button", role: "listitem", class: "more-action", "aria-pressed": String(link.id === selected.id), ...(state.pendingLinkSaving ? { disabled: "" } : {}) },
-      text: `${link.candidateIds.length === 1 ? "Review" : "Choose candidate"} · ${link.reference.id}`,
+      text: labels[index]!,
       on: { click: () => handlers.onSelectPendingLink?.(link.id) },
     }))),
     el("div", undefined, { class: "pending-link-comparison", style: "display:flex;flex-wrap:wrap;gap:16px" }, [
@@ -734,14 +606,35 @@ function pagePanel(pageName: DashboardPage, descriptor: ElementDescriptor): Elem
 function page(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
   switch (state.page) {
     case "timeline": return pagePanel("timeline", timelinePage(state, handlers));
-    case "grades": return pagePanel("grades", gradebookPage(state, handlers));
-    case "inbox": return pagePanel("inbox", inboxPage(state, handlers));
+    case "grades": return pagePanel("grades", renderGradebookPage(state, handlers));
+    case "inbox": return pagePanel("inbox", renderInboxPage(state, handlers));
     case "completed": return pagePanel("completed", completedPage(state, handlers));
     case "courses": return pagePanel("courses", coursesPage(state, handlers));
     case "library": return pagePanel("library", renderLibraryPage(state, handlers, { el, heading, empty, safeLocalHref, formatted, code, color, structuredBody: (text) => renderStructuredBody(text, el) }));
     case "activity": return pagePanel("activity", activityPage(state, handlers));
     case "more": return pagePanel("more", morePage(state, handlers));
   }
+}
+
+function compactRefreshOutcome(state: DashboardState, latest: DashboardRefresh | undefined): string {
+  if (state.refreshFeedback !== undefined) return state.refreshFeedback.outcome;
+  if (state.desktop?.storeState === "preview") return state.desktop.importedAt === null ? "Imported copy" : `Imported ${formatted(state.desktop.importedAt, true)}`;
+  if (state.refreshState === "running") return refreshProgressNote(state, false);
+  if (state.refreshState === "failed") return "Refresh failed";
+  if (state.refreshState === "partial") return latest?.source === "calendar" ? "Calendar refresh incomplete" : "Refresh incomplete";
+  if (state.refreshState === "complete") return latest?.source === "calendar" ? "Calendar refreshed" : "Refresh complete";
+  if (latest?.status === "partial") return "Last refresh incomplete";
+  if (latest?.status === "failed") return "Last refresh failed";
+  if (latest?.source === "calendar") return `Calendar updated · ${formatted(latest.finishedAt ?? latest.startedAt, true)}`;
+  if (state.desktop?.lastRefreshAt) return `Updated ${formatted(state.desktop.lastRefreshAt, true)}`;
+  if (latest !== undefined) return `Updated ${formatted(latest.startedAt, true)}`;
+  return "Not yet refreshed";
+}
+
+function compactRefreshAction(state: DashboardState): string {
+  if (state.refreshFeedback !== undefined) return state.refreshFeedback.action;
+  if (state.refreshState === "failed" || state.refreshState === "partial") return "Check Activity for details, then retry.";
+  return "";
 }
 
 export function renderDashboard(state: DashboardState, handlers: DashboardHandlers): ElementDescriptor {
@@ -763,19 +656,60 @@ export function renderDashboard(state: DashboardState, handlers: DashboardHandle
   const snapshotStatus = `Saving today’s private recovery snapshot… ${String(snapshotFiles)} file${snapshotFiles === 1 ? "" : "s"} · ${String(snapshotBytes)} bytes copied.`;
   const refreshScope = state.desktop?.browserRefreshAvailable === true ? "Canvas coursework, grades, Inbox, library, and calendar deadlines" : state.desktop?.refreshAvailable === true ? "Canvas coursework, grades, Inbox, and library" : state.desktop?.icalRefreshAvailable === true ? "Calendar deadlines only; grades, Inbox, and library keep the prior Canvas capture" : "Refresh unavailable";
   const refreshButton: ElementDescriptor = { tag: "button", attrs: { type: "button", class: `sync-button refresh-button${refreshing ? " refreshing" : ""}`, "aria-busy": String(refreshing), title: refreshScope, ...(refreshing ? { disabled: "" } : {}) }, text: refreshActionLabel(state, refreshing, "topbar"), on: { click: handlers.onRefresh } };
-  const sourceNotice = freshnessNotice(state.data.sourceStatus, refreshing && (state.desktop?.browserRefreshAvailable === true || state.desktop?.refreshAvailable === true));
+  const setupInstructionsBtn = state.refreshFeedback?.setupInstructionsAvailable === true ? [{
+    tag: "button",
+    attrs: { type: "button", class: "setup-secondary setup-instructions-btn", "aria-label": "Canvas setup session instructions" },
+    text: "Setup steps",
+    on: { click: () => handlers.onToggleSetupInstructions?.(true) },
+  }] : [];
+  const setupDialog = state.showSetupInstructions === true ? [
+    el("section", undefined, { role: "region", "aria-label": "Canvas setup session instructions", class: "setup-report canvas-setup-dialog" }, [
+      el("h2", "Visible Canvas setup session"),
+      el("p", "Use this setup only when Canvas sign-in or a survey blocks the headless refresh. Run these commands from Due Good’s project directory:"),
+      el("ol", undefined, { class: "setup-steps-list" }, [
+        el("li", "Stop any running Canvas session: npm run canvas:session -- stop"),
+        el("li", "Start the visible setup session: npm run canvas:session -- start --headed"),
+        el("li", "Finish sign-in, verification, or dismiss any survey popup in the opened Chrome window."),
+        el("li", "Stop the visible session: npm run canvas:session -- stop"),
+        el("li", "Return to Due Good and click Refresh. The app refresh remains headless."),
+      ]),
+      el("div", undefined, { class: "setup-actions" }, [
+        {
+          tag: "button",
+          attrs: { type: "button", class: "sync-button", "data-return-to-refresh": "true" },
+          text: "Return to Refresh",
+          on: { click: () => { handlers.onToggleSetupInstructions?.(false); handlers.onFocusRefresh?.(); } },
+        },
+      ]),
+    ]),
+  ] : [];
+  const sourceNotice = freshnessNotice(state.data.sourceStatus, state.data.courses, refreshing && (state.desktop?.browserRefreshAvailable === true || state.desktop?.refreshAvailable === true));
   const refreshAlert = state.refreshAlert === undefined ? [] : [el("div", undefined, { class: "refresh-change-alert", role: "alert", "aria-live": "assertive" }, [el("p", state.refreshAlert), { tag: "button", attrs: { type: "button", "aria-label": "Dismiss refresh changes alert" }, text: "Dismiss", on: { click: () => handlers.onDismissRefreshAlert?.() } }])];
-  return el("div", undefined, { class: "app" }, [el("aside", undefined, { class: "sidebar" }, [el("div", undefined, { class: "brand" }, [brandMark, el("div", undefined, undefined, [el("div", "Due Good", { class: "brand-name" }), el("span", courses[0]?.term ?? "Marymount", { class: "brand-note" })])]), dashboardNav(state.page, handlers.onNavigate)]), el("div", undefined, { class: "workspace" }, [el("header", undefined, { class: "topbar" }, [el("div", undefined, { class: "term-label" }, [el("strong", courses[0]?.term ?? "Current term"), el("span", ` · ${courses.length} course${courses.length === 1 ? "" : "s"}`)]), el("div", undefined, { class: "top-actions" }, [...(state.desktop?.storeState === "preview" ? [el("span", "Preview copy", { class: "preview-badge", title: "Imported from the legacy folder. It never refreshes." })] : []), el("span", refreshNote(state, latest), { class: "sync-note", role: "status", "aria-live": "polite" }), ...(state.data.refreshAvailable ? [refreshButton] : [])])]), el("main", undefined, { id: "main", tabindex: "-1" }, [...(state.loading ? [empty("Loading coursework…")] : []), ...refreshAlert, ...(state.desktop?.snapshotInProgress ? [el("div", snapshotStatus, { class: "status", role: "status", "aria-live": "polite" })] : []), ...(state.error === undefined ? [] : [el("div", state.error, { class: "load-error", role: "alert" })]), ...(state.desktop?.warning ? [el("div", state.desktop.warning, { class: "load-error", role: "alert" })] : []), ...(!state.loading && state.error === undefined ? [...(sourceNotice === undefined ? [] : [sourceNotice]), page(state, handlers)] : [])])])]);
+  const refreshAction = compactRefreshAction(state);
+  const refreshSummary = `${compactRefreshOutcome(state, latest)}${refreshAction === "" ? "" : ` · ${refreshAction}`}`;
+  const refreshDiagnostics = state.refreshFeedback?.detail ?? state.refreshDetail ?? refreshNote(state, latest);
+  const refreshDetails: ElementDescriptor = {
+    tag: "details",
+    attrs: { class: "refresh-details" },
+    children: [
+      { tag: "summary", text: "Details" },
+      el("p", refreshDiagnostics),
+    ],
+  };
+  const courseSummary = courseworkIsVerified(state.data.sourceStatus, state.data.courses)
+    ? `${courses.length} course${courses.length === 1 ? "" : "s"}`
+    : "Courses unverified";
+  return el("div", undefined, { class: "app" }, [el("aside", undefined, { class: "sidebar" }, [el("div", undefined, { class: "brand" }, [brandMark, el("div", undefined, undefined, [el("div", "Due Good", { class: "brand-name" }), el("span", courses[0]?.term ?? "Marymount", { class: "brand-note" })])]), dashboardNav(state.page, handlers.onNavigate)]), el("div", undefined, { class: "workspace" }, [el("header", undefined, { class: "topbar" }, [el("div", undefined, { class: "term-label" }, [el("strong", courses[0]?.term ?? "Current term"), el("span", ` · ${courseSummary}`)]), el("div", undefined, { class: "top-actions" }, [...(state.desktop?.storeState === "preview" ? [el("span", "Preview copy", { class: "preview-badge", title: "Imported from the legacy folder. It never refreshes." })] : []), el("span", refreshSummary, { class: "sync-note", role: "status", "aria-live": "polite" }), refreshDetails, ...setupInstructionsBtn, ...(state.data.refreshAvailable ? [refreshButton] : [])])]), el("main", undefined, { id: "main", tabindex: "-1" }, [...(state.loading ? [empty("Loading coursework…")] : []), ...setupDialog, ...refreshAlert, ...(state.desktop?.snapshotInProgress ? [el("div", snapshotStatus, { class: "status", role: "status", "aria-live": "polite" })] : []), ...(state.error === undefined ? [] : [el("div", state.error, { class: "load-error", role: "alert" })]), ...(state.desktop?.warning ? [el("div", state.desktop.warning, { class: "load-error", role: "alert" })] : []), ...(!state.loading && state.error === undefined ? [...(sourceNotice === undefined ? [] : [sourceNotice]), page(state, handlers)] : [])])])]);
 }
 
-function freshnessNotice(source: DashboardSourceStatus, refreshing: boolean): ElementDescriptor | undefined {
+function freshnessNotice(source: DashboardSourceStatus, courses: readonly DashboardCourse[], refreshing: boolean): ElementDescriptor | undefined {
   const affected = [
-    ...(source.coursework === "not_synced" ? ["coursework and grades"] : []),
-    ...(source.inbox !== undefined && source.inbox !== "synced" ? ["Inbox"] : []),
-    ...(source.library === "not_synced" ? ["library items"] : []),
+    ...(!courseworkIsVerified(source, courses) ? ["coursework and grades"] : []),
+    ...(source.inbox !== "synced" || source.browserFreshness?.current === false ? ["Inbox"] : []),
+    ...(source.library !== "synced" || source.browserFreshness?.current === false ? ["library items"] : []),
   ];
-  if (affected.length === 0 && source.browserFreshness?.current !== false) return undefined;
-  if (refreshing) return el("p", "Updating Canvas. Unverified coursework is temporarily hidden; calendar and personal records remain available.", { class: "source-freshness-notice", role: "note", "data-source-freshness": "refreshing" });
+  if (affected.length === 0) return undefined;
+  if (refreshing) return el("p", "Updating Canvas. Unverified sections are temporarily hidden; retained calendar deadlines and personal records remain available.", { class: "source-freshness-notice", role: "note", "data-source-freshness": "refreshing" });
   const sections = affected.length === 0 ? "Canvas" : `Canvas ${affected.join(", ")}`;
-  return el("p", `${sections} could not be verified from the latest refresh. Unverified coursework is hidden; calendar and personal records remain available. Refresh again or check Activity for details.`, { class: "inline-error source-freshness-notice", role: "note", "data-source-freshness": "stale" });
+  return el("p", `${sections} could not be verified from the latest refresh. Unverified coursework is hidden; retained calendar deadlines and personal records remain available. Refresh again or check Activity for details.`, { class: "inline-error source-freshness-notice", role: "note", "data-source-freshness": "stale" });
 }

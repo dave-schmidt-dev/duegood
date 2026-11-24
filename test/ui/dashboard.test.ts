@@ -85,6 +85,15 @@ describe("dashboard production UI contract", () => {
     expect(words(review)).toContain("Due Good ID a");
     expect(words(review)).toContain("Source reference 8421");
     expect(words(review)).toContain('"Threat Modeling Brief"');
+    const duplicates = renderDashboard({ ...state("more"), data: { ...DATA, pendingSourceLinks: [
+      { ...link, fields: {} }, { ...link, id: "second", fields: {} },
+    ] } }, pendingHandlers);
+    const queue = findAll(duplicates, (item) => item.attrs?.class === "pending-link-queue")[0]!;
+    const labels = queue.children?.map((item) => item.text);
+    expect(labels).toEqual([
+      "Review: Untitled coursework · IT 530 · Due date unavailable · 1 of 2",
+      "Review: Untitled coursework · IT 530 · Due date unavailable · 2 of 2",
+    ]);
     const confirm = findAll(review, (item) => item.tag === "button" && item.text === "Confirm link")[0];
     confirm?.on?.click?.(new Event("click"));
     expect(pendingHandlers.onOpenPendingLinkDecision).toHaveBeenCalledWith("confirm");
@@ -308,7 +317,7 @@ describe("dashboard production UI contract", () => {
     const editing = renderDashboard({ ...state("grades"), editingManualGrade: { id: "a", draft: "A-" } }, handlers);
     const input = findAll(editing, (item) => item.tag === "input" && item.attrs?.["aria-label"] === "Local grade for Lab report")[0];
     input?.on?.input?.({ currentTarget: { value: "A" } } as unknown as Event);
-    expect(handlers.onManualGradeDraft).toHaveBeenCalledWith("A");
+    expect(handlers.onManualGradeDraft).toHaveBeenCalledWith("A", "a");
     input?.on?.keydown?.({ key: "Escape", preventDefault: vi.fn() } as unknown as Event);
     expect(handlers.onCancelManualGrade).toHaveBeenCalledOnce();
     const form = findAll(editing, (item) => item.tag === "form" && item.attrs?.class === "grade-editor")[0];
@@ -557,7 +566,7 @@ describe("dashboard production UI contract", () => {
     expect(findAll(dashboard, (item) => Boolean(item.attrs?.class?.includes("refresh-button")))).toHaveLength(1);
 
     const reopened = renderDashboard({ ...state("timeline"), desktop: { ...state("timeline").desktop!, refreshAvailable: false, icalRefreshAvailable: true }, data: calendar }, handlers);
-    expect(findAll(reopened, (item) => item.attrs?.class === "sync-note")[0]?.text).toContain("Calendar deadlines only");
+    expect(words(findAll(reopened, (item) => item.attrs?.class === "refresh-details")[0]!)).toContain("Calendar deadlines only");
     expect(findAll(reopened, (item) => Boolean(item.attrs?.class?.includes("refresh-button")))[0]?.attrs?.title).toContain("Calendar deadlines only");
     expect(findAll(reopened, (item) => Boolean(item.attrs?.class?.includes("refresh-button")))[0]?.text).toBe("Refresh calendar");
     const canvas = renderDashboard({ ...state("timeline"), desktop: { ...state("timeline").desktop!, refreshAvailable: true, icalRefreshAvailable: false }, data: { ...DATA, refreshAvailable: true } }, handlers);
@@ -586,12 +595,13 @@ describe("dashboard production UI contract", () => {
       const dashboard = renderDashboard({ ...state(route.page), data }, handlers);
       const notice = findAll(dashboard, (item) => item.attrs?.["data-source-freshness"] === "stale")[0];
       expect(words(notice!)).toContain("Canvas coursework and grades, Inbox, library items could not be verified from the latest refresh.");
-      expect(words(notice!)).toContain("calendar and personal records remain available");
+      expect(words(notice!)).toContain("retained calendar deadlines and personal records remain available");
     }
   });
 
   it("keeps refresh progress and terminal feedback in the top bar on every page", () => {
-    const running = renderDashboard({ ...state("timeline"), refreshState: "running" }, handlers);
+    const refreshableDesktop = { ...state("timeline").desktop!, storeState: "authoritative" as const, refreshAvailable: true };
+    const running = renderDashboard({ ...state("timeline"), desktop: refreshableDesktop, refreshState: "running" }, handlers);
     const runningNote = findAll(running, (item) => item.attrs?.class === "sync-note")[0];
     expect(runningNote?.text).toBe("Canvas refresh is in progress");
     expect(runningNote?.attrs?.["aria-live"]).toBe("polite");
@@ -600,23 +610,23 @@ describe("dashboard production UI contract", () => {
     expect(runningButtons[0]?.attrs).toMatchObject({ disabled: "", "aria-busy": "true" });
     expect(runningButtons[0]?.attrs?.class).toContain("refreshing");
 
-    const complete = renderDashboard({ ...state("inbox"), refreshState: "complete" }, handlers);
-    expect(findAll(complete, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Refresh complete.");
+    const complete = renderDashboard({ ...state("inbox"), desktop: refreshableDesktop, refreshState: "complete" }, handlers);
+    expect(findAll(complete, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Refresh complete");
     expect(findAll(complete, (item) => item.tag === "button" && item.attrs?.class?.includes("refresh-button") === true)[0]?.attrs).toMatchObject({ "aria-busy": "false" });
 
-    const partial = renderDashboard({ ...state("timeline"), refreshState: "partial" }, handlers);
-    expect(findAll(partial, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Refresh incomplete. Existing data was kept.");
-    const activityPartial = renderDashboard({ ...state("activity"), refreshState: "partial" }, handlers);
-    expect(findAll(activityPartial, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Refresh incomplete. Existing data was kept.");
+    const partial = renderDashboard({ ...state("timeline"), desktop: refreshableDesktop, refreshState: "partial" }, handlers);
+    expect(findAll(partial, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Refresh incomplete · Check Activity for details, then retry.");
+    const activityPartial = renderDashboard({ ...state("activity"), desktop: refreshableDesktop, refreshState: "partial" }, handlers);
+    expect(findAll(activityPartial, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Refresh incomplete · Check Activity for details, then retry.");
 
-    const failed = renderDashboard({ ...state("grades"), refreshState: "failed" }, handlers);
-    expect(findAll(failed, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Refresh failed. Existing data was kept.");
+    const failed = renderDashboard({ ...state("grades"), desktop: refreshableDesktop, refreshState: "failed" }, handlers);
+    expect(findAll(failed, (item) => item.attrs?.class === "sync-note")[0]?.text).toBe("Refresh failed · Check Activity for details, then retry.");
   });
 
   it("uses truthful empty states instead of synthetic records", () => {
     const emptyData = { ...DATA, courses: [], events: [], resources: [], conversations: [], refreshes: [] };
     const dashboard = renderDashboard({ ...state("inbox"), data: emptyData }, handlers);
-    expect(words(dashboard)).toContain("Canvas conversations have not been synced yet.");
+    expect(words(dashboard)).toContain("No conversations in your Canvas inbox.");
     expect(words(dashboard)).not.toContain("Instructor");
   });
 
